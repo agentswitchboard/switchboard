@@ -182,6 +182,56 @@ const reachableRouteGroups: readonly ReachableRouteGroup[] = [
 		evidence:
 			'people-organizations.host.e2e.test.ts:58,100,107,201,435,523; organization-invitation-resend.unit.test.ts',
 	},
+	// B1-C owner People reads (specification S3–S10): cookie-bound, no-store, live owner
+	// permission checked around the read. Answers come from organization-membership-read-plugin.ts
+	// and the permanent host tests named in each row. The unavailable answer (503) needs an injected
+	// storage fault, which this fuzz never injects, so it is not a documented answer here.
+	{
+		method: 'GET',
+		paths: ['/api/auth/organization/self-context'],
+		exposure: ['signed-out', 'member', 'owner'],
+		requestParts: ['query'],
+		documentedAnswers: [200, 400, 401, 429],
+		disclosure: 'Only the caller’s own organization choices and current choice.',
+		permittedRefusalEffects: ['none', 'expired-session-cleanup', 'cookie-delete'],
+		evidence:
+			'people-organization-context.host.e2e.test.ts:45,53,124,196; management-boundaries.host.e2e.test.ts:406',
+	},
+	{
+		method: 'GET',
+		paths: ['/api/auth/organization/people-list'],
+		exposure: ['member', 'owner'],
+		requestParts: ['query'],
+		documentedAnswers: [200, 400, 401, 403, 429],
+		disclosure:
+			'Only the current organization’s people page, for a caller with live view permission.',
+		permittedRefusalEffects: ['none', 'expired-session-cleanup', 'cookie-delete'],
+		evidence:
+			'people-organization-list.host.e2e.test.ts:98,150; management-boundaries.host.e2e.test.ts:418',
+	},
+	{
+		method: 'GET',
+		paths: ['/api/auth/organization/people'],
+		exposure: ['member', 'owner'],
+		requestParts: ['query'],
+		documentedAnswers: [200, 303, 400, 403, 429],
+		disclosure: 'Only the current organization’s people page; signed-out callers go to /sign-in.',
+		permittedRefusalEffects: ['none', 'expired-session-cleanup', 'cookie-delete'],
+		evidence:
+			'organization-membership-read-plugin.ts:189–232; management-boundaries.host.e2e.test.ts:423',
+	},
+	{
+		method: 'POST',
+		paths: ['/api/auth/organization/person-membership'],
+		exposure: ['member', 'owner'],
+		requestParts: ['json'],
+		documentedAnswers: [200, 400, 401, 403, 429],
+		disclosure:
+			'Only whether one person belongs to the caller’s current organization; no other organization.',
+		permittedRefusalEffects: ['none', 'expired-session-cleanup', 'cookie-delete'],
+		evidence:
+			'people-membership-lookup.host.e2e.test.ts:98,217,458,472; management-boundaries.host.e2e.test.ts:410',
+	},
 	{
 		method: 'POST',
 		paths: [

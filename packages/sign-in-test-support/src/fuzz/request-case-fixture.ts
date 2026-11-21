@@ -1,6 +1,12 @@
 import { createHash } from 'node:crypto';
 
-import { invitation, passkey, signInSchema, verification } from '@agent-collaboration/sign-in-core';
+import {
+	invitation,
+	organization,
+	passkey,
+	signInSchema,
+	verification,
+} from '@agent-collaboration/sign-in-core';
 import { eq } from 'drizzle-orm';
 import { z } from 'zod';
 
@@ -107,6 +113,15 @@ export async function createRequestCaseFixture(props: {
 		});
 		if (!accepted.ok) throw new Error('F1 fixture native invitation acceptance refused');
 		const memberCookie = harness.cookie();
+		// Sign-in admits only the owner and invited people, and only an owner may create an
+		// organization, so a memberless organization is seeded: no caller belongs to it.
+		const memberlessOrganizationId = controlledSignInIds.nextId();
+		await harness.database.insert(organization).values({
+			id: memberlessOrganizationId,
+			name: 'Memberless organization',
+			slug: 'fuzz-memberless',
+			createdAt: new Date(controlledSignInClock.now()),
+		});
 		harness.useBrowser(ownerEmail);
 		const pendingInvitation = await requireId(
 			await peoplePost(
@@ -290,6 +305,13 @@ export async function createRequestCaseFixture(props: {
 			.select({ id: invitation.id })
 			.from(invitation)
 			.where(eq(invitation.email, foreignEmail));
+		// A caller's own memberships are entitled (B1-C S1, S2), so only organizations the caller does
+		// not belong to stay foreign. The owner created the second organization; nobody belongs to the
+		// third. The member and the signed-out caller belong to neither.
+		const organizationIdsOutsideCallerMemberships =
+			props.caller === 'owner'
+				? [memberlessOrganizationId]
+				: [foreignOrganizationId, memberlessOrganizationId];
 		return {
 			harness,
 			context,
@@ -298,7 +320,7 @@ export async function createRequestCaseFixture(props: {
 			sessionId: sessionValue?.session.id ?? null,
 			foreignIdentities: [
 				foreignEmail,
-				foreignOrganizationId,
+				...organizationIdsOutsideCallerMemberships,
 				...foreignInvitations.map((row) => row.id),
 			],
 			forbiddenIdentities:

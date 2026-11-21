@@ -2,7 +2,7 @@ import * as hegel from '@hegeldev/hegel';
 import * as generators from '@hegeldev/hegel/generators';
 import { expect, it, vi } from 'vitest';
 
-import { fuzzSeed, fuzzSettings } from '#sign-in-test-support/fuzz/fuzz-settings';
+import { boundShrinking, fuzzSeed, fuzzSettings } from '#sign-in-test-support/fuzz/fuzz-settings';
 import { assertOrganizationInvariants } from '#sign-in-test-support/fuzz/organization-invariants';
 import {
 	applyOrganizationOperation,
@@ -226,10 +226,13 @@ for (const leg of ['better-sqlite3', 'd1-workerd'] as const) {
 				},
 			});
 			const currentHost = host;
-			await hegel.testAsync(async (testCase): Promise<void> => {
-				const state = await initializeSequence(testCase, currentHost);
-				await hegel.stateful.runAsync(testCase, machine, state, { stepCount: 50 });
-			}, fuzzSettings(100));
+			await hegel.testAsync(
+				boundShrinking(async (testCase): Promise<void> => {
+					const state = await initializeSequence(testCase, currentHost);
+					await hegel.stateful.runAsync(testCase, machine, state, { stepCount: 50 });
+				}),
+				fuzzSettings(100),
+			);
 		} finally {
 			try {
 				await host?.close();

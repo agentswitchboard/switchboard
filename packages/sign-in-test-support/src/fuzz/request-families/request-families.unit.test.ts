@@ -35,7 +35,7 @@ const context: RequestFamilyContext = {
 
 it('generates the registered method and legal fetch transport for each family', () => {
 	const identities = requestFamilies.map(({ route }) => `${route.method} ${route.path}`);
-	expect(identities).toHaveLength(46);
+	expect(identities).toHaveLength(50);
 	expect(new Set(identities).size).toBe(identities.length);
 	for (const family of requestFamilies) {
 		const encodings = new Set<string>();

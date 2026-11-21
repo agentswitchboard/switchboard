@@ -21,8 +21,12 @@ import { requestFamily as organizationAdminPageFamily } from './organization-adm
 import { requestFamily as organizationCancelInvitationFamily } from './organization-cancel-invitation';
 import { requestFamily as organizationCreateFamily } from './organization-create';
 import { requestFamily as organizationInviteMemberFamily } from './organization-invite-member';
+import { requestFamily as organizationPeopleListFamily } from './organization-people-list';
+import { requestFamily as organizationPeoplePageFamily } from './organization-people-page';
+import { requestFamily as organizationPersonMembershipFamily } from './organization-person-membership';
 import { requestFamily as organizationRemoveMemberFamily } from './organization-remove-member';
 import { requestFamily as organizationRetryProvisioningFamily } from './organization-retry-provisioning';
+import { requestFamily as organizationSelfContextFamily } from './organization-self-context';
 import { requestFamily as organizationSetActiveFamily } from './organization-set-active';
 import { requestFamily as ownerBootstrapFamily } from './owner-bootstrap';
 import { requestFamily as ownerReadyFamily } from './owner-ready';
@@ -87,6 +91,10 @@ export const requestFamilies = [
 	organizationInviteMemberFamily,
 	organizationCancelInvitationFamily,
 	organizationAcceptInvitationFamily,
+	organizationSelfContextFamily,
+	organizationPeopleListFamily,
+	organizationPeoplePageFamily,
+	organizationPersonMembershipFamily,
 	organizationRemoveMemberFamily,
 	organizationSetActiveFamily,
 	organizationRetryProvisioningFamily,

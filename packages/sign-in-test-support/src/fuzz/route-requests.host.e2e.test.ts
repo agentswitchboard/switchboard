@@ -1,7 +1,12 @@
 import * as hegel from '@hegeldev/hegel';
 import { expect, it } from 'vitest';
 
-import { fuzzSeed, fuzzSettings } from '#sign-in-test-support/fuzz/fuzz-settings';
+import {
+	boundShrinking,
+	fuzzSeed,
+	fuzzSettings,
+	requestFuzzDefaultCases,
+} from '#sign-in-test-support/fuzz/fuzz-settings';
 import { createRequestCaseFixture } from '#sign-in-test-support/fuzz/request-case-fixture';
 import {
 	assertRequestDisclosure,
@@ -27,66 +32,71 @@ for (const family of requestFamilies) {
 			const harness = await startLocalAuthHarness();
 			let caseNumber = 0;
 			try {
-				await hegel.testAsync(async (testCase): Promise<void> => {
-					caseNumber += 1;
-					process.stdout.write(
-						JSON.stringify({
-							event: 'F1-case-start',
-							route: routeKey(family.route),
+				await hegel.testAsync(
+					boundShrinking(async (testCase, note): Promise<void> => {
+						caseNumber += 1;
+						process.stdout.write(
+							JSON.stringify({
+								event: 'F1-case-start',
+								route: routeKey(family.route),
+								caller,
+								caseNumber,
+							}) + '\n',
+						);
+						const fixture = await createRequestCaseFixture({
 							caller,
-							caseNumber,
-						}) + '\n',
-					);
-					const fixture = await createRequestCaseFixture({
-						caller,
-						path: family.route.path,
-						existingHarness: harness,
-					});
-					const generated = family.generate(testCase, fixture.context);
-					testCase.note(
-						`S5 seed=${fuzzSeed}; route=${routeKey(family.route)}; caller=${caller}; variant=${generated.label}`,
-					);
-					const before = await readRequestStorageSnapshot(fixture.harness.database);
-					const response = await fixture.harness.auth(generated.pathname, {
-						...generated.init,
-						headers: {
-							...Object.fromEntries(new Headers(generated.init.headers)),
-							cookie: fixture.cookie,
-						},
-					});
-					const answer = await observeRequestAnswer(response);
-					await fixture.harness.settleDeferredWork();
-					const after = await readRequestStorageSnapshot(fixture.harness.database);
-					expect(
-						answer.status,
-						'S2 no-server-error: generated input without injected storage faults',
-					).toBeLessThan(500);
-					expect(classification.documentedAnswers, 'S2 documented-answer').toContain(answer.status);
-					assertRequestDisclosure({
-						fixture,
-						path: family.route.path,
-						request: generated,
-						answer,
-						before,
-						after,
-					});
-					if (answer.status >= 400 || answer.headers.get('location')?.includes('error='))
-						assertRequestRefusalEffects({
-							classification,
+							path: family.route.path,
+							existingHarness: harness,
+						});
+						const generated = family.generate(testCase, fixture.context);
+						note(
+							`S5 seed=${fuzzSeed}; route=${routeKey(family.route)}; caller=${caller}; variant=${generated.label}`,
+						);
+						const before = await readRequestStorageSnapshot(fixture.harness.database);
+						const response = await fixture.harness.auth(generated.pathname, {
+							...generated.init,
+							headers: {
+								...Object.fromEntries(new Headers(generated.init.headers)),
+								cookie: fixture.cookie,
+							},
+						});
+						const answer = await observeRequestAnswer(response);
+						await fixture.harness.settleDeferredWork();
+						const after = await readRequestStorageSnapshot(fixture.harness.database);
+						expect(
+							answer.status,
+							'S2 no-server-error: generated input without injected storage faults',
+						).toBeLessThan(500);
+						expect(classification.documentedAnswers, 'S2 documented-answer').toContain(
+							answer.status,
+						);
+						assertRequestDisclosure({
 							fixture,
+							path: family.route.path,
+							request: generated,
+							answer,
 							before,
 							after,
-							request: generated,
 						});
-					process.stdout.write(
-						JSON.stringify({
-							event: 'F1-case-end',
-							route: routeKey(family.route),
-							caller,
-							caseNumber,
-						}) + '\n',
-					);
-				}, fuzzSettings(200));
+						if (answer.status >= 400 || answer.headers.get('location')?.includes('error='))
+							assertRequestRefusalEffects({
+								classification,
+								fixture,
+								before,
+								after,
+								request: generated,
+							});
+						process.stdout.write(
+							JSON.stringify({
+								event: 'F1-case-end',
+								route: routeKey(family.route),
+								caller,
+								caseNumber,
+							}) + '\n',
+						);
+					}),
+					fuzzSettings(requestFuzzDefaultCases),
+				);
 			} finally {
 				await harness.close();
 			}

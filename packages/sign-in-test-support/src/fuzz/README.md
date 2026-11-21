@@ -1,7 +1,7 @@
 # Sign-in Hegel campaigns
 
 These permanent tests run in the existing unit and host lanes. Request campaigns
-use 200 generated cases per method/path and caller. Organization campaigns use
+use 3 generated cases per method/path and caller (override with `SIGN_IN_FUZZ_CASES`). Organization campaigns use
 100 cases, each with 50 state-machine steps, on both storage engines. Hegel's
 database is disabled and the default seed is `20261117`.
 
@@ -14,7 +14,7 @@ SIGN_IN_TEST_HOST=node pnpm exec vitest run --project e2e-host packages/sign-in-
 ```
 
 The host lane needs the existing verify-auth prerequisites. `SIGN_IN_FUZZ_SEED`
-replays a printed seed. `SIGN_IN_FUZZ_CASES` permits a bounded diagnostic run;
+replays a printed seed. `SIGN_IN_FUZZ_CASES` overrides the S2 default of 3 cases per route and caller (raise it for a deep run, lower it for a diagnostic one);
 a reduced run does not satisfy the full campaign. Failures retain the named
 property, shrunk draws and safe case notes. A runner can timestamp
 `F1-case-start` and `F1-case-end` records to measure case duration without adding
