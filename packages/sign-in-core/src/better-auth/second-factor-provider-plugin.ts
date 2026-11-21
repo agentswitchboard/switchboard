@@ -44,6 +44,21 @@ const nativeRemovals = new Set([
 ]);
 const confirmationPaths = new Set(['/two-factor/verify-totp', '/two-factor/verify-backup-code']);
 
+const registrationRequestSchema = z.object({
+	response: z.object({
+		id: z.base64url().min(1),
+		rawId: z.base64url().min(1),
+		type: z.literal('public-key'),
+		response: z.object({
+			clientDataJSON: z.base64url().min(1),
+			attestationObject: z.base64url().min(1),
+			transports: z.array(z.string()).optional(),
+		}),
+		clientExtensionResults: z.record(z.string(), z.unknown()),
+		authenticatorAttachment: z.enum(['platform', 'cross-platform']).optional(),
+	}),
+});
+
 export function createSecondFactorProviderPlugin(props: {
 	readonly store: Pick<SignInStore, 'factors' | 'factorChanges'>;
 	readonly platform: Pick<SignInPlatform, 'clock' | 'ids'>;
@@ -100,6 +115,14 @@ export function createSecondFactorProviderPlugin(props: {
 							const path = mutationPathSchema.parse(pathname);
 							const mutation = mutations[path];
 							requireMutationPermission(actor, mutation.change);
+							if (
+								path === '/passkey/verify-registration' &&
+								!registrationRequestSchema.safeParse(context.body).success
+							)
+								throw new APIError('BAD_REQUEST', {
+									code: 'INVALID_REQUEST',
+									message: 'invalid-passkey-registration',
+								});
 							if (
 								path === '/two-factor/enable' &&
 								body.success &&

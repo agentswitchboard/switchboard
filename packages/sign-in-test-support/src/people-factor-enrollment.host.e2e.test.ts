@@ -587,3 +587,21 @@ it('people: the native setup form returns the exact URI as server SVG and never 
 		await harness.close();
 	}
 });
+
+it('people: incomplete registration is refused before a factor change is recorded', async () => {
+	const harness = await startLocalAuthHarness();
+	try {
+		await signInConfirmedPeopleBrowser({ harness, email: ownerEmail });
+		const before = await harness.database.select({ id: signInAudit.id }).from(signInAudit);
+		const refused = await harness.auth('/api/auth/passkey/verify-registration', {
+			method: 'POST',
+			headers: { 'content-type': 'application/json' },
+			body: JSON.stringify({ response: {} }),
+		});
+		expect(refused.status).toBe(400);
+		expect(await refused.json()).toMatchObject({ code: 'INVALID_REQUEST' });
+		expect(await harness.database.select({ id: signInAudit.id }).from(signInAudit)).toEqual(before);
+	} finally {
+		await harness.close();
+	}
+});
