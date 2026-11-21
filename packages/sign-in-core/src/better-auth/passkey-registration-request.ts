@@ -1,4 +1,8 @@
-import { decodeClientDataJSON } from '@simplewebauthn/server/helpers';
+import {
+	decodeAttestationObject,
+	decodeClientDataJSON,
+	isoBase64URL,
+} from '@simplewebauthn/server/helpers';
 import { z } from 'zod';
 
 const registrationRequestSchema = z.object({
@@ -28,12 +32,28 @@ const registrationClientDataSchema = z.object({
 		.optional(),
 });
 
+/** Decode with the verifier's own CBOR decoder and require the members it reads. */
+function isDecodableAttestationObject(encoded: string): boolean {
+	try {
+		const decoded = decodeAttestationObject(isoBase64URL.toBuffer(encoded));
+		return (
+			decoded instanceof Map &&
+			typeof decoded.get('fmt') === 'string' &&
+			decoded.get('attStmt') instanceof Map &&
+			decoded.get('authData') instanceof Uint8Array
+		);
+	} catch {
+		return false;
+	}
+}
+
 /** Check the wire encoding and decoded client-data shape before native verification. */
 export function isPasskeyRegistrationRequest(input: unknown): boolean {
 	const request = registrationRequestSchema.safeParse(input);
 	if (!request.success) return false;
 	const credential = request.data.response;
 	if (credential.id !== credential.rawId) return false;
+	if (!isDecodableAttestationObject(credential.response.attestationObject)) return false;
 	try {
 		const decoded: unknown = decodeClientDataJSON(credential.response.clientDataJSON);
 		return registrationClientDataSchema.safeParse(decoded).success;

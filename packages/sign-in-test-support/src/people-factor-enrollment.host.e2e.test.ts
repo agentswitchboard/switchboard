@@ -639,12 +639,33 @@ function encodeClientDataText(text: string): string {
 	return Buffer.from(text).toString('base64url');
 }
 
+const validClientDataText = JSON.stringify({
+	type: 'webauthn.create',
+	challenge: 'Y2hhbGxlbmdl',
+	origin: 'https://example.test',
+});
+// CBOR map {"fmt": "none", "attStmt": {}} with no authData.
+const attestationWithoutAuthData = Buffer.from(
+	'a263666d74646e6f6e65' + '6761747453746d74' + 'a0',
+	'hex',
+).toString('base64url');
+
 it.each([
-	{ label: 'JSON with a non-string type', clientDataText: '{"type":1}' },
-	{ label: 'text that is not JSON', clientDataText: 'not json at all' },
+	{ label: 'JSON with a non-string type', clientDataText: '{"type":1}', attestationObject: 'Yg' },
+	{ label: 'text that is not JSON', clientDataText: 'not json at all', attestationObject: 'Yg' },
+	{
+		label: 'valid beside an attestation object that is not CBOR',
+		clientDataText: validClientDataText,
+		attestationObject: Buffer.from('not cbor at all').toString('base64url'),
+	},
+	{
+		label: 'valid beside an attestation object with no authData',
+		clientDataText: validClientDataText,
+		attestationObject: attestationWithoutAuthData,
+	},
 ])(
 	'people: a registration whose envelope is valid but whose client data is $label is refused after a live challenge exists, with no factor change and no server error',
-	async ({ clientDataText }) => {
+	async ({ clientDataText, attestationObject }) => {
 		const harness = await startLocalAuthHarness();
 		try {
 			await signInConfirmedPeopleBrowser({ harness, email: ownerEmail });
@@ -663,7 +684,7 @@ it.each([
 						type: 'public-key',
 						response: {
 							clientDataJSON: encodeClientDataText(clientDataText),
-							attestationObject: 'Yg',
+							attestationObject,
 						},
 						clientExtensionResults: {},
 					},
