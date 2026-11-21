@@ -173,6 +173,7 @@ export function createServedOwnerBrowser(props: {
 		try {
 			const context = createContext({
 				document: {
+					addEventListener: document.addEventListener.bind(document),
 					querySelector: (selector: string): Element | null => document.querySelector(selector),
 					querySelectorAll: (selector: string): NodeListOf<Element> =>
 						document.querySelectorAll(selector),
@@ -208,6 +209,7 @@ export function createServedOwnerBrowser(props: {
 					return pending;
 				},
 				FormData: dom.window.FormData,
+				HTMLFormElement: dom.window.HTMLFormElement,
 				Event: dom.window.Event,
 				location: {
 					assign: (url: string): void => completion.resolve({ kind: 'navigate', url }),

@@ -266,6 +266,7 @@ it('agent: every management boundary refuses real E10 and signed management no-s
 		// The stamp guard, WS7 recovery, key-change re-sign and signing run only through server
 		// dispatch (no route).
 		{ endpointName: 'prepareOrganizationFleetCall', serverOnly: true },
+		{ endpointName: 'readShellSession', serverOnly: true },
 		{ endpointName: 'recoverForgottenOrganization', serverOnly: true },
 		{ endpointName: 'reSignOrganizationsForKeyChange', serverOnly: true },
 		{ endpointName: 'setPassword', serverOnly: true },
@@ -293,6 +294,7 @@ it('agent: every management boundary refuses real E10 and signed management no-s
 		'/api/auth/list-accounts',
 		'/api/auth/revoke-other-sessions',
 		'/api/auth/sign-out',
+		'/api/auth/switchboard/sign-out',
 		'/api/auth/get-access-token',
 	])
 		expect(installedRoutes.some((route) => route.path === requiredPath)).toBe(true);
@@ -308,6 +310,10 @@ it('agent: every management boundary refuses real E10 and signed management no-s
 				!publicProviderPaths.has(route.path) &&
 				!publicProviderMethods.has(`${route.method} ${route.path}`),
 		);
+	const cookieOnlySignOutPath = '/api/auth/switchboard/sign-out';
+	expect(
+		routes.filter((route) => route.path === cookieOnlySignOutPath && route.method === 'POST'),
+	).toHaveLength(1);
 	const cookieSnapshot = harness.cookie();
 	const cookieOwner = await readCurrentBrowserSession({
 		cookie: cookieSnapshot,
@@ -355,6 +361,28 @@ it('agent: every management boundary refuses real E10 and signed management no-s
 	if (activeOrganizationId === null)
 		throw new Error('Owner cookie has no current organization for valid read probes');
 	const expectedSelfContext = { kind: 'available', choices, activeOrganizationId };
+	async function readCookieAuthority(): Promise<readonly unknown[]> {
+		const rows = await harness.database
+			.select({
+				id: signInTables.session.id,
+				expiresAt: signInTables.session.expiresAt,
+				activeOrganizationId: signInTables.session.activeOrganizationId,
+			})
+			.from(signInTables.session)
+			.where(eq(signInTables.session.id, cookieOwner.id));
+		const revisions = await harness.database
+			.select({
+				organizationId: signInTables.personOrganizationAuthorizationRevisions.organizationId,
+				revision: signInTables.personOrganizationAuthorizationRevisions.revision,
+			})
+			.from(signInTables.personOrganizationAuthorizationRevisions)
+			.where(
+				eq(signInTables.personOrganizationAuthorizationRevisions.personId, cookieOwner.personId),
+			)
+			.orderBy(signInTables.personOrganizationAuthorizationRevisions.organizationId);
+		return [rows, revisions];
+	}
+	const authorityBefore = await readCookieAuthority();
 	const centralArrivalsBeforeAttacks = [...harness.centralProvisioning.arrivals];
 	const pathlessUrls = await Promise.all(
 		['GET', 'POST'].map((method) =>
@@ -392,6 +420,7 @@ it('agent: every management boundary refuses real E10 and signed management no-s
 					const browserKey = `management-${token === agent ? 'E10' : 'no-sid'}-${withCookie ? 'cookie' : 'no-cookie'}`;
 					// Only these exact method/path pairs are public; all other inventory rows keep 404.
 					const organizationRead = organizationReadMethods.get(route.path) === route.method;
+					const cookieOnlySignOut = route.path === cookieOnlySignOutPath && route.method === 'POST';
 					let requestPath = route.path;
 					let requestBody: Readonly<Record<string, unknown>> = {
 						client_id: registeredClientId,
@@ -429,6 +458,10 @@ it('agent: every management boundary refuses real E10 and signed management no-s
 								throw new Error('Unclassified public organization read');
 						}
 					}
+					if (cookieOnlySignOut) {
+						expectedStatus = 403;
+						expectedBody = { error: 'not-allowed' };
+					}
 					const response = await harness.authAsBrowser(browserKey, requestPath, {
 						method: route.method,
 						headers: {
@@ -452,8 +485,9 @@ it('agent: every management boundary refuses real E10 and signed management no-s
 								? await response.text()
 								: await response.json();
 					expectNoIssuedCredentials(body);
-					if (organizationRead) {
+					if (organizationRead || cookieOnlySignOut) {
 						expect(body).toEqual(expectedBody);
+						if (cookieOnlySignOut) expect(response.headers.getSetCookie()).toEqual([]);
 						expect(response.headers.get('cache-control')).toBe('no-store');
 						if (pageRedirect) expect(response.headers.get('location')).toBe('/sign-in');
 					}
@@ -465,7 +499,7 @@ it('agent: every management boundary refuses real E10 and signed management no-s
 						expectedStatus,
 						exactRefusal:
 							route.method === 'HEAD' ||
-							(organizationRead
+							(organizationRead || cookieOnlySignOut
 								? response.status === expectedStatus
 								: z.strictObject({ error: z.literal('not-found') }).safeParse(body).success),
 					};
@@ -519,6 +553,7 @@ it('agent: every management boundary refuses real E10 and signed management no-s
 		),
 	);
 	expect(harness.centralProvisioning.arrivals).toEqual(centralArrivalsBeforeAttacks);
+	expect(await readCookieAuthority()).toEqual(authorityBefore);
 	await requireUnchangedProtectedState();
 	expect(harness.effects).toHaveLength(0);
 	for (const body of gatewayBodies) expectNoIssuedCredentials(body);

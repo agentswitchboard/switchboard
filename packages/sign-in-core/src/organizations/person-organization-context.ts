@@ -7,7 +7,7 @@ import {
 } from '#sign-in-core/contracts/organization-membership';
 import {
 	liveOwnerSessionSchema,
-	storedSessionSchema,
+	tokenlessPersonSessionSchema,
 } from '#sign-in-core/storage/models/person-session-records';
 import type { OrganizationId } from '#sign-in-core/storage/models/sign-in-store';
 import type { OrganizationMembershipRecords } from '#sign-in-core/storage/organization-membership-store';
@@ -19,9 +19,7 @@ export const organizationReadSessionSchema = z.discriminatedUnion('kind', [
 	z.strictObject({ kind: z.literal('session'), value: liveOwnerSessionSchema }),
 ]);
 export type ReadSession = z.infer<typeof organizationReadSessionSchema>;
-export const nativeLiveSessionViewSchema = liveOwnerSessionSchema.extend({
-	session: storedSessionSchema.omit({ token: true }),
-});
+export const nativeLiveSessionViewSchema = tokenlessPersonSessionSchema;
 export const organizationSessionViewSchema = z.discriminatedUnion('kind', [
 	organizationReadSessionSchema.options[0],
 	organizationReadSessionSchema.options[1],

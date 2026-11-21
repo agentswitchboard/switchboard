@@ -172,6 +172,7 @@ it('people: a lost provisioning reply stays pending and the delivered Try again 
 				document,
 				window: {},
 				FormData: dom.window.FormData,
+				HTMLFormElement: dom.window.HTMLFormElement,
 				fetch(path: string, init?: RequestInit): Promise<Response> {
 					const request = harness.auth(path, init);
 					pending.push(request);
@@ -331,6 +332,7 @@ async function deliveredOwnerPage(harness: Harness): Promise<{
 		document,
 		window: {},
 		FormData: dom.window.FormData,
+		HTMLFormElement: dom.window.HTMLFormElement,
 		fetch(path: string, init?: RequestInit): Promise<Response> {
 			const request = harness.auth(path, init);
 			pending.push(request);

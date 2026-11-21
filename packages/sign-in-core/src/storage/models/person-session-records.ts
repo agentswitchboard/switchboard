@@ -29,8 +29,20 @@ export const liveOwnerSessionSchema = z.object({
 	user: storedUserSchema,
 });
 export type LiveOwnerSession = z.infer<typeof liveOwnerSessionSchema>;
+export const tokenlessPersonSessionSchema = liveOwnerSessionSchema.extend({
+	session: storedSessionSchema.omit({ token: true }),
+});
+export type TokenlessPersonSession = z.infer<typeof tokenlessPersonSessionSchema>;
+
+export type SessionRowPresence =
+	| { readonly kind: 'present'; readonly id: string }
+	| { readonly kind: 'absent' };
 
 export interface PersonSessionRecords {
+	readonly readLiveSessionByToken: (
+		token: string,
+	) => Promise<SignInStoreResult<TokenlessPersonSession | null>>;
+	readonly sessionRowByToken: (token: string) => Promise<SignInStoreResult<SessionRowPresence>>;
 	readonly isPersonOrganizationSessionActive: (
 		personId: string,
 		sessionId: string,

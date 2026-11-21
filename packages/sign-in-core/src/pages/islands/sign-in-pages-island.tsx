@@ -22,7 +22,7 @@ import { passkeyClient } from '@better-auth/passkey/client';
 import { QueryClient } from '@tanstack/react-query';
 import { twoFactorClient } from 'better-auth/client/plugins';
 import { createAuthClient } from 'better-auth/react';
-import type * as React from 'react';
+import { useLayoutEffect, type ReactElement, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
 import { createRoot, type Root } from 'react-dom/client';
 
@@ -41,6 +41,7 @@ import {
 	signInIslandStateSchema,
 	type SignInIslandState,
 } from '#sign-in-core/pages/islands/sign-in-island-state';
+import { SignedInNavigation } from '#sign-in-core/pages/islands/signed-in-navigation';
 
 const authClient = createAuthClient({
 	plugins: [twoFactorClient(), passkeyClient()],
@@ -86,8 +87,8 @@ async function removePasskey(passkeyId: string): Promise<void> {
 function NavigationLink(props: {
 	readonly href: string;
 	readonly className?: string;
-	readonly children?: React.ReactNode;
-}): React.ReactElement {
+	readonly children?: ReactNode;
+}): ReactElement {
 	return (
 		<a href={props.href} className={props.className}>
 			{props.children}
@@ -95,7 +96,27 @@ function NavigationLink(props: {
 	);
 }
 
-function SignInPageContent({ state }: { readonly state: SignInIslandState }): React.ReactElement {
+function PagePasskeyManager(): ReactElement {
+	return (
+		<PasskeyManager
+			removePasskey={removePasskey}
+			labels={{
+				empty: 'No passkeys yet.',
+				add: 'Add passkey',
+				rename: 'Rename',
+				save: 'Save',
+				cancel: 'Cancel',
+				remove: 'Remove',
+				name: 'Passkey name',
+				unnamed: 'Passkey',
+				failed:
+					"That passkey change didn't complete. If it was cancelled, try again; if it needs a recent confirmation, confirm with your app first.",
+			}}
+		/>
+	);
+}
+
+function SignInPageContent({ state }: { readonly state: SignInIslandState }): ReactElement {
 	switch (state.kind) {
 		case 'passkey-sign-in':
 			return <PasskeyButton />;
@@ -146,23 +167,24 @@ function SignInPageContent({ state }: { readonly state: SignInIslandState }): Re
 				/>
 			);
 		case 'passkey-management':
+			return <PagePasskeyManager />;
+		case 'signed-in-navigation': {
+			const active = state.navigation.activeOrganization;
 			return (
-				<PasskeyManager
-					removePasskey={removePasskey}
-					labels={{
-						empty: 'No passkeys yet.',
-						add: 'Add passkey',
-						rename: 'Rename',
-						save: 'Save',
-						cancel: 'Cancel',
-						remove: 'Remove',
-						name: 'Passkey name',
-						unnamed: 'Passkey',
-						failed:
-							"That passkey change didn't complete. If it was cancelled, try again; if it needs a recent confirmation, confirm with your app first.",
-					}}
+				<SignedInNavigation
+					navigation={state.navigation}
+					passkeys={<PagePasskeyManager />}
+					people={
+						<OrganizationPeople
+							key={active.organizationId}
+							organizationId={active.organizationId}
+							organizationName={active.organizationName}
+							transport={organizationPeopleTransport}
+						/>
+					}
 				/>
 			);
+		}
 		case 'recovery-codes':
 			return (
 				<Card>
@@ -185,9 +207,9 @@ function IslandProviders({
 	children,
 	continueLocation,
 }: {
-	readonly children: React.ReactNode;
+	readonly children: ReactNode;
 	readonly continueLocation: string;
-}): React.ReactElement {
+}): ReactElement {
 	return (
 		<AuthProvider
 			authClient={authClient}
@@ -204,7 +226,20 @@ function IslandProviders({
 
 interface MountedIsland {
 	readonly root: HTMLElement;
+	readonly portal: HTMLElement;
 	readonly state: SignInIslandState;
+}
+
+function CommittedSignInIsland({ island }: { readonly island: MountedIsland }): ReactElement {
+	useLayoutEffect(() => {
+		if (island.portal === island.root) return;
+		// Swap the shell only once its interactive controls have committed.
+		// The hidden portal and the server fallback cannot both be painted.
+		island.root.replaceChildren(island.portal);
+		island.portal.removeAttribute('hidden');
+		island.root.setAttribute(mountedIslandAttribute, '');
+	}, [island]);
+	return <SignInPageContent state={island.state} />;
 }
 
 /** The React tree of the document currently shown. A factor form replaces the
@@ -231,15 +266,25 @@ export function mountSignInIslands(page: Document): void {
 	}
 	const added: MountedIsland[] = [];
 	for (const root of page.querySelectorAll<HTMLElement>(`[${signInIslandAttribute}]`)) {
-		if (root.hasAttribute(mountedIslandAttribute)) continue;
+		if (
+			root.hasAttribute(mountedIslandAttribute) ||
+			pageTree?.islands.some((island) => island.root === root)
+		)
+			continue;
 		const parsedState = signInIslandStateSchema.safeParse(
 			JSON.parse(root.dataset['islandState'] ?? 'null'),
 		);
 		if (!parsedState.success) continue;
-		// The island replaces the root's no-script fallback.
-		root.replaceChildren();
-		root.setAttribute(mountedIslandAttribute, '');
-		added.push({ root, state: parsedState.data });
+		if (parsedState.data.kind === 'signed-in-navigation') {
+			const portal = page.createElement('div');
+			portal.hidden = true;
+			root.append(portal);
+			added.push({ root, portal, state: parsedState.data });
+		} else {
+			root.replaceChildren();
+			root.setAttribute(mountedIslandAttribute, '');
+			added.push({ root, portal: root, state: parsedState.data });
+		}
 	}
 	if (added.length === 0) return;
 	if (pageTree === null) {
@@ -257,8 +302,8 @@ export function mountSignInIslands(page: Document): void {
 				passkeyState?.kind === 'passkey-sign-in' ? passkeyState.continueLocation : '/owner-ready'
 			}
 		>
-			{pageTree.islands.map(({ root, state }, index) =>
-				createPortal(<SignInPageContent state={state} />, root, String(index)),
+			{pageTree.islands.map((island, index) =>
+				createPortal(<CommittedSignInIsland island={island} />, island.portal, String(index)),
 			)}
 			<Toaster />
 		</IslandProviders>,
