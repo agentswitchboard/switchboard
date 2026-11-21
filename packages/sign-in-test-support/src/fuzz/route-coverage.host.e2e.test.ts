@@ -50,6 +50,7 @@ it('classifies exactly the installed provider and outer-handler routes, and give
 		{ endpointName: 'addMember', serverOnly: false },
 		{ endpointName: 'generateTOTP', serverOnly: true },
 		{ endpointName: 'prepareOrganizationFleetCall', serverOnly: true },
+		{ endpointName: 'readShellSession', serverOnly: true },
 		{ endpointName: 'recoverForgottenOrganization', serverOnly: true },
 		{ endpointName: 'reSignOrganizationsForKeyChange', serverOnly: true },
 		{ endpointName: 'setPassword', serverOnly: true },

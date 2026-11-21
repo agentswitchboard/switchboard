@@ -234,6 +234,17 @@ const reachableRouteGroups: readonly ReachableRouteGroup[] = [
 	},
 	{
 		method: 'POST',
+		paths: ['/api/auth/switchboard/sign-out'],
+		exposure: ['signed-out', 'member', 'owner'],
+		requestParts: ['json'],
+		documentedAnswers: [303, 401, 403, 429],
+		disclosure: 'No body; the cookie-bound session ends and the caller is sent to /sign-in.',
+		permittedRefusalEffects: ['none', 'expired-session-cleanup', 'cookie-delete'],
+		evidence:
+			'sign-in-sign-out.ts; management-boundaries.host.e2e.test.ts:297,313; sign-in-navigation.host.e2e.test.ts',
+	},
+	{
+		method: 'POST',
 		paths: [
 			'/api/auth/passkey/verify-registration',
 			'/api/auth/passkey/update-passkey',

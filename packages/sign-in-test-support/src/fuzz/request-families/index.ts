@@ -43,6 +43,7 @@ import { requestFamily as relayCreateWorkspaceFamily } from './relay-create-work
 import { requestFamily as relayWorkspaceLookupFamily } from './relay-workspace-lookup';
 import { requestFamily as signInFamily } from './sign-in';
 import { requestFamily as signInSocialFamily } from './sign-in-social';
+import { requestFamily as switchboardSignOutFamily } from './switchboard-sign-out';
 import { requestFamily as twoFactorEnableFamily } from './two-factor-enable';
 import { requestFamily as twoFactorGenerateBackupCodesFamily } from './two-factor-generate-backup-codes';
 import { requestFamily as twoFactorRemoveAppFamily } from './two-factor-remove-app';
@@ -102,4 +103,5 @@ export const requestFamilies = [
 	signInSocialFamily,
 	oauth2IntrospectFamily,
 	oauth2TokenFamily,
+	switchboardSignOutFamily,
 ] as const;
