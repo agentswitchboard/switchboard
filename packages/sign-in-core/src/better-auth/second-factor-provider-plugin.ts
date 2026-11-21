@@ -2,6 +2,7 @@ import type { BetterAuthPlugin } from '@better-auth/core';
 import { APIError, createAuthEndpoint, createAuthMiddleware, isAPIError } from 'better-auth/api';
 import { z } from 'zod';
 
+import { isPasskeyRegistrationRequest } from '#sign-in-core/better-auth/passkey-registration-request';
 import {
 	requireFactorActor,
 	requireFactorChange,
@@ -43,21 +44,6 @@ const nativeRemovals = new Set([
 	'/two-factor/get-totp-uri',
 ]);
 const confirmationPaths = new Set(['/two-factor/verify-totp', '/two-factor/verify-backup-code']);
-
-const registrationRequestSchema = z.object({
-	response: z.object({
-		id: z.base64url().min(1),
-		rawId: z.base64url().min(1),
-		type: z.literal('public-key'),
-		response: z.object({
-			clientDataJSON: z.base64url().min(1),
-			attestationObject: z.base64url().min(1),
-			transports: z.array(z.string()).optional(),
-		}),
-		clientExtensionResults: z.record(z.string(), z.unknown()),
-		authenticatorAttachment: z.enum(['platform', 'cross-platform']).optional(),
-	}),
-});
 
 export function createSecondFactorProviderPlugin(props: {
 	readonly store: Pick<SignInStore, 'factors' | 'factorChanges'>;
@@ -117,7 +103,7 @@ export function createSecondFactorProviderPlugin(props: {
 							requireMutationPermission(actor, mutation.change);
 							if (
 								path === '/passkey/verify-registration' &&
-								!registrationRequestSchema.safeParse(context.body).success
+								!isPasskeyRegistrationRequest(context.body)
 							)
 								throw new APIError('BAD_REQUEST', {
 									code: 'INVALID_REQUEST',
