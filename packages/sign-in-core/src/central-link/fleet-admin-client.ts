@@ -45,10 +45,19 @@ const refusedSchema = z.strictObject({
 const changeRecordSchema = z.strictObject({
 	id: z.uuid(),
 	requestId: z.string().min(1).max(128),
-	kind: z.enum(['organizationProvisioned', 'stampRenewed', 'workspaceCreated']),
+	kind: z.enum([
+		'organizationProvisioned',
+		'stampRenewed',
+		'workspaceCreated',
+		'machineEnrolled',
+		'machineRevoked',
+		'machineExpired',
+		'allowanceChanged',
+	]),
 	/** A sign-in-originated change carries no person or permission. */
 	origin: z.discriminatedUnion('kind', [
 		z.strictObject({ kind: z.literal('signInProvisioning') }),
+		z.strictObject({ kind: z.literal('automatic') }),
 		z.strictObject({
 			kind: z.literal('person'),
 			personId: z.string(),

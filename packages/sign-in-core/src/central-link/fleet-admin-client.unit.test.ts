@@ -227,3 +227,62 @@ it.each(['send', 'relay'] as const)(
 		expect(retry?.signal.aborted).toBe(true);
 	},
 );
+
+it('reads a mixed page of every Central change kind and keeps the record vocabulary closed', async (): Promise<void> => {
+	const base = {
+		id: '019a3dce-2000-7000-8000-000000000006',
+		requestId: 'central-test-record',
+		targetId: workspace.workspaceId,
+		createdAtMillis: 1_800_000_000_000,
+	};
+	const person = {
+		kind: 'person',
+		personId: organizationId,
+		permissionChecked: 'workspace:create',
+	};
+	const automatic = { kind: 'automatic' };
+	const records = [
+		{ ...base, kind: 'organizationProvisioned', origin: { kind: 'signInProvisioning' } },
+		{ ...base, kind: 'stampRenewed', origin: { kind: 'signInProvisioning' } },
+		{ ...base, kind: 'workspaceCreated', origin: person },
+		{ ...base, kind: 'machineEnrolled', origin: person },
+		{ ...base, kind: 'machineRevoked', origin: person },
+		{ ...base, kind: 'machineExpired', origin: automatic },
+		{ ...base, kind: 'allowanceChanged', origin: person },
+	];
+
+	function read(
+		replyRecords: readonly unknown[],
+	): ReturnType<ReturnType<typeof createFleetAdminLinkClient>['sendFleetAdminRequest']> {
+		const reply = { result: 'records', records: replyRecords };
+		const transport = scripted(async () => Response.json(reply));
+		return createFleetAdminLinkClient(transport).sendFleetAdminRequest({
+			operation: operations.ReadChangeRecords,
+			accessToken: 'test-token',
+			proof: 'test-proof',
+		});
+	}
+
+	await expect(read(records)).resolves.toEqual({
+		kind: 'answered',
+		result: { result: 'records', records },
+	});
+	await expect(
+		read([...records, { ...base, kind: 'unrecognized', origin: person }]),
+	).resolves.toEqual({
+		kind: 'unknown',
+		reason: 'malformed-reply',
+	});
+	await expect(
+		read([{ ...base, kind: 'machineExpired', origin: { kind: 'unrecognized' } }]),
+	).resolves.toEqual({
+		kind: 'unknown',
+		reason: 'malformed-reply',
+	});
+	await expect(
+		read([{ ...base, kind: 'machineExpired', origin: { ...automatic, personId: organizationId } }]),
+	).resolves.toEqual({
+		kind: 'unknown',
+		reason: 'malformed-reply',
+	});
+});
