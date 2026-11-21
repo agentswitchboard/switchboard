@@ -10,6 +10,9 @@ import {
 	user,
 } from '@agent-collaboration/sign-in-core';
 import { organizationPersonTokenClaimsSchema } from '@agent-collaboration/sign-in-core/person-identity';
+import { encodeCBOR, type CBORType } from '@levischuck/tiny-cbor';
+import type { RegistrationResponseJSON } from '@simplewebauthn/server';
+import { decodeAttestationObject } from '@simplewebauthn/server/helpers';
 import { and, eq } from 'drizzle-orm';
 import { jwtVerify } from 'jose';
 import { renderSVG } from 'uqr';
@@ -23,11 +26,13 @@ import { tokenForCurrentOwnerSession } from '#sign-in-test-support/test-fixtures
 import { createObservedProofJwks } from '#sign-in-test-support/test-fixtures/jwks-fetch-observation';
 import { startLocalAuthHarness } from '#sign-in-test-support/test-fixtures/local-auth-harness';
 import { ensureLocalOwnerOrganization } from '#sign-in-test-support/test-fixtures/local-owner-organization';
+import { registerBrowserPasskey } from '#sign-in-test-support/test-fixtures/passkey-browser-ceremonies';
 import {
 	peoplePost,
 	signInPeopleBrowser,
 	signInConfirmedPeopleBrowser,
 } from '#sign-in-test-support/test-fixtures/people-browser-login';
+import { createSoftwarePasskeyAuthenticator } from '#sign-in-test-support/test-fixtures/software-passkey-authenticator';
 
 useControlledSignInClock();
 const ownerEmail = 'owner@example.invalid';
@@ -635,66 +640,110 @@ it('people: incomplete registration is refused before a factor change is recorde
 	}
 });
 
-function encodeClientDataText(text: string): string {
-	return Buffer.from(text).toString('base64url');
+function decodeValidAttestation(valid: RegistrationResponseJSON): Map<string, CBORType> {
+	// The verifier's own decoder, so the case is cut from what it would read.
+	const decoded: unknown = decodeAttestationObject(
+		Uint8Array.from(Buffer.from(valid.response.attestationObject, 'base64url')),
+	);
+	if (!(decoded instanceof Map)) throw new Error('The valid attestation object is not a CBOR map');
+	return new Map<string, CBORType>(decoded as Map<string, CBORType>);
+}
+function withAttestationObject(
+	valid: RegistrationResponseJSON,
+	attestationObject: Uint8Array,
+): RegistrationResponseJSON {
+	return {
+		...valid,
+		response: {
+			...valid.response,
+			attestationObject: Buffer.from(attestationObject).toString('base64url'),
+		},
+	};
+}
+function withClientDataText(
+	valid: RegistrationResponseJSON,
+	text: string,
+): RegistrationResponseJSON {
+	return {
+		...valid,
+		response: { ...valid.response, clientDataJSON: Buffer.from(text).toString('base64url') },
+	};
 }
 
-const validClientDataText = JSON.stringify({
-	type: 'webauthn.create',
-	challenge: 'Y2hhbGxlbmdl',
-	origin: 'https://example.test',
-});
-// CBOR map {"fmt": "none", "attStmt": {}} with no authData.
-const attestationWithoutAuthData = Buffer.from(
-	'a263666d74646e6f6e65' + '6761747453746d74' + 'a0',
-	'hex',
-).toString('base64url');
+// Every case varies exactly one thing from the valid ceremony the software
+// authenticator produces for the live challenge.
+const registrationCases: readonly {
+	readonly label: string;
+	readonly expectedStatus: 200 | 400;
+	readonly alter: (valid: RegistrationResponseJSON) => RegistrationResponseJSON;
+}[] = [
+	{ label: 'unmodified (control)', expectedStatus: 200, alter: (valid) => valid },
+	{
+		label: 'client data that decodes to text that is not JSON',
+		expectedStatus: 400,
+		alter: (valid) => withClientDataText(valid, 'not json at all'),
+	},
+	{
+		label: 'client data JSON whose type field has the wrong type',
+		expectedStatus: 400,
+		alter: (valid) =>
+			withClientDataText(
+				valid,
+				JSON.stringify({
+					...(JSON.parse(
+						Buffer.from(valid.response.clientDataJSON, 'base64url').toString(),
+					) as object),
+					type: 1,
+				}),
+			),
+	},
+	{
+		label: 'an attestation object that is not CBOR',
+		expectedStatus: 400,
+		alter: (valid) => withAttestationObject(valid, Buffer.from('not cbor at all')),
+	},
+	{
+		label: 'a CBOR attestation object with no authData',
+		expectedStatus: 400,
+		alter: (valid) => {
+			const attestation = decodeValidAttestation(valid);
+			attestation.delete('authData');
+			return withAttestationObject(valid, encodeCBOR(attestation));
+		},
+	},
+	{
+		label: 'authData shorter than the 37-byte header',
+		expectedStatus: 400,
+		alter: (valid) => {
+			const attestation = decodeValidAttestation(valid);
+			const authData = attestation.get('authData');
+			if (!(authData instanceof Uint8Array)) throw new Error('The valid authData is not bytes');
+			attestation.set('authData', authData.slice(0, 36));
+			return withAttestationObject(valid, encodeCBOR(attestation));
+		},
+	},
+];
 
-it.each([
-	{ label: 'JSON with a non-string type', clientDataText: '{"type":1}', attestationObject: 'Yg' },
-	{ label: 'text that is not JSON', clientDataText: 'not json at all', attestationObject: 'Yg' },
-	{
-		label: 'valid beside an attestation object that is not CBOR',
-		clientDataText: validClientDataText,
-		attestationObject: Buffer.from('not cbor at all').toString('base64url'),
-	},
-	{
-		label: 'valid beside an attestation object with no authData',
-		clientDataText: validClientDataText,
-		attestationObject: attestationWithoutAuthData,
-	},
-])(
-	'people: a registration whose envelope is valid but whose client data is $label is refused after a live challenge exists, with no factor change and no server error',
-	async ({ clientDataText, attestationObject }) => {
+it.each(registrationCases)(
+	'people: a live-challenge registration with $label gives $expectedStatus and, when refused, no factor change and no server error',
+	async ({ expectedStatus, alter }) => {
 		const harness = await startLocalAuthHarness();
 		try {
 			await signInConfirmedPeopleBrowser({ harness, email: ownerEmail });
-			// A real registration challenge must be live, so the refusal cannot come
-			// from a missing challenge.
-			const options = await harness.auth('/api/auth/passkey/generate-register-options');
-			expect(options.status).toBe(200);
+			const authenticator = await createSoftwarePasskeyAuthenticator();
 			const before = await harness.database.select({ id: signInAudit.id }).from(signInAudit);
-			const refused = await harness.auth('/api/auth/passkey/verify-registration', {
-				method: 'POST',
-				headers: { 'content-type': 'application/json' },
-				body: JSON.stringify({
-					response: {
-						id: 'YQ',
-						rawId: 'YQ',
-						type: 'public-key',
-						response: {
-							clientDataJSON: encodeClientDataText(clientDataText),
-							attestationObject,
-						},
-						clientExtensionResults: {},
-					},
-				}),
+			const response = await registerBrowserPasskey({
+				harness,
+				authenticator,
+				alterResponse: alter,
 			});
-			expect(refused.status).toBe(400);
-			expect(await refused.json()).toMatchObject({ code: 'INVALID_REQUEST' });
-			expect(await harness.database.select({ id: signInAudit.id }).from(signInAudit)).toEqual(
-				before,
-			);
+			expect(response.status).toBe(expectedStatus);
+			if (expectedStatus === 400) {
+				expect(await response.json()).toMatchObject({ code: 'INVALID_REQUEST' });
+				expect(await harness.database.select({ id: signInAudit.id }).from(signInAudit)).toEqual(
+					before,
+				);
+			}
 		} finally {
 			await harness.close();
 		}

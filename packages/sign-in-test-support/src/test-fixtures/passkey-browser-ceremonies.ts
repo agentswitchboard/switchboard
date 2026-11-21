@@ -1,3 +1,4 @@
+import type { RegistrationResponseJSON } from '@simplewebauthn/server';
 import { z } from 'zod';
 
 import type { startLocalAuthHarness } from '#sign-in-test-support/test-fixtures/local-auth-harness';
@@ -31,6 +32,8 @@ export async function registerBrowserPasskey(props: {
 	readonly harness: Harness;
 	readonly authenticator: SoftwarePasskeyAuthenticator;
 	readonly userVerified?: boolean;
+	/** Derive a case from the valid response; omit for the valid ceremony itself. */
+	readonly alterResponse?: (valid: RegistrationResponseJSON) => RegistrationResponseJSON;
 }): Promise<Response> {
 	const optionsResponse = await props.harness.auth('/api/auth/passkey/generate-register-options');
 	if (!optionsResponse.ok) return optionsResponse;
@@ -43,11 +46,13 @@ export async function registerBrowserPasskey(props: {
 		.parse(await optionsResponse.json());
 	return passkeyPost(props.harness, 'verify-registration', {
 		name: 'Controlled test passkey',
-		response: props.authenticator.registrationResponse({
-			challenge: options.challenge,
-			rpId: options.rp.id,
-			origin: props.harness.issuer,
-			...(props.userVerified === undefined ? {} : { userVerified: props.userVerified }),
-		}),
+		response: (props.alterResponse ?? ((valid) => valid))(
+			props.authenticator.registrationResponse({
+				challenge: options.challenge,
+				rpId: options.rp.id,
+				origin: props.harness.issuer,
+				...(props.userVerified === undefined ? {} : { userVerified: props.userVerified }),
+			}),
+		),
 	});
 }

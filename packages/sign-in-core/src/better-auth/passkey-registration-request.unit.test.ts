@@ -2,11 +2,21 @@ import { expect, it } from 'vitest';
 
 import { isPasskeyRegistrationRequest } from '#sign-in-core/better-auth/passkey-registration-request';
 
-// CBOR map {"fmt": "none", "attStmt": {}, "authData": h'00'}.
-const decodableAttestationObject = Buffer.from(
-	'a3' + '63666d74' + '646e6f6e65' + '6761747453746d74' + 'a0' + '686175746844617461' + '4100',
-	'hex',
-).toString('base64url');
+const authenticatorDataHeaderBytes = 37;
+
+/** CBOR map {"fmt": "none", "attStmt": {}, "authData": <authDataLength zero bytes>}. */
+function attestationObjectWithAuthData(authDataLength: number): string {
+	return Buffer.concat([
+		Buffer.from(
+			'a3' + '63666d74' + '646e6f6e65' + '6761747453746d74' + 'a0' + '686175746844617461',
+			'hex',
+		),
+		// Byte string with a one-byte length: 0x58 <length>.
+		Buffer.from([0x58, authDataLength]),
+		Buffer.alloc(authDataLength),
+	]).toString('base64url');
+}
+const decodableAttestationObject = attestationObjectWithAuthData(authenticatorDataHeaderBytes);
 
 function parserFixture(
 	clientData: unknown,
@@ -41,7 +51,7 @@ it('validates decoded registration client data before it is eligible for native 
 	);
 });
 
-it('refuses an attestation object that does not decode to fmt, attStmt and authData', (): void => {
+it('refuses an attestation object that does not decode to fmt, attStmt and parseable authData', (): void => {
 	const clientData = {
 		type: 'webauthn.create',
 		origin: 'https://sign-in.example.invalid',
@@ -54,4 +64,10 @@ it('refuses an attestation object that does not decode to fmt, attStmt and authD
 	).toString('base64url');
 	expect(isPasskeyRegistrationRequest(parserFixture(clientData, notCbor))).toBe(false);
 	expect(isPasskeyRegistrationRequest(parserFixture(clientData, withoutAuthData))).toBe(false);
+	// One byte short of the 37-byte header parseAuthenticatorData requires.
+	expect(
+		isPasskeyRegistrationRequest(
+			parserFixture(clientData, attestationObjectWithAuthData(authenticatorDataHeaderBytes - 1)),
+		),
+	).toBe(false);
 });

@@ -2,23 +2,31 @@ import {
 	decodeAttestationObject,
 	decodeClientDataJSON,
 	isoBase64URL,
+	parseAuthenticatorData,
 } from '@simplewebauthn/server/helpers';
 import { z } from 'zod';
 
-const registrationRequestSchema = z.object({
-	response: z.object({
-		id: z.base64url().min(1),
-		rawId: z.base64url().min(1),
-		type: z.literal('public-key'),
-		response: z.object({
-			clientDataJSON: z.base64url().min(1),
-			attestationObject: z.base64url().min(1),
-			transports: z.array(z.string()).optional(),
-		}),
-		clientExtensionResults: z.record(z.string(), z.unknown()),
-		authenticatorAttachment: z.enum(['platform', 'cross-platform']).optional(),
-	}),
-});
+/**
+ * Run one of the verifier's own decoders. A throw becomes a zod issue at the field's path.
+ * The result is `unknown` on purpose: the next pipe stage states and checks its shape.
+ */
+function decodeWith<Encoded>(
+	decode: (encoded: Encoded) => unknown,
+	description: string,
+): (encoded: Encoded, context: z.RefinementCtx<Encoded>) => unknown {
+	return (encoded, context) => {
+		try {
+			return decode(encoded);
+		} catch (error) {
+			context.issues.push({
+				code: 'custom',
+				message: `${description}: ${error instanceof Error ? error.message : 'undecodable'}`,
+				input: encoded,
+			});
+			return z.NEVER;
+		}
+	};
+}
 
 const registrationClientDataSchema = z.object({
 	type: z.literal('webauthn.create'),
@@ -32,32 +40,69 @@ const registrationClientDataSchema = z.object({
 		.optional(),
 });
 
-/** Decode with the verifier's own CBOR decoder and require the members it reads. */
-function isDecodableAttestationObject(encoded: string): boolean {
-	try {
-		const decoded = decodeAttestationObject(isoBase64URL.toBuffer(encoded));
-		return (
-			decoded instanceof Map &&
-			typeof decoded.get('fmt') === 'string' &&
-			decoded.get('attStmt') instanceof Map &&
-			decoded.get('authData') instanceof Uint8Array
-		);
-	} catch {
-		return false;
-	}
-}
+/** What parseAuthenticatorData returns that later verification reads without re-checking. */
+const parsedAuthenticatorDataSchema = z.looseObject({
+	rpIdHash: z.instanceof(Uint8Array),
+	counter: z.number(),
+	flags: z.looseObject({ up: z.boolean(), uv: z.boolean(), at: z.boolean(), ed: z.boolean() }),
+});
 
-/** Check the wire encoding and decoded client-data shape before native verification. */
+const decodedAttestationObjectSchema = z.object({
+	fmt: z.string(),
+	attStmt: z.instanceof(Map),
+	authData: z
+		.instanceof(Uint8Array)
+		.transform(decodeWith(parseAuthenticatorData, 'authenticator data is malformed'))
+		.pipe(parsedAuthenticatorDataSchema),
+});
+
+/**
+ * Wire shape plus the decoding steps @simplewebauthn/server runs before any
+ * cryptographic check, in the same order and with the same helpers. Challenge,
+ * origin, RP ID and signature checks stay with the native verifier.
+ */
+export const passkeyRegistrationRequestSchema = z.object({
+	response: z
+		.object({
+			id: z.base64url().min(1),
+			rawId: z.base64url().min(1),
+			type: z.literal('public-key'),
+			response: z.object({
+				clientDataJSON: z
+					.base64url()
+					.min(1)
+					.transform(decodeWith(decodeClientDataJSON, 'client data is not JSON'))
+					.pipe(registrationClientDataSchema),
+				attestationObject: z
+					.base64url()
+					.min(1)
+					.transform(
+						decodeWith(
+							(encoded: string) => decodeAttestationObject(isoBase64URL.toBuffer(encoded)),
+							'attestation object is not CBOR',
+						),
+					)
+					.pipe(z.instanceof(Map))
+					.transform((attestation) => ({
+						fmt: attestation.get('fmt'),
+						attStmt: attestation.get('attStmt'),
+						authData: attestation.get('authData'),
+					}))
+					.pipe(decodedAttestationObjectSchema),
+				transports: z.array(z.string()).optional(),
+			}),
+			clientExtensionResults: z.record(z.string(), z.unknown()),
+			authenticatorAttachment: z.enum(['platform', 'cross-platform']).optional(),
+		})
+		.refine((credential) => credential.id === credential.rawId, {
+			message: 'id and rawId differ',
+			path: ['rawId'],
+		}),
+});
+
+export type PasskeyRegistrationRequest = z.output<typeof passkeyRegistrationRequestSchema>;
+
+/** True when the request decodes the way native verification will decode it. */
 export function isPasskeyRegistrationRequest(input: unknown): boolean {
-	const request = registrationRequestSchema.safeParse(input);
-	if (!request.success) return false;
-	const credential = request.data.response;
-	if (credential.id !== credential.rawId) return false;
-	if (!isDecodableAttestationObject(credential.response.attestationObject)) return false;
-	try {
-		const decoded: unknown = decodeClientDataJSON(credential.response.clientDataJSON);
-		return registrationClientDataSchema.safeParse(decoded).success;
-	} catch {
-		return false;
-	}
+	return passkeyRegistrationRequestSchema.safeParse(input).success;
 }
