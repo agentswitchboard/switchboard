@@ -44,6 +44,19 @@ const nativeRemovals = new Set([
 	'/two-factor/get-totp-uri',
 ]);
 const confirmationPaths = new Set(['/two-factor/verify-totp', '/two-factor/verify-backup-code']);
+const publicConfirmationUserSchema = z.object({
+	id: uuid7Schema,
+	name: z.string(),
+	email: z.email(),
+	emailVerified: z.boolean(),
+	image: z.string().nullish(),
+	createdAt: z.union([z.date(), z.iso.datetime()]),
+	updatedAt: z.union([z.date(), z.iso.datetime()]),
+});
+const nativeConfirmationSchema = z.object({
+	token: z.string().min(1),
+	user: publicConfirmationUserSchema,
+});
 
 export function createSecondFactorProviderPlugin(props: {
 	readonly store: Pick<SignInStore, 'factors' | 'factorChanges'>;
@@ -154,9 +167,7 @@ export function createSecondFactorProviderPlugin(props: {
 							return;
 						const pathname = context.path ?? '';
 						if (confirmationPaths.has(pathname)) {
-							const result = z
-								.looseObject({ token: z.string().min(1), user: z.looseObject({ id: uuid7Schema }) })
-								.safeParse(context.context.returned);
+							const result = nativeConfirmationSchema.safeParse(context.context.returned);
 							if (!result.success || result.data.user.id !== pending.actor.personId)
 								throw new APIError('SERVICE_UNAVAILABLE', {
 									message: 'second-factor-result-unconfirmed',
@@ -181,8 +192,7 @@ export function createSecondFactorProviderPlugin(props: {
 							if (stamped.kind !== 'stamped')
 								throw new APIError('UNAUTHORIZED', { message: 'session-not-live' });
 							requireStoredValue(await props.store.factorChanges.record(pending.change, 'outcome'));
-							const { token: _sessionToken, ...publicBody } = result.data;
-							return context.json(publicBody);
+							return context.json({ user: result.data.user });
 						}
 						requireStoredValue(await props.store.factorChanges.record(pending.change, 'outcome'));
 						return undefined;
