@@ -286,3 +286,50 @@ it('reads a mixed page of every Central change kind and keeps the record vocabul
 		reason: 'malformed-reply',
 	});
 });
+
+const storedRecord = {
+	id: '019a3dce-2000-7000-8000-000000000006',
+	requestId: 'é'.repeat(64),
+	kind: 'workspaceCreated',
+	origin: { kind: 'person', personId: 'opaque-person', permissionChecked: 'workspace:create' },
+	targetId: 'opaque-target',
+	createdAtMillis: 1_800_000_000_000,
+};
+
+async function readRecord(record: unknown): Promise<unknown> {
+	const transport = scripted(async () => Response.json({ result: 'records', records: [record] }));
+	return createFleetAdminLinkClient(transport).sendFleetAdminRequest({
+		operation: operations.ReadChangeRecords,
+		accessToken: 'test-token',
+		proof: 'test-proof',
+	});
+}
+
+it('accepts opaque change-record identities and a request identity of 128 UTF-8 bytes', async (): Promise<void> => {
+	await expect(readRecord(storedRecord)).resolves.toEqual({
+		kind: 'answered',
+		result: { result: 'records', records: [storedRecord] },
+	});
+});
+
+it.each([
+	{
+		field: 'record id version',
+		record: { ...storedRecord, id: '019a3dce-2000-4000-8000-000000000006' },
+	},
+	{ field: 'record id spelling', record: { ...storedRecord, id: storedRecord.id.toUpperCase() } },
+	{ field: 'target identity', record: { ...storedRecord, targetId: '' } },
+	{
+		field: 'person identity',
+		record: { ...storedRecord, origin: { ...storedRecord.origin, personId: '' } },
+	},
+	{
+		field: 'checked permission',
+		record: { ...storedRecord, origin: { ...storedRecord.origin, permissionChecked: '' } },
+	},
+	{ field: 'empty request identity', record: { ...storedRecord, requestId: '' } },
+	{ field: 'request identity byte length', record: { ...storedRecord, requestId: 'é'.repeat(65) } },
+	{ field: 'NUL in request identity', record: { ...storedRecord, requestId: 'request\0identity' } },
+])('rejects a Central change record with invalid $field', async ({ record }): Promise<void> => {
+	await expect(readRecord(record)).resolves.toEqual({ kind: 'unknown', reason: 'malformed-reply' });
+});
