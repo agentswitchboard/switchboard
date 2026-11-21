@@ -26,6 +26,8 @@ export interface RouteClassification extends RouteIdentity {
 	readonly permittedRefusalEffects: readonly PermittedRefusalEffect[];
 	readonly evidence: string;
 	readonly providerServerOnly?: boolean;
+	/** Fields the body of a native error answer must carry; the only way a 5xx or 404 is documented. */
+	readonly documentedErrorBodies?: Readonly<Record<number, Readonly<Record<string, unknown>>>>;
 }
 
 interface ReachableRouteGroup {
@@ -37,6 +39,7 @@ interface ReachableRouteGroup {
 	readonly disclosure: string;
 	readonly permittedRefusalEffects: readonly PermittedRefusalEffect[];
 	readonly evidence: string;
+	readonly documentedErrorBodies?: Readonly<Record<number, Readonly<Record<string, unknown>>>>;
 }
 
 // These groups are transcribed from the sign-in route contracts and permanent host tests,
@@ -172,7 +175,6 @@ const reachableRouteGroups: readonly ReachableRouteGroup[] = [
 			'/api/auth/organization/accept-invitation',
 			'/api/auth/organization/remove-member',
 			'/api/auth/organization/set-active',
-			'/api/auth/organization/retry-provisioning',
 		],
 		exposure: ['member', 'owner'],
 		requestParts: ['json', 'form'],
@@ -181,6 +183,23 @@ const reachableRouteGroups: readonly ReachableRouteGroup[] = [
 		permittedRefusalEffects: ['none', 'expired-session-cleanup', 'cookie-delete'],
 		evidence:
 			'people-organizations.host.e2e.test.ts:58,100,107,201,435,523; organization-invitation-resend.unit.test.ts',
+	},
+	{
+		method: 'POST',
+		paths: ['/api/auth/organization/retry-provisioning'],
+		exposure: ['member', 'owner'],
+		requestParts: ['json', 'form'],
+		// 409 is a refused statement; 503 is central not confirming the setup, which the local
+		// harness's central never does (organization-provisioning-plugin.ts:64–76).
+		documentedAnswers: [200, 400, 401, 403, 409, 415, 429, 503],
+		documentedErrorBodies: {
+			409: { kind: 'refused' },
+			503: { kind: 'setting-up', reason: 'unavailable' },
+		},
+		disclosure: 'Only the caller’s own organization setup state; no credential in refusal.',
+		permittedRefusalEffects: ['none', 'expired-session-cleanup', 'cookie-delete'],
+		evidence:
+			'organization-provisioning-plugin.ts:64–76; people-organization-provisioning.host.e2e.test.ts:81,140,279–283',
 	},
 	// B1-C owner People reads (specification S3–S10): cookie-bound, no-store, live owner
 	// permission checked around the read. Answers come from organization-membership-read-plugin.ts
@@ -294,7 +313,10 @@ const reachableRouteGroups: readonly ReachableRouteGroup[] = [
 		paths: ['/api/auth/link-social', '/api/auth/sign-in/social'],
 		exposure: ['signed-out', 'member', 'owner'],
 		requestParts: ['json'],
-		documentedAnswers: [200, 302, 400, 401, 403, 415, 429],
+		// Better Auth answers an unknown provider with 404 PROVIDER_NOT_FOUND (sign-in.mjs:152,
+		// account.mjs:160 in better-auth 1.7.11).
+		documentedAnswers: [200, 302, 400, 401, 403, 404, 415, 429],
+		documentedErrorBodies: { 404: { code: 'PROVIDER_NOT_FOUND' } },
 		disclosure: 'Only the caller’s authorized redirect; no credential in refusal.',
 		permittedRefusalEffects: [
 			'none',

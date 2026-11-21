@@ -40,6 +40,8 @@ export interface RequestCaseFixture {
 	readonly sessionId: string | null;
 	readonly forbiddenIdentities: readonly string[];
 	readonly foreignIdentities: readonly string[];
+	/** The organization the pending invitation joins; the caller's own membership once accepted. */
+	readonly invitedOrganizationId: string;
 	readonly issuedCredentials: readonly string[];
 	readonly permittedVerificationIds: readonly string[];
 }
@@ -254,7 +256,11 @@ export async function createRequestCaseFixture(props: {
 				code_challenge_method: 'S256',
 				state: 'fuzz-native-state',
 			});
-			const authorized = await auth(`/api/auth/oauth2/authorize?${query.toString()}`);
+			const authorized = await auth(`/api/auth/oauth2/authorize?${query.toString()}`, {
+				// A navigation, as the native CLI's browser sends it: a fetch-style request gets a JSON
+				// {redirect, url} answer instead of the 302 (oauth-provider handleRedirect).
+				headers: { accept: 'text/html', 'sec-fetch-mode': 'navigate' },
+			});
 			if (authorized.status !== 302)
 				throw new Error(`F1 fixture native code authorization refused (${authorized.status})`);
 			context = {
@@ -318,6 +324,7 @@ export async function createRequestCaseFixture(props: {
 			caller: props.caller,
 			cookie: currentCookie(),
 			sessionId: sessionValue?.session.id ?? null,
+			invitedOrganizationId: foreignOrganizationId,
 			foreignIdentities: [
 				foreignEmail,
 				...organizationIdsOutsideCallerMemberships,

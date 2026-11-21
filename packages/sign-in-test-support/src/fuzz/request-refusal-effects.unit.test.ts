@@ -66,3 +66,62 @@ it('permits only the exact factor intent and rejects another actor, action, targ
 		check({ ...before, signInAudit: [intent, { ...intent, target_id: 'other' }] }),
 	).toThrow('signInAudit');
 });
+
+it('permits an expired-session read only to advance (and drain-acknowledge) the expired person’s own pairs', (): void => {
+	const expiredAt = 1_000;
+	const now = expiredAt + 1;
+	const otherPersonId = '019a3dce-2000-7000-8000-000000000009';
+	const pair = (
+		id: string,
+		person: string,
+		extra: Record<string, unknown> = {},
+	): StoredRowForTest => ({
+		id,
+		person_id: person,
+		organization_id: 'org',
+		revision: 1,
+		acknowledged_revision: 1,
+		acknowledged_at: 0,
+		next_attempt_at: 0,
+		updated_at: 0,
+		...extra,
+	});
+	const cleanup: RouteClassification = {
+		...classification,
+		path: '/api/auth/owner/bootstrap',
+		permittedRefusalEffects: ['expired-session-cleanup'],
+	};
+	const base: RequestStorageSnapshot = {
+		session: [{ id: sessionId, userId: personId, expiresAt: expiredAt }],
+		personOrganizationAuthorizationRevisions: [pair('own', personId), pair('other', otherPersonId)],
+	};
+	function run(pairs: readonly StoredRowForTest[]): void {
+		assertRequestRefusalEffects({
+			classification: cleanup,
+			fixture,
+			before: base,
+			after: { ...base, session: [], personOrganizationAuthorizationRevisions: pairs },
+			now,
+		});
+	}
+	const advanced = { revision: 2, next_attempt_at: now, updated_at: now };
+	const drained = { ...advanced, acknowledged_revision: 2, acknowledged_at: now };
+	expect(() => run([pair('own', personId, advanced), pair('other', otherPersonId)])).not.toThrow();
+	expect(() => run([pair('own', personId, drained), pair('other', otherPersonId)])).not.toThrow();
+	// Wrong builds: another person's pair moves, a pair is acknowledged ahead of its revision, a
+	// pair is advanced twice, or an own pair stays unadvanced.
+	expect(() =>
+		run([pair('own', personId, advanced), pair('other', otherPersonId, advanced)]),
+	).toThrow('personOrganizationAuthorizationRevisions');
+	expect(() =>
+		run([
+			pair('own', personId, { ...advanced, acknowledged_revision: 3, acknowledged_at: now }),
+			pair('other', otherPersonId),
+		]),
+	).toThrow('personOrganizationAuthorizationRevisions');
+	expect(() =>
+		run([pair('own', personId, { ...advanced, revision: 3 }), pair('other', otherPersonId)]),
+	).toThrow('personOrganizationAuthorizationRevisions');
+});
+
+type StoredRowForTest = Record<string, unknown>;

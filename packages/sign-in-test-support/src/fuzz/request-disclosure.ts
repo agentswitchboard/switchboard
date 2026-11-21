@@ -10,6 +10,7 @@ import {
 	storedCredentials,
 	type RequestStorageSnapshot,
 } from '#sign-in-test-support/fuzz/request-storage-snapshot';
+import type { RouteClassification } from '#sign-in-test-support/fuzz/route-classification';
 import { expectNoIssuedCredentials } from '#sign-in-test-support/test-fixtures/credential-free-refusal';
 
 export interface ObservedRequestAnswer {
@@ -22,7 +23,11 @@ export interface ObservedRequestAnswer {
 export async function observeRequestAnswer(response: Response): Promise<ObservedRequestAnswer> {
 	const text = await response.text();
 	let body: unknown = null;
-	if (response.headers.get('content-type')?.includes('json')) {
+	// better-call labels a body-less APIError or redirect application/json with an empty body
+	// (to-response.mjs:58–67), so an empty refusal or redirect carries no JSON to parse. An empty
+	// success claiming JSON is still malformed.
+	const bodyless = text === '' && response.status >= 300;
+	if (!bodyless && response.headers.get('content-type')?.includes('json')) {
 		try {
 			body = JSON.parse(text);
 		} catch {
@@ -68,6 +73,7 @@ export function assertRequestDisclosure(props: {
 		RequestCaseFixture,
 		'caller' | 'sessionId' | 'forbiddenIdentities' | 'foreignIdentities' | 'issuedCredentials'
 	> & {
+		readonly invitedOrganizationId: string;
 		readonly context: Pick<
 			RequestFamilyContext,
 			| 'issuer'
@@ -150,7 +156,8 @@ export function assertRequestDisclosure(props: {
 	}
 	const identityExceptions =
 		path === '/api/auth/organization/accept-invitation' && !refusal
-			? [fixture.context.invitationId]
+			? // Accepting makes the invited organization one of the caller's own memberships.
+				[fixture.context.invitationId, fixture.invitedOrganizationId]
 			: [];
 	const forbiddenIdentities = [...fixture.forbiddenIdentities, ...fixture.foreignIdentities].filter(
 		(identity) => !identityExceptions.includes(identity),
@@ -172,7 +179,10 @@ export function assertRequestDisclosure(props: {
 		if (refusal) throw new Error('S2 credential-disclosure: refusal issues a cookie');
 		if (name.endsWith('session_token')) {
 			const mayIssueSession =
-				path.startsWith('/api/auth/callback/') || path === '/api/auth/two-factor/verify-totp';
+				path.startsWith('/api/auth/callback/') ||
+				path === '/api/auth/two-factor/verify-totp' ||
+				// Native set-active re-sets the cookie for the same session (crud-org.mjs:403,429).
+				path === '/api/auth/organization/set-active';
 			const session = (after.session ?? []).find(
 				(row) => typeof row.token === 'string' && value.startsWith(`${row.token}.`),
 			);
@@ -191,4 +201,21 @@ export function assertRequestDisclosure(props: {
 			throw new Error('S2 credential-disclosure: cookie outside route entitlement');
 		}
 	}
+}
+
+/** A 5xx or 404 is documented only when its body carries the route's native error fields. */
+export function assertDocumentedErrorBody(props: {
+	readonly documentedErrorBodies: RouteClassification['documentedErrorBodies'];
+	readonly answer: Pick<ObservedRequestAnswer, 'status' | 'body'>;
+}): void {
+	const expected = props.documentedErrorBodies?.[props.answer.status];
+	if (expected === undefined) return;
+	const actual = z.record(z.string(), z.unknown()).safeParse(props.answer.body);
+	if (
+		!actual.success ||
+		Object.entries(expected).some(([field, value]) => actual.data[field] !== value)
+	)
+		throw new Error(
+			`S2 documented-answer: status ${props.answer.status} without its documented error body`,
+		);
 }

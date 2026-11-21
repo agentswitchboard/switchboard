@@ -9,6 +9,7 @@ import {
 } from '#sign-in-test-support/fuzz/fuzz-settings';
 import { createRequestCaseFixture } from '#sign-in-test-support/fuzz/request-case-fixture';
 import {
+	assertDocumentedErrorBody,
 	assertRequestDisclosure,
 	observeRequestAnswer,
 } from '#sign-in-test-support/fuzz/request-disclosure';
@@ -63,13 +64,19 @@ for (const family of requestFamilies) {
 						const answer = await observeRequestAnswer(response);
 						await fixture.harness.settleDeferredWork();
 						const after = await readRequestStorageSnapshot(fixture.harness.database);
-						expect(
-							answer.status,
-							'S2 no-server-error: generated input without injected storage faults',
-						).toBeLessThan(500);
+						// A server error is allowed only where the route documents it with its native body.
+						if (answer.status >= 500)
+							expect(
+								classification.documentedErrorBodies?.[answer.status],
+								'S2 no-server-error: generated input without injected storage faults',
+							).toBeDefined();
 						expect(classification.documentedAnswers, 'S2 documented-answer').toContain(
 							answer.status,
 						);
+						assertDocumentedErrorBody({
+							documentedErrorBodies: classification.documentedErrorBodies,
+							answer,
+						});
 						assertRequestDisclosure({
 							fixture,
 							path: family.route.path,

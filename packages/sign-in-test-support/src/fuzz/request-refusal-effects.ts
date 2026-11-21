@@ -81,16 +81,32 @@ export function assertRequestRefusalEffects(props: {
 			)
 				continue;
 			if (table === 'personOrganizationAuthorizationRevisions') {
-				const expected = original.map((row) => {
-					if (row.person_id !== expired.userId || typeof row.revision !== 'number') return row;
-					return Object.assign({}, row, {
-						revision: row.revision + 1,
+				// The refused guard run advances each of the person's pairs once. Drain-on-use
+				// (authorization-revision-drainer.ts:78) may then deliver and acknowledge the new
+				// revision of a pair whose organization's central confirms it, in the same run.
+				const advanced = (row: Record<string, unknown>): Record<string, unknown> =>
+					Object.assign({}, row, {
+						revision: Number(row.revision) + 1,
 						next_attempt_at: now,
 						updated_at: now,
 					});
-				});
-				if (expected.map(rowBytes).toSorted().join() === current.map(rowBytes).toSorted().join())
-					continue;
+				const drained = (row: Record<string, unknown>): Record<string, unknown> =>
+					Object.assign(advanced(row), {
+						acknowledged_revision: Number(row.revision) + 1,
+						acknowledged_at: now,
+					});
+				const matches =
+					current.length === original.length &&
+					original.every((row) => {
+						const observed = current.find((candidate) => candidate.id === row.id);
+						if (observed === undefined) return false;
+						if (row.person_id !== expired.userId || typeof row.revision !== 'number')
+							return rowBytes(observed) === rowBytes(row);
+						return [advanced(row), drained(row)].some(
+							(allowed) => rowBytes(allowed) === rowBytes(observed),
+						);
+					});
+				if (matches) continue;
 			}
 		}
 		if (table === 'verification' && additions.length === 0) {

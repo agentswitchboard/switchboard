@@ -2,7 +2,9 @@ import { SignJWT } from 'jose';
 import { expect, it } from 'vitest';
 
 import {
+	assertDocumentedErrorBody,
 	assertRequestDisclosure,
+	observeRequestAnswer,
 	type ObservedRequestAnswer,
 } from '#sign-in-test-support/fuzz/request-disclosure';
 import type { GeneratedRequest } from '#sign-in-test-support/fuzz/request-families/index';
@@ -17,6 +19,7 @@ const fixture: DisclosureFixture = {
 	sessionId,
 	forbiddenIdentities: [],
 	foreignIdentities: [foreignId],
+	invitedOrganizationId: '019a3dce-2000-7000-8000-000000000006',
 	issuedCredentials: ['issued-secret'],
 	context: {
 		issuer: 'https://issuer.example.invalid',
@@ -170,4 +173,95 @@ it('accepts only the entitled token input and matching declared claims', async (
 			input: tokenRequest,
 		}),
 	).toThrow();
+});
+
+const setActivePath = '/api/auth/organization/set-active';
+const nativeSessionCookie = (token: string): Headers =>
+	new Headers({ 'set-cookie': `better-auth.session_token=${token}.signature; Path=/; HttpOnly` });
+
+it('permits the native set-active cookie only for the caller’s own live session on that route', (): void => {
+	const body = { name: 'Organization' };
+	expect(() =>
+		check(answer(body, 200, nativeSessionCookie('session-secret')), { path: setActivePath }),
+	).not.toThrow();
+	// Wrong builds: an unknown token, another person's session, or the same cookie on another route.
+	expect(() =>
+		check(answer(body, 200, nativeSessionCookie('unissued-token')), { path: setActivePath }),
+	).toThrow('session cookie outside native issuance contract');
+	const othersSession: RequestStorageSnapshot = {
+		session: [{ id: sessionId, userId: foreignId, token: 'session-secret' }],
+	};
+	expect(() =>
+		assertRequestDisclosure({
+			fixture,
+			path: setActivePath,
+			request,
+			answer: answer(body, 200, nativeSessionCookie('session-secret')),
+			before: othersSession,
+			after: othersSession,
+		}),
+	).toThrow('session cookie outside native issuance contract');
+	expect(() =>
+		check(answer(body, 200, nativeSessionCookie('session-secret')), {
+			path: '/api/auth/get-session',
+		}),
+	).toThrow('session cookie outside native issuance contract');
+	expect(() =>
+		check(answer(body, 403, nativeSessionCookie('session-secret')), { path: setActivePath }),
+	).toThrow('credential-disclosure');
+});
+
+it('entitles the accepted invitation’s organization only on a successful accept', (): void => {
+	const invitedOrganizationId = '019a3dce-2000-7000-8000-000000000005';
+	const acceptFixture: DisclosureFixture = { ...fixture, invitedOrganizationId };
+	const acceptPath = '/api/auth/organization/accept-invitation';
+	expect(() =>
+		check(answer({ invitation: { organizationId: invitedOrganizationId } }, 200), {
+			callerFixture: acceptFixture,
+			path: acceptPath,
+		}),
+	).not.toThrow();
+	expect(() =>
+		check(answer({ invitation: { organizationId: invitedOrganizationId } }, 403), {
+			callerFixture: { ...acceptFixture, foreignIdentities: [invitedOrganizationId] },
+			path: acceptPath,
+		}),
+	).toThrow('identity-disclosure');
+	expect(() =>
+		check(answer({ invitation: { organizationId: foreignId } }, 200), {
+			callerFixture: acceptFixture,
+			path: acceptPath,
+		}),
+	).toThrow('identity-disclosure');
+});
+
+it('parses an empty refusal or redirect but not an empty success that claims JSON', async (): Promise<void> => {
+	const json = { 'content-type': 'application/json' };
+	await expect(
+		observeRequestAnswer(new Response('', { status: 401, headers: json })),
+	).resolves.toMatchObject({ status: 401, body: null });
+	await expect(
+		observeRequestAnswer(new Response('', { status: 302, headers: { ...json, location: '/x' } })),
+	).resolves.toMatchObject({ status: 302, body: null });
+	await expect(
+		observeRequestAnswer(new Response('', { status: 200, headers: json })),
+	).rejects.toThrow('malformed');
+	await expect(
+		observeRequestAnswer(new Response('<html>', { status: 401, headers: json })),
+	).rejects.toThrow('malformed');
+});
+
+it('documents a 404 or 5xx only with its native error body', (): void => {
+	const documentedErrorBodies = {
+		404: { code: 'PROVIDER_NOT_FOUND' },
+		503: { kind: 'setting-up', reason: 'unavailable' },
+	};
+	const doc = (status: number, body: unknown): void =>
+		assertDocumentedErrorBody({ documentedErrorBodies, answer: { status, body } });
+	expect(() => doc(404, { code: 'PROVIDER_NOT_FOUND', message: 'x' })).not.toThrow();
+	expect(() => doc(503, { kind: 'setting-up', reason: 'unavailable' })).not.toThrow();
+	expect(() => doc(404, { code: 'SOMETHING_ELSE' })).toThrow('documented error body');
+	expect(() => doc(404, null)).toThrow('documented error body');
+	expect(() => doc(503, { kind: 'setting-up', reason: 'other' })).toThrow('documented error body');
+	expect(() => doc(400, { anything: true })).not.toThrow();
 });
