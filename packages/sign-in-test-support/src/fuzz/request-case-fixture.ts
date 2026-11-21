@@ -31,7 +31,8 @@ import { createSoftwarePasskeyAuthenticator } from '#sign-in-test-support/test-f
 import { createSoftwareTotpAuthenticator } from '#sign-in-test-support/test-fixtures/software-totp-authenticator';
 
 export type RequestCaller = 'signed-out' | 'member' | 'owner';
-type Harness = Awaited<ReturnType<typeof startLocalAuthHarness>>;
+export type RequestHarness = Awaited<ReturnType<typeof startLocalAuthHarness>>;
+type Harness = RequestHarness;
 export interface RequestCaseFixture {
 	readonly harness: Harness;
 	readonly context: RequestFamilyContext;
@@ -49,6 +50,23 @@ export interface RequestCaseFixture {
 async function requireId(response: Response): Promise<string> {
 	if (!response.ok) throw new Error(`F1 fixture operation refused (${response.status})`);
 	return z.object({ id: z.uuidv7() }).parse(await response.json()).id;
+}
+
+/** Empty every table and the cookie jar, then prove the baseline is empty (S2 fresh-case baseline). */
+export async function resetRequestHarness(harness: RequestHarness): Promise<void> {
+	await harness.settleDeferredWork();
+	await Object.values(signInSchema)
+		.toReversed()
+		.reduce(async (previous, table): Promise<void> => {
+			await previous;
+			await harness.database.delete(table);
+		}, Promise.resolve());
+	harness.clearBrowserSession();
+	const baseline = await readRequestStorageSnapshot(harness.database);
+	for (const [table, rows] of Object.entries(baseline)) {
+		if (rows.length !== 0) throw new Error(`S2 fresh-case-baseline: retained rows in ${table}`);
+	}
+	if (harness.cookie() !== '') throw new Error('S2 fresh-case-baseline: retained cookie');
 }
 
 /** Reset an owned database before native setup; host lifetime is independent of fixture lifetime. */
@@ -71,21 +89,7 @@ export async function createRequestCaseFixture(props: {
 			ownedHarness.authAsBrowser(browserKey, pathname, init),
 	};
 	try {
-		if (props.existingHarness !== undefined) {
-			await harness.settleDeferredWork();
-			await Object.values(signInSchema)
-				.toReversed()
-				.reduce(async (previous, table): Promise<void> => {
-					await previous;
-					await harness.database.delete(table);
-				}, Promise.resolve());
-			harness.clearBrowserSession();
-			const baseline = await readRequestStorageSnapshot(harness.database);
-			for (const [table, rows] of Object.entries(baseline)) {
-				if (rows.length !== 0) throw new Error(`S2 fresh-case-baseline: retained rows in ${table}`);
-			}
-			if (harness.cookie() !== '') throw new Error('S2 fresh-case-baseline: retained cookie');
-		}
+		if (props.existingHarness !== undefined) await resetRequestHarness(harness);
 		const ownerEmail = 'owner@example.invalid';
 		const memberEmail = 'fuzz-member@example.invalid';
 		const foreignEmail = 'fuzz-foreign@example.invalid';

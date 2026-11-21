@@ -1,12 +1,7 @@
 import * as hegel from '@hegeldev/hegel';
-import { expect, it } from 'vitest';
+import { afterAll, expect, it } from 'vitest';
 
-import {
-	boundShrinking,
-	fuzzSeed,
-	fuzzSettings,
-	requestFuzzDefaultCases,
-} from '#sign-in-test-support/fuzz/fuzz-settings';
+import { boundShrinking, fuzzSeed, fuzzSettings } from '#sign-in-test-support/fuzz/fuzz-settings';
 import { createRequestCaseFixture } from '#sign-in-test-support/fuzz/request-case-fixture';
 import {
 	assertDocumentedErrorBody,
@@ -14,13 +9,18 @@ import {
 	observeRequestAnswer,
 } from '#sign-in-test-support/fuzz/request-disclosure';
 import { requestFamilies } from '#sign-in-test-support/fuzz/request-families/index';
+import { syntheticRequestFamilyContext } from '#sign-in-test-support/fuzz/request-families/synthetic-context';
 import { assertRequestRefusalEffects } from '#sign-in-test-support/fuzz/request-refusal-effects';
+import { createSharedRequestHarness } from '#sign-in-test-support/fuzz/request-shared-harness';
 import { readRequestStorageSnapshot } from '#sign-in-test-support/fuzz/request-storage-snapshot';
 import { routeClassification, routeKey } from '#sign-in-test-support/fuzz/route-classification';
 import { useControlledSignInClock } from '#sign-in-test-support/test-fixtures/controlled-node-test-clock';
-import { startLocalAuthHarness } from '#sign-in-test-support/test-fixtures/local-auth-harness';
 
 useControlledSignInClock();
+
+// One host for the whole file; each case still resets storage and uses a fresh browser address.
+const sharedHarness = createSharedRequestHarness();
+afterAll(async () => sharedHarness.close());
 
 for (const family of requestFamilies) {
 	for (const caller of family.callers) {
@@ -30,7 +30,8 @@ for (const family of requestFamilies) {
 			);
 			if (classification === undefined)
 				throw new Error('S1 classification missing for request family');
-			const harness = await startLocalAuthHarness();
+			const harness = await sharedHarness.acquire();
+			let outcome: 'passed' | 'failed' = 'failed';
 			let caseNumber = 0;
 			try {
 				await hegel.testAsync(
@@ -49,7 +50,7 @@ for (const family of requestFamilies) {
 							path: family.route.path,
 							existingHarness: harness,
 						});
-						const generated = family.generate(testCase, fixture.context);
+						const generated = family.generate(testCase, fixture.context, caseNumber - 1);
 						note(
 							`S5 seed=${fuzzSeed}; route=${routeKey(family.route)}; caller=${caller}; variant=${generated.label}`,
 						);
@@ -102,10 +103,11 @@ for (const family of requestFamilies) {
 							}) + '\n',
 						);
 					}),
-					fuzzSettings(requestFuzzDefaultCases),
+					fuzzSettings(family.coverageCases(syntheticRequestFamilyContext)),
 				);
+				outcome = 'passed';
 			} finally {
-				await harness.close();
+				await sharedHarness.release(outcome);
 			}
 		});
 	}

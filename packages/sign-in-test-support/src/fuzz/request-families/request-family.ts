@@ -35,7 +35,17 @@ export interface GeneratedRequest {
 export interface RequestFamily {
 	readonly route: { readonly method: 'GET' | 'POST'; readonly path: string };
 	readonly callers: readonly ('signed-out' | 'member' | 'owner')[];
-	readonly generate: (testCase: TestCase, context: RequestFamilyContext) => GeneratedRequest;
+	/**
+	 * With a `caseIndex` below `coverageCases`, the case visits that variant family on purpose
+	 * (the coverage pass); otherwise every choice is drawn.
+	 */
+	readonly generate: (
+		testCase: TestCase,
+		context: RequestFamilyContext,
+		caseIndex?: number,
+	) => GeneratedRequest;
+	/** One case per variant family: the valid request, each mutation of each field, each transport fault. */
+	readonly coverageCases: (context: RequestFamilyContext) => number;
 }
 
 type Fields = Readonly<Record<string, unknown>>;
@@ -43,15 +53,52 @@ type FieldsForContext = (context: RequestFamilyContext) => Fields;
 
 const callers = ['signed-out', 'member', 'owner'] as const;
 
-function drawFields(testCase: TestCase, valid: Fields): { fields: Fields; label: string } {
-	const variant = testCase.draw(
-		generators.sampledFrom(['valid', 'near-valid', 'boundary', 'wrong-type'] as const),
-	);
+type FieldVariant = 'valid' | 'near-valid' | 'boundary' | 'wrong-type';
+interface FieldStep {
+	readonly variant: FieldVariant;
+	readonly key?: string;
+}
+const mutatedVariants = ['near-valid', 'boundary', 'wrong-type'] as const;
+
+/** The valid body, then each mutation of each named field (of the body itself when it has none). */
+function fieldSteps(valid: Fields): readonly FieldStep[] {
+	const keys = Object.keys(valid);
+	return [
+		{ variant: 'valid' },
+		...(keys.length === 0
+			? mutatedVariants.map((variant) => ({ variant }))
+			: keys.flatMap((key) => mutatedVariants.map((variant) => ({ variant, key })))),
+	];
+}
+
+/** A scheduled case draws one unused number so Hegel keeps exploring: a case that draws nothing
+ * looks like a fully explored space and ends the run after one case. */
+function scheduledStep<Step>(
+	testCase: TestCase,
+	steps: readonly Step[],
+	caseIndex: number | undefined,
+): Step | undefined {
+	const step = caseIndex === undefined ? undefined : steps[caseIndex];
+	if (step !== undefined)
+		testCase.draw(generators.integers({ minValue: 0, maxValue: 2_147_483_647 }));
+	return step;
+}
+
+function drawFields(
+	testCase: TestCase,
+	valid: Fields,
+	step?: FieldStep,
+): { fields: Fields; label: string } {
+	const variant =
+		step?.variant ??
+		testCase.draw(
+			generators.sampledFrom(['valid', 'near-valid', 'boundary', 'wrong-type'] as const),
+		);
 	const keys = Object.keys(valid);
 	if (variant === 'valid') return { fields: valid, label: variant };
 	if (keys.length === 0)
 		return { fields: { unexpected: variant === 'wrong-type' ? null : '' }, label: variant };
-	const key = testCase.draw(generators.sampledFrom(keys));
+	const key = step?.key ?? testCase.draw(generators.sampledFrom(keys));
 	const originalValue = valid[key];
 	const value =
 		variant === 'wrong-type'
@@ -70,6 +117,14 @@ function drawFields(testCase: TestCase, valid: Fields): { fields: Fields; label:
 	return { fields: { ...valid, [key]: value }, label: `${variant}:${key}` };
 }
 
+function jsonSteps(valid: Fields): readonly { encoding: string; step: FieldStep }[] {
+	return [
+		...fieldSteps(valid).map((step) => ({ encoding: 'json', step })),
+		{ encoding: 'malformed', step: { variant: 'valid' } },
+		{ encoding: 'wrong-content-type', step: { variant: 'valid' } },
+	];
+}
+
 export function jsonFamily(
 	path: string,
 	validFields: FieldsForContext,
@@ -80,11 +135,20 @@ export function jsonFamily(
 	return {
 		route: { method: 'POST', path },
 		callers,
-		generate(testCase: TestCase, context: RequestFamilyContext): GeneratedRequest {
-			const encoding = testCase.draw(
-				generators.sampledFrom(['json', 'json', 'malformed', 'wrong-content-type'] as const),
-			);
-			const { fields, label } = drawFields(testCase, validFields(context));
+		coverageCases: (context): number => jsonSteps(validFields(context)).length,
+		generate(
+			testCase: TestCase,
+			context: RequestFamilyContext,
+			caseIndex?: number,
+		): GeneratedRequest {
+			const valid = validFields(context);
+			const scheduled = scheduledStep(testCase, jsonSteps(valid), caseIndex);
+			const encoding =
+				scheduled?.encoding ??
+				testCase.draw(
+					generators.sampledFrom(['json', 'json', 'malformed', 'wrong-content-type'] as const),
+				);
+			const { fields, label } = drawFields(testCase, valid, scheduled?.step);
 			return {
 				pathname: path,
 				init: {
@@ -107,8 +171,18 @@ export function queryFamily(path: string, validFields: FieldsForContext): Reques
 	return {
 		route: { method: 'GET', path },
 		callers,
-		generate(testCase: TestCase, context: RequestFamilyContext): GeneratedRequest {
-			const { fields, label } = drawFields(testCase, validFields(context));
+		coverageCases: (context): number => fieldSteps(validFields(context)).length,
+		generate(
+			testCase: TestCase,
+			context: RequestFamilyContext,
+			caseIndex?: number,
+		): GeneratedRequest {
+			const valid = validFields(context);
+			const { fields, label } = drawFields(
+				testCase,
+				valid,
+				scheduledStep(testCase, fieldSteps(valid), caseIndex),
+			);
 			const query = new URLSearchParams();
 			for (const [key, value] of Object.entries(fields)) {
 				if (value === null || value === undefined) continue;
@@ -128,6 +202,22 @@ export function queryFamily(path: string, validFields: FieldsForContext): Reques
 	};
 }
 
+function formSteps(
+	valid: Fields,
+	allowJson: boolean,
+): readonly { encoding: string; step: FieldStep }[] {
+	return [
+		...fieldSteps(valid).map((step) => ({ encoding: 'form', step })),
+		...(allowJson
+			? [
+					{ encoding: 'json', step: { variant: 'valid' as const } },
+					{ encoding: 'malformed', step: { variant: 'valid' as const } },
+				]
+			: []),
+		{ encoding: 'wrong-content-type', step: { variant: 'valid' as const } },
+	];
+}
+
 export function formFamily(
 	path: string,
 	validFields: (context: RequestFamilyContext) => Readonly<Record<string, string>>,
@@ -136,15 +226,24 @@ export function formFamily(
 	return {
 		route: { method: 'POST', path },
 		callers,
-		generate(testCase: TestCase, context: RequestFamilyContext): GeneratedRequest {
-			const encoding = testCase.draw(
-				generators.sampledFrom(
-					allowJson
-						? ['form', 'json', 'malformed', 'wrong-content-type']
-						: ['form', 'wrong-content-type'],
-				),
-			);
-			const { fields, label } = drawFields(testCase, validFields(context));
+		coverageCases: (context): number => formSteps(validFields(context), allowJson).length,
+		generate(
+			testCase: TestCase,
+			context: RequestFamilyContext,
+			caseIndex?: number,
+		): GeneratedRequest {
+			const valid = validFields(context);
+			const scheduled = scheduledStep(testCase, formSteps(valid, allowJson), caseIndex);
+			const encoding =
+				scheduled?.encoding ??
+				testCase.draw(
+					generators.sampledFrom(
+						allowJson
+							? ['form', 'json', 'malformed', 'wrong-content-type']
+							: ['form', 'wrong-content-type'],
+					),
+				);
+			const { fields, label } = drawFields(testCase, valid, scheduled?.step);
 			const form = new URLSearchParams();
 			for (const [key, value] of Object.entries(fields)) {
 				if (typeof value === 'string') form.set(key, value);
@@ -172,20 +271,42 @@ export function formFamily(
 	};
 }
 
+const tokenFieldKeys = ['client_id', 'code', 'code_verifier', 'redirect_uri', 'resource'] as const;
+const tokenSteps: readonly {
+	readonly variant: 'valid' | 'near-valid' | 'boundary' | 'unsupported' | 'wrong-content-type';
+	readonly key?: string;
+}[] = [
+	{ variant: 'valid' },
+	{ variant: 'unsupported' },
+	{ variant: 'wrong-content-type' },
+	...tokenFieldKeys.flatMap((key) => [
+		{ variant: 'near-valid' as const, key },
+		{ variant: 'boundary' as const, key },
+	]),
+];
+
 export function tokenFamily(path: string): RequestFamily {
 	return {
 		route: { method: 'POST', path },
 		callers,
-		generate(testCase: TestCase, context: RequestFamilyContext): GeneratedRequest {
-			const variant = testCase.draw(
-				generators.sampledFrom([
-					'valid',
-					'near-valid',
-					'boundary',
-					'unsupported',
-					'wrong-content-type',
-				] as const),
-			);
+		coverageCases: (): number => tokenSteps.length,
+		generate(
+			testCase: TestCase,
+			context: RequestFamilyContext,
+			caseIndex?: number,
+		): GeneratedRequest {
+			const scheduled = scheduledStep(testCase, tokenSteps, caseIndex);
+			const variant =
+				scheduled?.variant ??
+				testCase.draw(
+					generators.sampledFrom([
+						'valid',
+						'near-valid',
+						'boundary',
+						'unsupported',
+						'wrong-content-type',
+					] as const),
+				);
 			const fields: Record<string, string> = {
 				grant_type: 'authorization_code',
 				client_id: context.oauthClientId,
@@ -196,15 +317,7 @@ export function tokenFamily(path: string): RequestFamily {
 			};
 			if (variant === 'unsupported') fields.grant_type = 'client_credentials';
 			if (variant === 'near-valid' || variant === 'boundary') {
-				const key = testCase.draw(
-					generators.sampledFrom([
-						'client_id',
-						'code',
-						'code_verifier',
-						'redirect_uri',
-						'resource',
-					]),
-				);
+				const key = scheduled?.key ?? testCase.draw(generators.sampledFrom([...tokenFieldKeys]));
 				fields[key] = variant === 'boundary' ? '' : 'invalid';
 			}
 			return {
@@ -224,14 +337,21 @@ export function tokenFamily(path: string): RequestFamily {
 	};
 }
 
+const introspectionVariants = ['valid', 'near-valid', 'boundary', 'wrong-content-type'] as const;
+
 export function introspectionFamily(path: string): RequestFamily {
 	return {
 		route: { method: 'POST', path },
 		callers,
-		generate(testCase: TestCase, context: RequestFamilyContext): GeneratedRequest {
-			const variant = testCase.draw(
-				generators.sampledFrom(['valid', 'near-valid', 'boundary', 'wrong-content-type'] as const),
-			);
+		coverageCases: (): number => introspectionVariants.length,
+		generate(
+			testCase: TestCase,
+			context: RequestFamilyContext,
+			caseIndex?: number,
+		): GeneratedRequest {
+			const variant =
+				scheduledStep(testCase, introspectionVariants, caseIndex) ??
+				testCase.draw(generators.sampledFrom([...introspectionVariants]));
 			const fields = new URLSearchParams({
 				token:
 					variant === 'boundary' ? '' : variant === 'near-valid' ? 'invalid' : context.oauthToken,

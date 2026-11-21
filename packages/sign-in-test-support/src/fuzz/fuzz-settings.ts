@@ -21,9 +21,6 @@ export function fuzzSettings(defaultCases: number): Partial<hegel.Settings> {
 	};
 }
 
-/** The S2 default per route and caller group; `SIGN_IN_FUZZ_CASES` raises it for a manual deep run. */
-export const requestFuzzDefaultCases = 3;
-
 /** Real host cases take about 1.5 s, so a shrink replay budget keeps a failure from running for minutes. */
 const maximumShrinkReplays = 15;
 
