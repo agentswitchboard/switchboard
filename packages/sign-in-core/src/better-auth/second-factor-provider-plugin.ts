@@ -134,7 +134,7 @@ export function createSecondFactorProviderPlugin(props: {
 					matcher: (context) =>
 						confirmationPaths.has(context.path ?? '') ||
 						mutationPathSchema.safeParse(context.path).success,
-					handler: createAuthMiddleware(async (context): Promise<void> => {
+					handler: createAuthMiddleware(async (context): Promise<unknown> => {
 						if (
 							pending.kind !== 'recorded' ||
 							context.context.returned === undefined ||
@@ -146,7 +146,7 @@ export function createSecondFactorProviderPlugin(props: {
 						const pathname = context.path ?? '';
 						if (confirmationPaths.has(pathname)) {
 							const result = z
-								.object({ token: z.string().min(1), user: z.object({ id: uuid7Schema }) })
+								.looseObject({ token: z.string().min(1), user: z.looseObject({ id: uuid7Schema }) })
 								.safeParse(context.context.returned);
 							if (!result.success || result.data.user.id !== pending.actor.personId)
 								throw new APIError('SERVICE_UNAVAILABLE', {
@@ -171,6 +171,9 @@ export function createSecondFactorProviderPlugin(props: {
 							);
 							if (stamped.kind !== 'stamped')
 								throw new APIError('UNAUTHORIZED', { message: 'session-not-live' });
+							requireStoredValue(await props.store.factorChanges.record(pending.change, 'outcome'));
+							const { token: _sessionToken, ...publicBody } = result.data;
+							return context.json(publicBody);
 						}
 						requireStoredValue(await props.store.factorChanges.record(pending.change, 'outcome'));
 					}),
