@@ -71,3 +71,45 @@ it('refuses an attestation object that does not decode to fmt, attStmt and parse
 		),
 	).toBe(false);
 });
+
+it('accepts the registration body the Better Auth client posts from a real Chromium virtual authenticator', (): void => {
+	// Captured from the native browser journey; values sanitised, member shapes kept. The client
+	// strips clientExtensionResults and the browser adds publicKey, publicKeyAlgorithm and
+	// authenticatorData to the response.
+	const clientDataJSON = Buffer.from(
+		JSON.stringify({
+			type: 'webauthn.create',
+			challenge: 'Yw',
+			origin: 'http://localhost:65328',
+			crossOrigin: false,
+		}),
+	).toString('base64url');
+	const attestationObject = decodableAttestationObject;
+	const realChromeBody = {
+		response: {
+			id: 'YQ',
+			rawId: 'YQ',
+			response: {
+				attestationObject,
+				clientDataJSON,
+				transports: ['internal'],
+				publicKeyAlgorithm: -8,
+				publicKey: 'YQ',
+				authenticatorData: 'YQ',
+			},
+			type: 'public-key',
+			authenticatorAttachment: 'platform',
+		},
+	};
+	expect(isPasskeyRegistrationRequest(realChromeBody)).toBe(true);
+	expect(
+		isPasskeyRegistrationRequest({
+			response: { ...realChromeBody.response, clientExtensionResults: 'not-a-record' },
+		}),
+	).toBe(false);
+	expect(
+		isPasskeyRegistrationRequest({
+			response: { ...realChromeBody.response, authenticatorAttachment: 'usb' },
+		}),
+	).toBe(false);
+});

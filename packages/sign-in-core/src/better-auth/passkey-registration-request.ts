@@ -91,7 +91,10 @@ export const passkeyRegistrationRequestSchema = z.object({
 					.pipe(decodedAttestationObjectSchema),
 				transports: z.array(z.string()).optional(),
 			}),
-			clientExtensionResults: z.record(z.string(), z.unknown()),
+			// Optional: the Better Auth passkey client destructures clientExtensionResults out of
+			// the credential before it posts `response`, so real browser requests never carry it.
+			// Registration verification does not read it.
+			clientExtensionResults: z.record(z.string(), z.unknown()).optional(),
 			authenticatorAttachment: z.enum(['platform', 'cross-platform']).optional(),
 		})
 		.refine((credential) => credential.id === credential.rawId, {
