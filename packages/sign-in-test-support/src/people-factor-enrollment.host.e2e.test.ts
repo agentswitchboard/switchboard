@@ -94,7 +94,9 @@ it('people: first app verification rotates the native session and its new token 
 			).status,
 		).toBe(403);
 		expect(await codeFingerprint(harness, personId)).toBe(codes);
-		expect((await harness.totpAuthenticator.confirmApp(ownerEmail, harness.auth)).status).toBe(200);
+		const confirmed = await harness.totpAuthenticator.confirmApp(ownerEmail, harness.auth);
+		expect(confirmed.status).toBe(200);
+		expect(await confirmed.json()).not.toHaveProperty('token');
 		const after = await readCurrentBrowserSession({
 			cookie: harness.cookie(),
 			database: harness.database,
@@ -148,6 +150,7 @@ it('people: later app confirmation stamps the injected clock on the same session
 		await setClock(harness, now);
 		const confirmed = await harness.totpAuthenticator.confirmApp(ownerEmail, harness.auth);
 		expect(confirmed.status).toBe(200);
+		expect(await confirmed.json()).not.toHaveProperty('token');
 		expect(
 			await readCurrentBrowserSession({ cookie: harness.cookie(), database: harness.database }),
 		).toMatchObject({ id: first.id, secondFactorAt: now, secondFactorMethod: 'app' });
@@ -187,7 +190,9 @@ it('people: recovery codes confirm once, refuse reuse without a new stamp, and n
 		const code = harness.totpAuthenticator.recoveryCode(ownerEmail);
 		const now = controlledSignInClock.now() + 1000;
 		await setClock(harness, now);
-		expect((await factorPost(harness, 'verify-backup-code', { code })).status).toBe(200);
+		const confirmed = await factorPost(harness, 'verify-backup-code', { code });
+		expect(confirmed.status).toBe(200);
+		expect(await confirmed.json()).not.toHaveProperty('token');
 		expect(
 			await readCurrentBrowserSession({ cookie: harness.cookie(), database: harness.database }),
 		).toMatchObject({ id: first.id, secondFactorAt: now, secondFactorMethod: 'recoveryCode' });
