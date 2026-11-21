@@ -791,6 +791,31 @@ it('authorization fence: the production organization routes create and move fenc
 		});
 		expect((await peoplePost(harness, 'accept-invitation', { invitationId })).status).toBe(200);
 		expect(await pairOf(memberId)).toEqual({ revision: 1, state: 'active' });
+		await signInConfirmedPeopleBrowser({ harness, email: 'member@example.invalid' });
+		const memberSessions = async (): Promise<
+			readonly { id: string; activeOrganizationId: string | null }[]
+		> =>
+			harness.database
+				.select({ id: session.id, activeOrganizationId: session.activeOrganizationId })
+				.from(session)
+				.where(eq(session.userId, memberId))
+				.orderBy(session.id);
+		const selected = await memberSessions();
+		expect(selected).toHaveLength(2);
+		expect(selected.map((row) => row.activeOrganizationId)).toEqual([
+			organizationId,
+			organizationId,
+		]);
+		const ownerSessionChoices = async (): Promise<
+			readonly { activeOrganizationId: string | null }[]
+		> =>
+			harness.database
+				.select({ activeOrganizationId: session.activeOrganizationId })
+				.from(session)
+				.where(eq(session.userId, ownerId))
+				.orderBy(session.id);
+		const ownerChoices = await ownerSessionChoices();
+
 		// Act: the owner removes the member through the production route.
 		expect(
 			(
@@ -805,6 +830,10 @@ it('authorization fence: the production organization routes create and move fenc
 		// Assert: the removed pair is retained, bumped and inactive; the owner's pair is untouched.
 		expect(await pairOf(memberId)).toEqual({ revision: 2, state: 'inactive' });
 		expect(await pairOf(ownerId)).toEqual({ revision: 1, state: 'active' });
+		expect(await memberSessions()).toEqual(
+			selected.map(({ id }) => ({ id, activeOrganizationId: null })),
+		);
+		expect(await ownerSessionChoices()).toEqual(ownerChoices);
 	} finally {
 		await harness.close();
 	}
