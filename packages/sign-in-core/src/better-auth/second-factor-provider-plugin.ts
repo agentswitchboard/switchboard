@@ -199,6 +199,7 @@ export function createSecondFactorProviderPlugin(props: {
 							return context.json(publicBody);
 						}
 						requireStoredValue(await props.store.factorChanges.record(pending.change, 'outcome'));
+						return undefined;
 					}),
 				},
 			],
