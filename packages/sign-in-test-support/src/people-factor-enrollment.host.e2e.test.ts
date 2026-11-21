@@ -634,3 +634,48 @@ it('people: incomplete registration is refused before a factor change is recorde
 		await harness.close();
 	}
 });
+
+function encodeClientDataText(text: string): string {
+	return Buffer.from(text).toString('base64url');
+}
+
+it.each([
+	{ label: 'JSON with a non-string type', clientDataText: '{"type":1}' },
+	{ label: 'text that is not JSON', clientDataText: 'not json at all' },
+])(
+	'people: a registration whose envelope is valid but whose client data is $label is refused after a live challenge exists, with no factor change and no server error',
+	async ({ clientDataText }) => {
+		const harness = await startLocalAuthHarness();
+		try {
+			await signInConfirmedPeopleBrowser({ harness, email: ownerEmail });
+			// A real registration challenge must be live, so the refusal cannot come
+			// from a missing challenge.
+			const options = await harness.auth('/api/auth/passkey/generate-register-options');
+			expect(options.status).toBe(200);
+			const before = await harness.database.select({ id: signInAudit.id }).from(signInAudit);
+			const refused = await harness.auth('/api/auth/passkey/verify-registration', {
+				method: 'POST',
+				headers: { 'content-type': 'application/json' },
+				body: JSON.stringify({
+					response: {
+						id: 'YQ',
+						rawId: 'YQ',
+						type: 'public-key',
+						response: {
+							clientDataJSON: encodeClientDataText(clientDataText),
+							attestationObject: 'Yg',
+						},
+						clientExtensionResults: {},
+					},
+				}),
+			});
+			expect(refused.status).toBe(400);
+			expect(await refused.json()).toMatchObject({ code: 'INVALID_REQUEST' });
+			expect(await harness.database.select({ id: signInAudit.id }).from(signInAudit)).toEqual(
+				before,
+			);
+		} finally {
+			await harness.close();
+		}
+	},
+);
