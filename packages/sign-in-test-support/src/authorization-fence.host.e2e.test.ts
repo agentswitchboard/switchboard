@@ -806,6 +806,51 @@ it('authorization fence: the production organization routes create and move fenc
 			organizationId,
 			organizationId,
 		]);
+
+		const otherOrganization = await peoplePost(
+			harness,
+			'create',
+			{ name: 'Other active choice', slug: 'other-active-choice' },
+			ownerCookie,
+		);
+		expect(otherOrganization.status).toBe(200);
+		const otherOrganizationId = z
+			.object({ id: z.uuidv7() })
+			.parse(await otherOrganization.json()).id;
+		const otherMembership = await native(
+			harness,
+			'organization/add-member',
+			{
+				organizationId: otherOrganizationId,
+				userId: memberId,
+				role: 'member',
+			},
+			ownerCookie,
+		);
+		expect(otherMembership.status).toBe(200);
+		const [current] = await harness.database
+			.select()
+			.from(session)
+			.where(eq(session.userId, memberId));
+		if (current === undefined) throw new Error('Native member session missing');
+		const expiredId = controlledSignInIds.nextId();
+		const otherId = controlledSignInIds.nextId();
+		await harness.database.insert(session).values([
+			{
+				...current,
+				id: expiredId,
+				token: controlledSignInIds.nextId(),
+				expiresAt: new Date(controlledSignInClock.now() - 1),
+			},
+			{
+				...current,
+				id: otherId,
+				token: controlledSignInIds.nextId(),
+				activeOrganizationId: otherOrganizationId,
+			},
+		]);
+		const allMemberChoices = await memberSessions();
+		expect(allMemberChoices).toHaveLength(4);
 		const ownerSessionChoices = async (): Promise<
 			readonly { activeOrganizationId: string | null }[]
 		> =>
@@ -831,7 +876,16 @@ it('authorization fence: the production organization routes create and move fenc
 		expect(await pairOf(memberId)).toEqual({ revision: 2, state: 'inactive' });
 		expect(await pairOf(ownerId)).toEqual({ revision: 1, state: 'active' });
 		expect(await memberSessions()).toEqual(
-			selected.map(({ id }) => ({ id, activeOrganizationId: null })),
+			allMemberChoices.map(({ id, activeOrganizationId }) => ({
+				id,
+				activeOrganizationId: activeOrganizationId === organizationId ? null : activeOrganizationId,
+			})),
+		);
+		expect(allMemberChoices.find((row) => row.id === expiredId)?.activeOrganizationId).toBe(
+			organizationId,
+		);
+		expect(allMemberChoices.find((row) => row.id === otherId)?.activeOrganizationId).toBe(
+			otherOrganizationId,
 		);
 		expect(await ownerSessionChoices()).toEqual(ownerChoices);
 	} finally {
