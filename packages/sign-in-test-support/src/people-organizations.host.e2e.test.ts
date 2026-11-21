@@ -105,6 +105,12 @@ it('people: native invite, accept, cancel and remove write matching records with
 		});
 		const accepted = await peoplePost(harness, 'accept-invitation', { invitationId });
 		expect(accepted.status).toBe(200);
+		const acceptance = await accepted.json();
+		expect(acceptance).toMatchObject({
+			invitation: { id: invitationId, organizationId, status: 'accepted' },
+			member: { userId: memberId, organizationId, role: 'member' },
+		});
+		expect(acceptance).not.toHaveProperty('invitation.inviterId');
 		expect(
 			await harness.database
 				.select({ role: member.role })

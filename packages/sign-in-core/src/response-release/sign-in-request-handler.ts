@@ -1,3 +1,5 @@
+import { z } from 'zod';
+
 import {
 	isSignedInNavigationPath,
 	switchboardSignOutPath,
@@ -135,14 +137,33 @@ export async function handleSignInRequest(props: {
 		headers.delete('content-length');
 		return Response.json({ error: 'invalid-request' }, { status: 400, headers });
 	}
-	return organizationReadResponse(
-		props.request,
-		await releaseSignInResponse({
-			response,
-			tokenGrant,
-			issuedSessions: props.issuedSessions,
-			createdUserIds: props.createdUserIds,
-			ports: props.ports,
-		}),
-	);
+	const released = await releaseSignInResponse({
+		response,
+		tokenGrant,
+		issuedSessions: props.issuedSessions,
+		createdUserIds: props.createdUserIds,
+		ports: props.ports,
+	});
+	if (pathname === '/api/auth/organization/accept-invitation' && released.ok)
+		return releaseInvitationAcceptance(released);
+	return organizationReadResponse(props.request, released);
+}
+
+const acceptedInvitationSchema = z.looseObject({
+	invitation: z.looseObject({}),
+	member: z.looseObject({}),
+});
+
+async function releaseInvitationAcceptance(response: Response): Promise<Response> {
+	const body = acceptedInvitationSchema.safeParse(await response.json().catch(() => null));
+	if (!body.success)
+		return Response.json(
+			{ error: 'sign-in-unavailable' },
+			{ status: 503, headers: { 'cache-control': 'no-store' } },
+		);
+	const { inviterId: _inviterId, ...invitation } = body.data.invitation;
+	const headers = new Headers(response.headers);
+	headers.delete('content-length');
+	headers.set('cache-control', 'no-store');
+	return Response.json({ ...body.data, invitation }, { status: response.status, headers });
 }
