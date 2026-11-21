@@ -149,9 +149,23 @@ export async function handleSignInRequest(props: {
 	return organizationReadResponse(props.request, released);
 }
 
-const acceptedInvitationSchema = z.looseObject({
-	invitation: z.looseObject({}),
-	member: z.looseObject({}),
+const acceptedInvitationSchema = z.object({
+	invitation: z.object({
+		id: z.uuidv7(),
+		organizationId: z.uuidv7(),
+		email: z.email(),
+		role: z.string().nullable(),
+		status: z.literal('accepted'),
+		createdAt: z.iso.datetime(),
+		expiresAt: z.iso.datetime(),
+	}),
+	member: z.object({
+		id: z.uuidv7(),
+		organizationId: z.uuidv7(),
+		userId: z.uuidv7(),
+		role: z.string(),
+		createdAt: z.iso.datetime(),
+	}),
 });
 
 async function releaseInvitationAcceptance(response: Response): Promise<Response> {
@@ -161,9 +175,8 @@ async function releaseInvitationAcceptance(response: Response): Promise<Response
 			{ error: 'sign-in-unavailable' },
 			{ status: 503, headers: { 'cache-control': 'no-store' } },
 		);
-	const { inviterId: _inviterId, ...invitation } = body.data.invitation;
 	const headers = new Headers(response.headers);
 	headers.delete('content-length');
 	headers.set('cache-control', 'no-store');
-	return Response.json({ ...body.data, invitation }, { status: response.status, headers });
+	return Response.json(body.data, { status: response.status, headers });
 }
