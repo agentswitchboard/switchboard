@@ -12,10 +12,6 @@ const configuration = machineLoginConfigurationSchema.parse({
 	routerClientId: '019a3dce-2000-7000-8000-0000000000b4',
 	machineAudience: 'https://central.example.invalid/machine',
 	linkUrlTemplate: 'https://central.example.invalid/v1/organizations/{organization_id}/link',
-	fleetCentral: {
-		receiver: '019a3dce-2000-7000-8000-0000000000b5',
-		relay: '019a3dce-2000-7000-8000-0000000000b6',
-	},
 });
 const issuer = 'https://sign-in.example.invalid';
 const issuedAt = 1_800_000_000;
@@ -45,12 +41,15 @@ it('releases the machine credential only before the exact grant deadline', async
 		token_type: 'Bearer',
 		scope: 'offline_access',
 		machine_client_id: enrollmentId,
-		fleet_central: configuration.fleetCentral,
 	};
 	const releaseAt = (milliseconds: number): Promise<Response> =>
 		releaseMachineTokenResponse({
 			response: Response.json(
-				{ ...nativeBody, id_token: 'unexpected-token' },
+				{
+					...nativeBody,
+					id_token: 'unexpected-token',
+					fleet_central: { receiver: machineId, relay: enrollmentId },
+				},
 				{
 					headers: {
 						'set-cookie': 'synthetic_session=fixture',
@@ -77,7 +76,7 @@ it('releases the machine credential only before the exact grant deadline', async
 	for (const credentialHeader of ['set-cookie', 'authorization', 'dpop'])
 		expect(prior.headers.has(credentialHeader), credentialHeader).toBe(false);
 	const projected: unknown = await prior.json();
-	expect(projected).not.toHaveProperty('id_token');
+	expect(projected).toEqual(nativeBody);
 	const exact = await releaseAt(grantExpiresAt * 1000);
 	expect(exact.status).toBe(400);
 	expect(await exact.json()).toEqual({ error: 'invalid_grant' });

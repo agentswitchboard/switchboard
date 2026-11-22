@@ -20,10 +20,6 @@ it('returns a fresh owner to the checked device continuation after native factor
 		machineLogin: {
 			routerClientId: uuid7Schema.parse('019a3dce-2000-7000-8000-0000000000a1'),
 			machineAudience: 'https://central.example.invalid/machine',
-			fleetCentral: {
-				receiver: uuid7Schema.parse('019a3dce-2000-7000-8000-0000000000a2'),
-				relay: uuid7Schema.parse('019a3dce-2000-7000-8000-0000000000a3'),
-			},
 		},
 	});
 	const enrollmentAction = '/api/auth/two-factor/enable?device=ABCDEFGH';

@@ -141,7 +141,6 @@ export async function raceNativeDeviceRedemption(
 			routerClientId,
 			machineAudience: 'https://central.example.invalid/machine',
 			linkUrlTemplate: 'https://central.example.invalid/v1/organizations/{organization_id}/link',
-			fleetCentral: { receiver: ids.nextId(), relay: ids.nextId() },
 		},
 	});
 	const base = createSignInProvider({

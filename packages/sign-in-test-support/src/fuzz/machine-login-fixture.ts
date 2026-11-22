@@ -14,10 +14,6 @@ import { peoplePost } from '#sign-in-test-support/test-fixtures/people-browser-l
 export const fuzzMachineLogin: Omit<MachineLoginConfiguration, 'linkUrlTemplate'> = {
 	routerClientId: uuid7Schema.parse('019a3dce-2000-7000-8000-0000000000f1'),
 	machineAudience: 'https://machine.example.invalid',
-	fleetCentral: {
-		receiver: uuid7Schema.parse('019a3dce-2000-7000-8000-0000000000f2'),
-		relay: uuid7Schema.parse('019a3dce-2000-7000-8000-0000000000f3'),
-	},
 };
 
 async function machineDecisions(request: Request): Promise<Response> {

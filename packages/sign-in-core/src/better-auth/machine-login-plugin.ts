@@ -139,7 +139,6 @@ export function createMachineLoginPlugin(login: MachineLoginProviderProps): Bett
 					referenceId: `${reference.organizationId}:${reference.enrollmentId}`,
 					tokenResponse: {
 						machine_client_id: reference.enrollmentId,
-						fleet_central: login.configuration.fleetCentral,
 					},
 				});
 			},

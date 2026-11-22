@@ -23,7 +23,6 @@ it('uses the same strict HTTPS link template contract at startup and on discover
 		routerClientId: machineId,
 		machineAudience: 'https://central.example.invalid/machine',
 		linkUrlTemplate,
-		fleetCentral: { receiver: organizationId, relay: enrollmentId },
 	});
 	for (const link_url of [
 		'https://sign-in.example.invalid/api/fleet/link/{organization_id}',
@@ -50,6 +49,21 @@ it('uses the same strict HTTPS link template contract at startup and on discover
 		).toBe(false);
 		expect(machineLoginConfigurationSchema.safeParse(configurations(link_url)).success).toBe(false);
 	}
+});
+
+it('refuses obsolete fleet addresses in machine configuration', (): void => {
+	const configuration = {
+		routerClientId: machineId,
+		machineAudience: 'https://central.example.invalid/machine',
+		linkUrlTemplate: 'https://central.example.invalid/v1/organizations/{organization_id}/link',
+	};
+	expect(machineLoginConfigurationSchema.safeParse(configuration).success).toBe(true);
+	expect(
+		machineLoginConfigurationSchema.safeParse({
+			...configuration,
+			fleetCentral: { receiver: organizationId, relay: enrollmentId },
+		}).success,
+	).toBe(false);
 });
 
 it.each([

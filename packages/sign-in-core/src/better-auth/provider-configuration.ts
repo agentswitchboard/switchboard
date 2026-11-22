@@ -489,10 +489,7 @@ export function createSignInProvider(props: SignInProviderProps): SignInProvider
 					const enrollment = parseMachineEnrollmentMetadata(metadata);
 					return enrollment === null || machineLogin === undefined
 						? {}
-						: {
-								machine_client_id: enrollment.enrollmentId,
-								fleet_central: machineLogin.fleetCentral,
-							};
+						: { machine_client_id: enrollment.enrollmentId };
 				},
 			}),
 			passkey({

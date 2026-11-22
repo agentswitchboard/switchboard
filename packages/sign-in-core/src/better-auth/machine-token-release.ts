@@ -46,8 +46,6 @@ export async function releaseMachineTokenResponse(props: {
 			claims.client_id !== props.state.clientId ||
 			claims.azp !== props.state.clientId ||
 			body.machine_client_id !== props.state.clientId ||
-			body.fleet_central.receiver !== props.configuration.fleetCentral.receiver ||
-			body.fleet_central.relay !== props.configuration.fleetCentral.relay ||
 			(Object.hasOwn(claims, 'sid') && claims['sid'] !== null) ||
 			Object.hasOwn(claims, 'workspace_id')
 		)

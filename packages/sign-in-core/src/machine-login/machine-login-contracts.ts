@@ -63,7 +63,6 @@ export const machineLoginConfigurationSchema = z.strictObject({
 	routerClientId: uuid7Schema,
 	machineAudience: machineResourceUriSchema,
 	linkUrlTemplate: linkUrlTemplateSchema,
-	fleetCentral: z.strictObject({ receiver: uuid7Schema, relay: uuid7Schema }),
 });
 export type MachineLoginConfiguration = z.infer<typeof machineLoginConfigurationSchema>;
 
@@ -355,5 +354,4 @@ export const machineTokenResponseSchema = z.object({
 	token_type: z.literal('Bearer'),
 	scope: z.literal('offline_access'),
 	machine_client_id: uuid7Schema,
-	fleet_central: machineLoginConfigurationSchema.shape.fleetCentral,
 });

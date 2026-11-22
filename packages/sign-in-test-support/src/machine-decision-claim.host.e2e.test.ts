@@ -27,10 +27,6 @@ it('holds an approval claim before Central so a competing denial has no effect',
 		machineLogin: {
 			routerClientId,
 			machineAudience: 'https://central.example.invalid/machine',
-			fleetCentral: {
-				receiver: uuid7Schema.parse('019a3dce-2000-7000-8000-000000000094'),
-				relay: uuid7Schema.parse('019a3dce-2000-7000-8000-000000000095'),
-			},
 		},
 		async machineDecisions(request): Promise<Response> {
 			if (new URL(request.url).pathname !== '/internal/device-login-decisions')
@@ -144,7 +140,6 @@ it('recovers the stored approval after the answer is lost and its workspace is a
 		machineLogin: {
 			routerClientId,
 			machineAudience: 'https://central.example.invalid/machine',
-			fleetCentral: { receiver: machineId, relay: enrollmentId },
 		},
 		async machineDecisions(request): Promise<Response> {
 			switch (new URL(request.url).pathname) {

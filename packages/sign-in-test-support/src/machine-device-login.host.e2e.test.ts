@@ -116,10 +116,6 @@ it('the real host approves one machine ID, handles a Central replay conflict and
 		machineLogin: {
 			routerClientId,
 			machineAudience: 'https://central.example.invalid/machine',
-			fleetCentral: {
-				receiver: uuid7Schema.parse('019a3dce-2000-7000-8000-0000000000b5'),
-				relay: uuid7Schema.parse('019a3dce-2000-7000-8000-0000000000b6'),
-			},
 		},
 		async machineDecisions(request): Promise<Response> {
 			const input: unknown = await request.json();

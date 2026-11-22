@@ -59,10 +59,6 @@ it.runIf(centralArtifact !== undefined)(
 			machineLogin: {
 				routerClientId,
 				machineAudience: 'https://central.example.invalid/machine',
-				fleetCentral: {
-					receiver: uuid7Schema.parse('019f0000-0000-7000-8000-00000000d233'),
-					relay: uuid7Schema.parse('019f0000-0000-7000-8000-00000000d234'),
-				},
 			},
 			...(workerd
 				? {

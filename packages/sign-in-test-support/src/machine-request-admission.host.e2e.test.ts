@@ -24,10 +24,6 @@ it('rejects query inputs on every machine POST and requires JSON for enrollment 
 		machineLogin: {
 			routerClientId,
 			machineAudience: 'https://central.example.invalid/machine',
-			fleetCentral: {
-				receiver: uuid7Schema.parse('019a3dce-2000-7000-8000-000000000074'),
-				relay: uuid7Schema.parse('019a3dce-2000-7000-8000-000000000075'),
-			},
 		},
 	});
 	try {
