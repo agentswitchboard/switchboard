@@ -9,6 +9,7 @@ import {
 	readBaselineUpgrade,
 	readUpgradeAdditions,
 } from '#sign-in-test-support/storage-cases/baseline-upgrade-case';
+import { raceNativeDeviceRedemption } from '#sign-in-test-support/storage-cases/device-redemption-race';
 import {
 	factorReplacementStateSchema,
 	replacementChallengeSchema,
@@ -49,6 +50,7 @@ export const storageCommandSchema = z.discriminatedUnion('kind', [
 	z.strictObject({ kind: z.literal('case'), name: z.string() }),
 	z.strictObject({ kind: z.literal('seed-baseline') }),
 	z.strictObject({ kind: z.literal('read-upgrade') }),
+	z.strictObject({ kind: z.literal('device-redemption-race') }),
 	z.strictObject({ kind: z.literal('upgrade-additions') }),
 	z.strictObject({
 		kind: z.literal('record-history'),
@@ -98,6 +100,8 @@ export async function executeStorageCommand(
 			return seedBaselineUpgrade(context);
 		case 'read-upgrade':
 			return readBaselineUpgrade(context);
+		case 'device-redemption-race':
+			return raceNativeDeviceRedemption(context);
 		case 'upgrade-additions':
 			return readUpgradeAdditions(context);
 		case 'case':

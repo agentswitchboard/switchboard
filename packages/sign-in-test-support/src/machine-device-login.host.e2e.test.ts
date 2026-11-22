@@ -327,7 +327,7 @@ it('the real host approves one machine ID, presents active workspaces and releas
 			await harness.database
 				.select({ id: deviceCode.id })
 				.from(deviceCode)
-				.where(eq(deviceCode.machineId, machineId)),
+				.where(eq(deviceCode.deviceCode, code.device_code)),
 		).toEqual([]);
 
 		const refresh = (credential: string): Promise<Response> =>
