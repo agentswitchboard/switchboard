@@ -12,7 +12,7 @@ const machineLinkHandshakeHeaders = [
 /** Returns the binding's original response so workerd can carry its WebSocket to the client. */
 export function forwardWorkerMachineLink(
 	request: Request,
-	centralLink: CentralTransport,
+	bindings: { readonly CENTRAL_LINK: CentralTransport },
 ): Promise<Response> | undefined {
 	if (request.method !== 'GET' || request.headers.get('upgrade')?.toLowerCase() !== 'websocket')
 		return undefined;
@@ -25,7 +25,7 @@ export function forwardWorkerMachineLink(
 		const value = request.headers.get(name);
 		if (value !== null) headers.set(name, value);
 	}
-	return centralLink.fetch(
+	return bindings.CENTRAL_LINK.fetch(
 		new Request(`http://central.invalid/v1/organizations/${organization.data}/link`, {
 			headers,
 			redirect: 'manual',

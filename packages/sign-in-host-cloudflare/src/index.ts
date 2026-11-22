@@ -73,7 +73,7 @@ export default {
 		context: Pick<ExecutionContext, 'waitUntil'>,
 	): Promise<Response> {
 		try {
-			const machineLink = forwardWorkerMachineLink(request, bindings.CENTRAL_LINK);
+			const machineLink = forwardWorkerMachineLink(request, bindings);
 			if (machineLink !== undefined) return await machineLink;
 			return await createSignInHttpHandler(signInWorkerConfiguration(bindings), {
 				// A committed fence change drains after the response; a lost hint drains on the next Fleet call.

@@ -25,7 +25,7 @@ it('returns the binding response as-is and sends only the machine-link handshake
 				cookie: 'local-fixture=unused',
 			},
 		}),
-		{ fetch },
+		{ CENTRAL_LINK: { fetch } },
 	);
 
 	expect(answer).toBe(refusal);
@@ -38,8 +38,10 @@ it.each([
 	new Request(`${publicLink}?extra=true`, { headers: { upgrade: 'websocket' } }),
 	new Request(publicLink, { method: 'POST', headers: { upgrade: 'websocket' } }),
 ])('leaves unrelated requests on the ordinary Sign-in path', (request): void => {
-	const fetch = vi.fn();
-
-	expect(forwardWorkerMachineLink(request, { fetch })).toBeUndefined();
-	expect(fetch).not.toHaveBeenCalled();
+	const storageBinding = {
+		get CENTRAL_LINK(): never {
+			throw new Error('An unrelated request accessed the Central storage binding');
+		},
+	};
+	expect(forwardWorkerMachineLink(request, storageBinding)).toBeUndefined();
 });
