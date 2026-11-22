@@ -19,6 +19,8 @@ it.each(['better-sqlite3', 'd1-workerd'] as const)(
 				codeRemoved: true,
 				personSessionsUnchanged: true,
 				noSessionCookies: true,
+				pendingError: null,
+				lateErrors: [],
 			});
 		} finally {
 			await host.close();

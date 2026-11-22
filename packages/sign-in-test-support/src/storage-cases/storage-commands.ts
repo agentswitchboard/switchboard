@@ -13,7 +13,10 @@ import {
 	readDeviceCode0005,
 	seedDeviceCode0004,
 } from '#sign-in-test-support/storage-cases/device-code-upgrade-case';
-import { raceNativeDeviceRedemption } from '#sign-in-test-support/storage-cases/device-redemption-race';
+import {
+	raceNativeDeviceRedemption,
+	redemptionRaceScheduleSchema,
+} from '#sign-in-test-support/storage-cases/device-redemption-race';
 import {
 	factorReplacementStateSchema,
 	replacementChallengeSchema,
@@ -54,7 +57,10 @@ export const storageCommandSchema = z.discriminatedUnion('kind', [
 	z.strictObject({ kind: z.literal('case'), name: z.string() }),
 	z.strictObject({ kind: z.literal('seed-baseline') }),
 	z.strictObject({ kind: z.literal('read-upgrade') }),
-	z.strictObject({ kind: z.literal('device-redemption-race') }),
+	z.strictObject({
+		kind: z.literal('device-redemption-race'),
+		schedule: redemptionRaceScheduleSchema.optional(),
+	}),
 	z.strictObject({ kind: z.literal('seed-device-code-0004') }),
 	z.strictObject({ kind: z.literal('read-device-code-0005') }),
 	z.strictObject({ kind: z.literal('upgrade-additions') }),
@@ -107,7 +113,7 @@ export async function executeStorageCommand(
 		case 'read-upgrade':
 			return readBaselineUpgrade(context);
 		case 'device-redemption-race':
-			return raceNativeDeviceRedemption(context);
+			return raceNativeDeviceRedemption(context, command.schedule);
 		case 'seed-device-code-0004':
 			return seedDeviceCode0004(context);
 		case 'read-device-code-0005':
