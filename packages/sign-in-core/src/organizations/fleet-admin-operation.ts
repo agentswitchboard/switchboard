@@ -4,6 +4,7 @@ import type {
 	CreateWorkspaceRequest_Deserialize,
 	OrganizationAdminIntent_Serialize,
 	ReadChangeRecordsRequest_Deserialize,
+	ReadChangeRecordsRequest_Serialize,
 	WorkspaceLookupRequest,
 } from '#sign-in-core/central-link/generated/central-sign-in.gen';
 import type { AssertWireType, WireTypesEqual } from '#sign-in-core/central-link/wire-type-equality';
@@ -60,10 +61,13 @@ export const fleetAdminRequestSchema = z.discriminatedUnion('operation', [
 		limit: z.number().int().min(1).max(100),
 	}),
 ]);
-type FleetAdminRequestBodies = {
+type FleetAdminWireBodies = {
 	CreateWorkspace: CreateWorkspaceRequest_Deserialize;
 	WorkspaceLookup: WorkspaceLookupRequest;
-	ReadChangeRecords: Required<ReadChangeRecordsRequest_Deserialize>;
+	ReadChangeRecords: ReadChangeRecordsRequest_Deserialize;
+};
+type FleetAdminRequestBodies = Omit<FleetAdminWireBodies, 'ReadChangeRecords'> & {
+	ReadChangeRecords: Required<FleetAdminWireBodies['ReadChangeRecords']>;
 };
 export type FleetAdminRequest = {
 	[Operation in keyof FleetAdminRequestBodies]: {
@@ -73,6 +77,21 @@ export type FleetAdminRequest = {
 export type FleetAdminRequestWireType = AssertWireType<
 	WireTypesEqual<z.output<typeof fleetAdminRequestSchema>, FleetAdminRequest>
 >;
+export type FleetAdminOutgoingPhases = [
+	AssertWireType<
+		WireTypesEqual<FleetAdminWireBodies['CreateWorkspace'], CreateWorkspaceRequest_Deserialize>
+	>,
+	AssertWireType<WireTypesEqual<FleetAdminWireBodies['WorkspaceLookup'], WorkspaceLookupRequest>>,
+	AssertWireType<
+		WireTypesEqual<FleetAdminWireBodies['ReadChangeRecords'], ReadChangeRecordsRequest_Deserialize>
+	>,
+];
+type ReadChangeRecordsSerializerMatches = WireTypesEqual<
+	ReadChangeRecordsRequest_Serialize,
+	FleetAdminWireBodies['ReadChangeRecords']
+>;
+// @ts-expect-error The producer's serializer requires after; its request decoder permits omission.
+export type RejectReadChangeRecordsSerializer = AssertWireType<ReadChangeRecordsSerializerMatches>;
 
 function utf8ByteLength(text: string): number {
 	return new TextEncoder().encode(text).length;
@@ -93,18 +112,18 @@ export function fleetAdminRequestBody(operation: FleetAdminRequest): CanonicalJs
 				operationId: operation.operationId,
 				name: operation.name,
 				description: operation.description,
-			} satisfies CreateWorkspaceRequest_Deserialize;
+			} satisfies FleetAdminWireBodies['CreateWorkspace'];
 		case 'WorkspaceLookup':
 			return {
 				organizationId: operation.organizationId,
 				workspaceId: operation.workspaceId,
-			} satisfies WorkspaceLookupRequest;
+			} satisfies FleetAdminWireBodies['WorkspaceLookup'];
 		case 'ReadChangeRecords':
 			return {
 				organizationId: operation.organizationId,
 				after: operation.after,
 				limit: operation.limit,
-			} satisfies ReadChangeRecordsRequest_Deserialize;
+			} satisfies FleetAdminWireBodies['ReadChangeRecords'];
 		default:
 			return unreachableOperation(operation);
 	}
