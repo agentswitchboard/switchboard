@@ -8,6 +8,7 @@ import {
 	type DiscoveredHandlerRoutes,
 	type OuterRouteIdentity,
 } from '#sign-in-test-support/fuzz/handler-route-discovery';
+import { staticMethodsForPath } from '#sign-in-test-support/fuzz/static-route-dispatch';
 
 const outerHandlerFiles = [
 	'packages/sign-in-core/src/response-release/sign-in-request-handler.ts',
@@ -144,3 +145,100 @@ export function ambiguousMethodMismatches(props: {
 	}
 	return mismatches;
 }
+
+/** The request responder of the outer handler: the function that asks the public route predicate. */
+export function discoverOuterResponder(): {
+	readonly responder: ts.FunctionLikeDeclaration;
+	readonly checker: ts.TypeChecker;
+} {
+	const config = ts.readConfigFile('packages/sign-in-core/tsconfig.json', (path) =>
+		ts.sys.readFile(path),
+	);
+	const parsed = ts.parseJsonConfigFileContent(config.config, ts.sys, 'packages/sign-in-core');
+	const program = ts.createProgram(parsed.fileNames, parsed.options);
+	// The checker binds the files, which sets the parent links the climb below needs.
+	const checker = program.getTypeChecker();
+	const source = program.getSourceFile(outerHandlerFiles[1]);
+	if (source === undefined) throw new Error(`Handler source not found: ${outerHandlerFiles[1]}`);
+	let responder: ts.FunctionLikeDeclaration | undefined;
+	const visit = (node: ts.Node): void => {
+		if (
+			ts.isCallExpression(node) &&
+			ts.isIdentifier(node.expression) &&
+			node.expression.text === 'isPublicSignInRoute'
+		) {
+			let owner: ts.Node | undefined = node.parent;
+			while (owner !== undefined && !ts.isFunctionLike(owner)) owner = owner.parent;
+			if (owner !== undefined && ts.isFunctionLike(owner))
+				responder = owner as ts.FunctionLikeDeclaration;
+		}
+		ts.forEachChild(node, visit);
+	};
+	visit(source);
+	if (responder === undefined) throw new Error('Unsupported route predicate form: no responder');
+	return { responder, checker };
+}
+
+/** A provider path template (`/a/:id`) against a concrete path, segment by segment. */
+function providerPathMatches(template: string, path: string): boolean {
+	const templateSegments = template.split('/');
+	const pathSegments = path.split('/');
+	return (
+		templateSegments.length === pathSegments.length &&
+		templateSegments.every(
+			(segment, index) => segment.startsWith(':') || segment === pathSegments[index],
+		)
+	);
+}
+
+/**
+ * The method and path pairs the handlers' own code serves, the coverage authority. A path the
+ * predicate admits under some methods is exact. A path admitted under every method is served under
+ * the methods the handler dispatch names (comparisons and tables, read from the source); where the
+ * handler names none, the provider router decides and its installed endpoint methods apply.
+ */
+export function staticServedOuterRoutes(props: {
+	readonly responder: ts.FunctionLikeDeclaration;
+	readonly checker: ts.TypeChecker;
+	readonly admitted: readonly OuterRouteIdentity[];
+	readonly providerRoutes: readonly OuterRouteIdentity[];
+}): readonly OuterRouteIdentity[] {
+	const served: OuterRouteIdentity[] = [];
+	for (const path of new Set(props.admitted.map((route) => route.path))) {
+		const pairs = props.admitted.filter((route) => route.path === path);
+		if (pairs.length < probedHttpMethods.length) {
+			served.push(...pairs);
+			continue;
+		}
+		const handlerMethods = staticMethodsForPath({
+			responder: props.responder,
+			checker: props.checker,
+			path,
+		}).methods;
+		const methods =
+			handlerMethods.size > 0
+				? handlerMethods
+				: new Set(
+						props.providerRoutes
+							.filter(
+								(route) =>
+									providerPathMatches(route.path, path) ||
+									providerPathMatches(route.path.replace(/^\/api\/auth/u, ''), path),
+							)
+							.map((route) => route.method),
+					);
+		for (const method of probedHttpMethods) if (methods.has(method)) served.push({ method, path });
+	}
+	return served;
+}
+
+/**
+ * Routes the provider serves from its request hook, not from an endpoint, so the installed endpoint
+ * inventory cannot list them. The OAuth provider plugin answers the authorization-server metadata
+ * at the issuer root for GET and HEAD and refuses every other method with 405 (`@better-auth/oauth-provider`
+ * 1.7.11, `dist/authorize-CtCi8mAs.mjs` `handleIssuerMetadataRequest`, `authServerMetadataPaths`). HEAD is
+ * a protocol alias of GET and is not a classified method; the discovered pair is GET.
+ */
+export const providerRequestHookRoutes: readonly OuterRouteIdentity[] = [
+	{ method: 'GET', path: '/.well-known/oauth-authorization-server' },
+];

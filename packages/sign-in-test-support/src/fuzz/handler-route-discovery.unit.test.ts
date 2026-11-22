@@ -12,8 +12,11 @@ import {
 } from '#sign-in-test-support/fuzz/handler-route-discovery';
 import {
 	actualOuterRoutes,
+	ambiguousMethodMismatches,
 	discoverOuterHandlerRoutes,
+	discoverOuterResponder,
 	servedOuterRoutes,
+	staticServedOuterRoutes,
 } from '#sign-in-test-support/fuzz/outer-handler-routes';
 import { requestFamilies } from '#sign-in-test-support/fuzz/request-families/index';
 import { routeClassification, routeKey } from '#sign-in-test-support/fuzz/route-classification';
@@ -37,6 +40,7 @@ it('discovers pathname comparisons, route tables and prefixes', () => {
 	expect(routes).toEqual({
 		paths: ['/five', '/four', '/one', '/three', '/two'],
 		prefixes: ['/group/'],
+		suffixes: [],
 	});
 });
 
@@ -48,6 +52,7 @@ it('reports a newly discovered route and prefix missing from the classification'
 	expect(unclassifiedHandlerRoutes(discovered, ['/known'])).toEqual({
 		paths: ['/new'],
 		prefixes: ['/new-group/'],
+		suffixes: [],
 	});
 });
 
@@ -91,6 +96,7 @@ it('covers every pathname branch and prefix in the actual outer handlers', () =>
 		expect(unclassifiedHandlerRoutes(discovered, classifiedPaths)).toEqual({
 			paths: [],
 			prefixes: [],
+			suffixes: [],
 		});
 	}
 });
@@ -245,5 +251,166 @@ describe('B1 closure: effective method dispatch and unsupported predicate forms'
 		expect(served).toEqual([
 			{ method: 'POST', path: '/api/auth/organization-admin/v1/create-workspace' },
 		]);
+	});
+});
+
+describe('B1 closure 2: the static scan fails closed', (): void => {
+	/** A two-file program: a handler that calls `callExpression(pathname)` and a helper file. */
+	function scan(
+		helper: string,
+		call: string,
+		scanned: readonly string[] = ['/handler.ts'],
+	): () => void {
+		const files: Record<string, string> = {
+			'/helper.ts': helper,
+			'/handler.ts': `import { check, table } from './helper';\nexport function handle(pathname: string, method: string): boolean { return ${call}; }`,
+		};
+		const host = ts.createCompilerHost({ noLib: true });
+		host.getSourceFile = (name: string): ts.SourceFile | undefined =>
+			files[name] === undefined
+				? undefined
+				: ts.createSourceFile(name, files[name], ts.ScriptTarget.Latest, true);
+		host.fileExists = (name: string): boolean => files[name] !== undefined;
+		host.readFile = (name: string): string | undefined => files[name];
+		const program = ts.createProgram(
+			['/handler.ts', '/helper.ts'],
+			{ noLib: true, module: ts.ModuleKind.ESNext },
+			host,
+		);
+		const source = program.getSourceFile('/handler.ts');
+		if (source === undefined) throw new Error('handler missing');
+		return (): void => {
+			discoverRoutesInSource(source, program.getTypeChecker(), { scannedFiles: scanned });
+		};
+	}
+
+	it('throws for every silent return of the old scan', (): void => {
+		const unsupported = /Unsupported route predicate form/;
+		// An unresolved helper (not declared anywhere the program can see).
+		expect(scan('export const check = 1;', 'missing(pathname)')).toThrow(unsupported);
+		// A helper that is not a function declaration (an arrow function const).
+		expect(
+			scan('export const check = (path: string): boolean => path === "/a";', 'check(pathname)'),
+		).toThrow(unsupported);
+		// A call that is not an identifier call (a member call on an object).
+		expect(
+			scan(
+				'export const table = { has: (path: string): boolean => path === "/a" };',
+				'table.has(pathname)',
+			),
+		).toThrow(unsupported);
+		// An unsupported dispatch shape inside a predicate that lives in a scanned file.
+		expect(
+			scan(
+				'export function check(pathname: string): boolean { return new Set(["/a"]).has(pathname); }',
+				'check(pathname)',
+				['/handler.ts', '/helper.ts'],
+			),
+		).toThrow(unsupported);
+	});
+
+	it('still reads the supported forms', (): void => {
+		expect(
+			scan(
+				'export function check(pathname: string): boolean { return pathname === "/a" || ["/b"].includes(pathname); }',
+				'check(pathname)',
+				['/handler.ts', '/helper.ts'],
+			),
+		).not.toThrow();
+	});
+});
+
+describe('B1 closure 2: the static method and path inventory is the coverage authority', (): void => {
+	const everyMethod = (path: string): OuterRouteIdentity[] =>
+		probedHttpMethods.map((method) => ({ method, path }));
+
+	function staticServed(source: string, path: string): readonly OuterRouteIdentity[] {
+		const host = ts.createCompilerHost({});
+		const original = host.getSourceFile.bind(host);
+		host.getSourceFile = (name, languageVersion, ...rest) =>
+			name === 'synthetic-handler.ts'
+				? ts.createSourceFile(name, source, languageVersion, true)
+				: original(name, languageVersion, ...rest);
+		const program = ts.createProgram(['synthetic-handler.ts'], {}, host);
+		const file = program.getSourceFile('synthetic-handler.ts');
+		const responder = file?.statements.find(ts.isFunctionDeclaration);
+		if (responder === undefined) throw new Error('no responder');
+		return staticServedOuterRoutes({
+			responder,
+			checker: program.getTypeChecker(),
+			admitted: everyMethod(path),
+			providerRoutes: [],
+		});
+	}
+
+	const handler = (extra: string): string =>
+		`export function respond(request: Request, url: URL): Response | null {\n` +
+		`  if (url.pathname === '/api/a') {\n` +
+		`    if (request.method === 'DELETE') { ${extra} }\n` +
+		`    if (request.method !== 'POST') return new Response('no', { status: 405 });\n` +
+		`    return new Response('ok');\n` +
+		`  }\n  return null;\n}\n`;
+
+	it('reads the methods a handler branch compares, whatever the signed-out answer', (): void => {
+		expect(staticServed(handler("return new Response('no', { status: 405 });"), '/api/a')).toEqual(
+			[
+				{ method: 'POST', path: '/api/a' },
+				{ method: 'DELETE', path: '/api/a' },
+			].toSorted(
+				(left, right) =>
+					probedHttpMethods.indexOf(left.method as 'POST') -
+					probedHttpMethods.indexOf(right.method as 'POST'),
+			),
+		);
+	});
+
+	it('fails a served method that is not classified even when its answer equals the reference method', (): void => {
+		// DELETE answers 405 exactly like PUT: a live probe sees no difference, the static dispatch does.
+		const served = staticServed(handler("return new Response('no', { status: 405 });"), '/api/a');
+		expect(
+			ambiguousMethodMismatches({
+				served,
+				admitted: everyMethod('/api/a'),
+				classification: [{ method: 'POST', path: '/api/a', documentedAnswers: [200] }],
+			}),
+		).toEqual(['DELETE /api/a: served, not classified']);
+	});
+
+	it('passes once the method is classified', (): void => {
+		const served = staticServed(handler("return new Response('no', { status: 405 });"), '/api/a');
+		expect(
+			ambiguousMethodMismatches({
+				served,
+				admitted: everyMethod('/api/a'),
+				classification: [
+					{ method: 'POST', path: '/api/a', documentedAnswers: [200] },
+					{ method: 'DELETE', path: '/api/a', documentedAnswers: [405] },
+				],
+			}),
+		).toEqual([]);
+	});
+
+	it('serves the handler-owned real paths exactly as the classification names them', (): void => {
+		const { responder, checker } = discoverOuterResponder();
+		const classifiedPaths = routeClassification.map((row) => row.path);
+		const served = staticServedOuterRoutes({
+			responder,
+			checker,
+			admitted: actualOuterRoutes(classifiedPaths),
+			providerRoutes: routeClassification
+				.filter(
+					(row) =>
+						row.providerServerOnly !== undefined &&
+						!row.documentedAnswers.every((status) => status === 404 || status === 429),
+				)
+				.map((row) => ({ method: row.method, path: row.path })),
+		});
+		expect(
+			ambiguousMethodMismatches({
+				served,
+				classification: routeClassification,
+				admitted: actualOuterRoutes(classifiedPaths),
+			}),
+		).toEqual([]);
 	});
 });

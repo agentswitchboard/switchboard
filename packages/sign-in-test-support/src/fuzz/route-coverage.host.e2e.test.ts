@@ -3,7 +3,10 @@ import { afterAll, beforeAll, expect, it } from 'vitest';
 import {
 	actualOuterRoutes,
 	ambiguousMethodMismatches,
+	discoverOuterResponder,
+	providerRequestHookRoutes,
 	servedOuterRoutes,
+	staticServedOuterRoutes,
 } from '#sign-in-test-support/fuzz/outer-handler-routes';
 import { requestFamilies } from '#sign-in-test-support/fuzz/request-families/index';
 import { routeClassification, routeKey } from '#sign-in-test-support/fuzz/route-classification';
@@ -58,6 +61,27 @@ it('classifies exactly the installed provider and outer-handler routes, and give
 	// request of its kind from a fresh browser address, so no quota skews an answer.
 	let probe = 0;
 	const classifiedPaths = routeClassification.map((row) => row.path);
+	// The coverage authority: the methods and paths the handlers' own dispatch serves (read from the
+	// source, provider-owned paths from the installed endpoints). A served pair that is not classified
+	// fails even when its signed-out answer equals the reference method's; the live probe below is the
+	// cross-check.
+	const { responder, checker } = discoverOuterResponder();
+	const staticServed = staticServedOuterRoutes({
+		responder,
+		checker,
+		admitted: actualOuterRoutes(classifiedPaths),
+		providerRoutes: [
+			...inventory.httpRoutes.filter((route) => !route.serverOnly),
+			...providerRequestHookRoutes,
+		],
+	});
+	expect(
+		ambiguousMethodMismatches({
+			served: staticServed,
+			classification: routeClassification,
+			admitted: actualOuterRoutes(classifiedPaths),
+		}),
+	).toEqual([]);
 	const served = await servedOuterRoutes({
 		classifiedPaths,
 		issuerOrigin: new URL(harness.issuer).origin,

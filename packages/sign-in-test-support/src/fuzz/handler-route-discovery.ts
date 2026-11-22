@@ -1,6 +1,16 @@
 import ts from 'typescript';
 
+import {
+	isPathname,
+	resolveDeclaration,
+	tablePathsOfDeclaration,
+	unsupportedRouteForm,
+} from '#sign-in-test-support/fuzz/route-ast';
+import { assertPredicateIsEvaluable } from '#sign-in-test-support/fuzz/static-route-admission';
+
 export interface DiscoveredHandlerRoutes {
+	/** Route suffixes a literal regular expression names (`/\/callback\/(google|github)$/`). */
+	readonly suffixes?: readonly string[];
 	readonly paths: readonly string[];
 	readonly prefixes: readonly string[];
 }
@@ -12,88 +22,13 @@ export function unclassifiedHandlerRoutes(
 	const paths = new Set(classifiedPaths);
 	return {
 		paths: discovered.paths.filter((path) => !paths.has(path)),
+		suffixes: (discovered.suffixes ?? []).filter(
+			(suffix) => !classifiedPaths.some((path) => path.endsWith(suffix)),
+		),
 		prefixes: discovered.prefixes.filter(
 			(prefix) => !classifiedPaths.some((path) => path.startsWith(prefix)),
 		),
 	};
-}
-
-function isPathname(expression: ts.Expression): boolean {
-	return (
-		(ts.isIdentifier(expression) && expression.text === 'pathname') ||
-		(ts.isPropertyAccessExpression(expression) && expression.name.text === 'pathname')
-	);
-}
-
-function unwrapExpression(expression: ts.Expression): ts.Expression {
-	let current = expression;
-	while (
-		ts.isAsExpression(current) ||
-		ts.isTypeAssertionExpression(current) ||
-		ts.isSatisfiesExpression(current) ||
-		ts.isParenthesizedExpression(current)
-	)
-		current = current.expression;
-	return current;
-}
-
-function resolveDeclaration(
-	expression: ts.Expression,
-	checker: ts.TypeChecker,
-): ts.Declaration | undefined {
-	let symbol = checker.getSymbolAtLocation(expression);
-	if (symbol !== undefined && (symbol.flags & ts.SymbolFlags.Alias) !== 0)
-		symbol = checker.getAliasedSymbol(symbol);
-	return symbol?.valueDeclaration;
-}
-
-/** The `path` of every entry of a const route table (an array of object literals). */
-function pathsOfRouteTable(table: ts.Expression, checker: ts.TypeChecker): readonly string[] {
-	const declaration = resolveDeclaration(table, checker);
-	const initializer =
-		declaration !== undefined && ts.isVariableDeclaration(declaration)
-			? declaration.initializer
-			: undefined;
-	const array = initializer === undefined ? undefined : unwrapExpression(initializer);
-	if (array === undefined || !ts.isArrayLiteralExpression(array))
-		throw new Error('Non-literal pathname route table behind a route predicate');
-	return array.elements.map((element) => {
-		const entry = unwrapExpression(element);
-		const pathProperty = ts.isObjectLiteralExpression(entry)
-			? entry.properties.find(
-					(property): property is ts.PropertyAssignment =>
-						ts.isPropertyAssignment(property) &&
-						ts.isIdentifier(property.name) &&
-						property.name.text === 'path',
-				)
-			: undefined;
-		const value =
-			pathProperty === undefined ? undefined : unwrapExpression(pathProperty.initializer);
-		if (
-			value === undefined ||
-			!(ts.isStringLiteral(value) || ts.isNoSubstitutionTemplateLiteral(value))
-		)
-			throw new Error('Non-literal path in a route table behind a route predicate');
-		return value.text;
-	});
-}
-
-/** The string-literal keys of a const object literal (`as const` and `satisfies` allowed). */
-function keysOfRouteObject(table: ts.Expression, checker: ts.TypeChecker): readonly string[] {
-	const declaration = resolveDeclaration(table, checker);
-	const initializer =
-		declaration !== undefined && ts.isVariableDeclaration(declaration)
-			? declaration.initializer
-			: undefined;
-	const object = initializer === undefined ? undefined : unwrapExpression(initializer);
-	if (object === undefined || !ts.isObjectLiteralExpression(object))
-		throw new Error('Non-literal route object behind a route predicate');
-	return object.properties.map((property) => {
-		const name = ts.isPropertyAssignment(property) ? property.name : undefined;
-		if (name === undefined || !(ts.isStringLiteral(name) || ts.isIdentifier(name)))
-			throw new Error('Non-literal key in a route object behind a route predicate');
-		return name.text;
-	});
 }
 
 export interface DiscoveryOptions {
@@ -105,66 +40,88 @@ export interface DiscoveryOptions {
 	readonly scannedFiles?: readonly string[];
 }
 
+/** A predicate declared in a scanned file is read where it is declared, but only if it is a form this scanner can evaluate. */
+function returnsBoolean(declaration: ts.FunctionDeclaration, checker: ts.TypeChecker): boolean {
+	const signature = checker.getSignatureFromDeclaration(declaration);
+	if (signature === undefined) return false;
+	if (checker.getTypePredicateOfSignature(signature) !== undefined) return true;
+	return (checker.getReturnTypeOfSignature(signature).flags & ts.TypeFlags.BooleanLike) !== 0;
+}
+
+const pathnameMethodNames = new Set(['startsWith', 'includes']);
+
 /**
- * A call such as `isSignedInNavigationPath(pathname)` hides its routes in a table: its body is
- * `table.some((route) => route.path === pathname)`, and `isFleetAdminRelayRoute(pathname)` is
- * `Object.hasOwn(table, pathname)`. Follow either to the table. A predicate declared in a scanned
- * file is read where it is declared. Any other predicate form is unsupported and fails the scan,
- * never silently ignored.
+ * The suffixes a literal regular expression such as `/\/callback\/(google|github)$/u` names, when it is
+ * escaped-slash segments, one group of literal alternatives and an end anchor; any other pattern is
+ * an unsupported route form.
+ */
+function suffixesOfRegularExpression(pattern: ts.RegularExpressionLiteral): readonly string[] {
+	const source = pattern.text.slice(1, pattern.text.lastIndexOf('/'));
+	const match = /^((?:\\\/[A-Za-z0-9_-]+)+)\\\/\(([A-Za-z0-9_|-]+)\)\$/u.exec(source);
+	if (match === null)
+		return unsupportedRouteForm(pattern, `a regular expression route pattern (${pattern.text})`);
+	const prefix = (match[1] ?? '').replaceAll('\\/', '/');
+	return (match[2] ?? '').split('|').map((alternative) => `${prefix}/${alternative}`);
+}
+
+function regularExpressionReceiver(
+	call: ts.CallExpression,
+): ts.RegularExpressionLiteral | undefined {
+	return ts.isPropertyAccessExpression(call.expression) &&
+		['exec', 'test'].includes(call.expression.name.text) &&
+		ts.isRegularExpressionLiteral(call.expression.expression)
+		? call.expression.expression
+		: undefined;
+}
+
+/**
+ * A call that passes the pathname on. `pathname.startsWith(x)` and `[..].includes(pathname)` are read
+ * by the scanner itself. A call to an identifier follows its declaration: a table predicate
+ * (`table.some(...)`, `Object.hasOwn(table, pathname)`) yields its routes; a boolean predicate in a
+ * scanned file must be one the static evaluator can run; a handler in a scanned file is scanned
+ * where it is declared. Every other call shape (unresolved, not a function declaration, a member
+ * call, an unreadable predicate) fails the scan: nothing is silently skipped.
  */
 function pathsBehindPredicate(
 	call: ts.CallExpression,
 	checker: ts.TypeChecker,
 	options: DiscoveryOptions,
 ): readonly string[] {
-	if (!ts.isIdentifier(call.expression) || !call.arguments.some(isPathname)) return [];
-	const declaration = resolveDeclaration(call.expression, checker);
-	if (
-		declaration === undefined ||
-		!ts.isFunctionDeclaration(declaration) ||
-		declaration.body === undefined
-	)
-		return [];
-	if (options.scannedFiles?.includes(declaration.getSourceFile().fileName) === true) return [];
-	const found: string[] = [];
-	let followed = false;
-	function scan(node: ts.Node): void {
-		if (
-			ts.isCallExpression(node) &&
-			ts.isPropertyAccessExpression(node.expression) &&
-			node.expression.name.text === 'some'
-		) {
-			const callback = node.arguments[0];
-			const comparesPath =
-				callback !== undefined &&
-				(ts.isArrowFunction(callback) || ts.isFunctionExpression(callback)) &&
-				JSON.stringify(callback.body.getText()).includes('.path');
-			if (comparesPath) {
-				followed = true;
-				found.push(...pathsOfRouteTable(node.expression.expression, checker));
-			}
-		}
-		if (
-			ts.isCallExpression(node) &&
-			ts.isPropertyAccessExpression(node.expression) &&
-			node.expression.name.text === 'hasOwn' &&
-			ts.isIdentifier(node.expression.expression) &&
-			node.expression.expression.text === 'Object' &&
-			node.arguments[0] !== undefined
-		) {
-			followed = true;
-			found.push(...keysOfRouteObject(node.arguments[0], checker));
-		}
-		ts.forEachChild(node, scan);
-	}
-	scan(declaration.body);
-	if (!followed) {
-		const at = call.getSourceFile().getLineAndCharacterOfPosition(call.getStart());
-		throw new Error(
-			`Unsupported route predicate form: ${call.expression.text}(...) at ${call.getSourceFile().fileName}:${at.line + 1}`,
+	if (!call.arguments.some(isPathname) && !isPathnameReceiverCall(call)) return [];
+	if (ts.isPropertyAccessExpression(call.expression)) {
+		if (pathnameMethodNames.has(call.expression.name.text)) return [];
+		if (regularExpressionReceiver(call) !== undefined) return [];
+		return unsupportedRouteForm(
+			call,
+			`a member call that receives the pathname (${call.expression.getText()})`,
 		);
 	}
-	return found;
+	if (!ts.isIdentifier(call.expression))
+		return unsupportedRouteForm(
+			call,
+			'a call that is not an identifier call receives the pathname',
+		);
+	const declaration = resolveDeclaration(call.expression, checker);
+	if (declaration === undefined)
+		return unsupportedRouteForm(call, `an unresolved helper (${call.expression.text})`);
+	if (!ts.isFunctionDeclaration(declaration) || declaration.body === undefined)
+		return unsupportedRouteForm(
+			call,
+			`a helper that is not a function declaration (${call.expression.text})`,
+		);
+	if (options.scannedFiles?.includes(declaration.getSourceFile().fileName) === true) {
+		if (returnsBoolean(declaration, checker)) assertPredicateIsEvaluable(declaration, checker);
+		return [];
+	}
+	const table = tablePathsOfDeclaration(declaration, checker);
+	return (
+		table ??
+		unsupportedRouteForm(call, `a predicate with an unreadable body (${call.expression.text})`)
+	);
+}
+
+function isPathnameReceiverCall(call: ts.CallExpression): boolean {
+	return ts.isPropertyAccessExpression(call.expression) && isPathname(call.expression.expression);
 }
 
 function requireLiteral(
@@ -211,6 +168,7 @@ export function discoverRoutesInSource(
 	const fileName = source.fileName;
 	const paths = new Set<string>();
 	const prefixes = new Set<string>();
+	const suffixes = new Set<string>();
 	function visit(node: ts.Node): void {
 		if (ts.isSwitchStatement(node) && isPathname(node.expression)) {
 			for (const clause of node.caseBlock.clauses)
@@ -232,6 +190,11 @@ export function discoverRoutesInSource(
 		}
 		if (ts.isCallExpression(node) && checker !== undefined)
 			for (const path of pathsBehindPredicate(node, checker, options)) paths.add(path);
+		if (ts.isCallExpression(node)) {
+			const pattern = regularExpressionReceiver(node);
+			if (pattern !== undefined && node.arguments.some(isPathname))
+				for (const suffix of suffixesOfRegularExpression(pattern)) suffixes.add(suffix);
+		}
 		if (ts.isCallExpression(node) && ts.isPropertyAccessExpression(node.expression)) {
 			const { expression, name } = node.expression;
 			if (name.text === 'startsWith' && isPathname(expression)) {
@@ -251,7 +214,11 @@ export function discoverRoutesInSource(
 		ts.forEachChild(node, visit);
 	}
 	visit(source);
-	return { paths: [...paths].toSorted(), prefixes: [...prefixes].toSorted() };
+	return {
+		paths: [...paths].toSorted(),
+		prefixes: [...prefixes].toSorted(),
+		suffixes: [...suffixes].toSorted(),
+	};
 }
 
 /** The HTTP methods a handler could name (HEAD and OPTIONS are protocol aliases); a new method on a known path is probed too. */
