@@ -2,12 +2,14 @@ import { afterAll, it } from 'vitest';
 
 import { failureReplayFromEnvironment } from '#sign-in-test-support/fuzz/fuzz-settings';
 import {
+	assertReplayExecutedExactlyOnce,
 	assertReplayIsRegistered,
-	runRequestGroup,
+	runCampaignGroup,
+	type ReplayReceipt,
 } from '#sign-in-test-support/fuzz/request-campaign';
 import { requestFamilies } from '#sign-in-test-support/fuzz/request-families/index';
 import { createCallerHarnessLanes } from '#sign-in-test-support/fuzz/request-shared-harness';
-import { routeClassification, routeKey } from '#sign-in-test-support/fuzz/route-classification';
+import { routeKey } from '#sign-in-test-support/fuzz/route-classification';
 import { useControlledSignInClock } from '#sign-in-test-support/test-fixtures/controlled-node-test-clock';
 
 useControlledSignInClock();
@@ -32,37 +34,20 @@ afterAll(async () => lanes.close());
 // A printed case the inventory does not run fails the whole file loudly, before any group registers.
 if (failureReplayFromEnvironment !== undefined)
 	assertReplayIsRegistered(failureReplayFromEnvironment, requestFamilies);
-let replayedCases = 0;
+const receipt: ReplayReceipt = { executedCases: 0 };
 afterAll(() => {
-	// A replay that executed nothing (or more than its one case) is not a replay.
-	if (failureReplayFromEnvironment !== undefined && replayedCases !== 1)
-		throw new Error(`SIGN_IN_FUZZ_REPLAY executed ${replayedCases} cases, not exactly one`);
+	assertReplayExecutedExactlyOnce(failureReplayFromEnvironment, receipt);
 });
 for (const family of requestFamilies) {
 	for (const caller of family.callers) {
 		it.concurrent(`S2 ${routeKey(family.route)} as ${caller}: documented-answer, credential-disclosure, identity-disclosure, refusal-effects`, async () => {
-			// With printed evidence (SIGN_IN_FUZZ_REPLAY), only the group it names runs.
-			if (
-				failureReplayFromEnvironment !== undefined &&
-				(failureReplayFromEnvironment.route !== routeKey(family.route) ||
-					failureReplayFromEnvironment.caller !== caller)
-			)
-				return;
-			const classification = routeClassification.find(
-				(row) => routeKey(row) === routeKey(family.route),
-			);
-			if (classification === undefined)
-				throw new Error('S1 classification missing for request family');
-			const { executedCases } = await lanes.run(caller, async (harness) =>
-				runRequestGroup({
-					harness,
-					family,
-					caller,
-					classification,
-					replay: failureReplayFromEnvironment,
-				}),
-			);
-			if (failureReplayFromEnvironment !== undefined) replayedCases += executedCases;
+			await runCampaignGroup({
+				lanes,
+				family,
+				caller,
+				replay: failureReplayFromEnvironment,
+				receipt,
+			});
 		});
 	}
 }

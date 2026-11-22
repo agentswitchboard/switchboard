@@ -33,8 +33,10 @@ import {
 } from '#sign-in-test-support/fuzz/request-families/request-family';
 import { syntheticRequestFamilyContext } from '#sign-in-test-support/fuzz/request-families/synthetic-context';
 import { assertRequestRefusalEffects } from '#sign-in-test-support/fuzz/request-refusal-effects';
+import type { CallerHarnessLanes } from '#sign-in-test-support/fuzz/request-shared-harness';
 import { readRequestStorageSnapshot } from '#sign-in-test-support/fuzz/request-storage-snapshot';
 import {
+	routeClassification,
 	routeKey,
 	type RouteClassification,
 } from '#sign-in-test-support/fuzz/route-classification';
@@ -68,6 +70,8 @@ export async function runRequestGroup(props: {
 	 * a randomly selected variant without a deep run.
 	 */
 	readonly randomCasesOnly?: number | undefined;
+	/** Called when a case starts executing, whatever its result: the replay count is not the result's. */
+	readonly onCaseExecuted?: (() => void) | undefined;
 }): Promise<{ readonly executedCases: number }> {
 	const { harness, family, caller, classification } = props;
 	let caseNumber = 0;
@@ -78,6 +82,7 @@ export async function runRequestGroup(props: {
 		identity: { readonly stepIndex: number | undefined; readonly offset: number },
 	): Promise<void> => {
 		caseNumber += 1;
+		props.onCaseExecuted?.();
 		process.stdout.write(
 			JSON.stringify({
 				event: 'F1-case-start',
@@ -214,20 +219,25 @@ export async function runRequestGroup(props: {
 				return value;
 			},
 		};
-		let failure: unknown;
+		// A tagged result, not undefined, tells a passed case from a failed one: a rejection that carries
+		// undefined is still a failure.
+		let result: { readonly kind: 'passed' } | { readonly kind: 'failed'; readonly error: unknown } =
+			{
+				kind: 'passed',
+			};
 		try {
 			await runCase(drawer, () => undefined, {
 				stepIndex: replay.mode === 'random' ? undefined : stepIndex,
 				offset: replay.offset,
 			});
 		} catch (error) {
-			failure = error;
+			result = { kind: 'failed', error };
 		}
 		// A replay that executed nothing, or more than the one printed case, proves nothing.
 		if (caseNumber !== 1)
 			throw new Error(`The replay executed ${caseNumber} cases, not exactly one`);
 		// The printed case's own failure is what the replay reports.
-		if (failure !== undefined) throw failure;
+		if (result.kind === 'failed') throw result.error;
 		return { executedCases: caseNumber };
 	}
 	if (props.randomCasesOnly !== undefined) {
@@ -282,4 +292,52 @@ export function assertReplayIsRegistered(
 /** The variant keys the family plans for the synthetic context (the proved inventory every live case must equal). */
 function planKeysOf(family: RequestFamily): readonly string[] {
 	return family.variantSteps(syntheticRequestFamilyContext).map(variantKey);
+}
+
+/** How many cases a replay actually executed: counted when a case starts, independent of its result. */
+export interface ReplayReceipt {
+	executedCases: number;
+}
+
+/**
+ * One group of the campaign as the host file runs it: only the group a printed case names runs when
+ * a replay is set, and every executed case is counted on the receipt whether it passes or fails.
+ */
+export async function runCampaignGroup(props: {
+	readonly lanes: CallerHarnessLanes<RequestCaller>;
+	readonly family: RequestFamily;
+	readonly caller: RequestCaller;
+	readonly replay: FailureReplay | undefined;
+	readonly receipt: ReplayReceipt;
+	readonly observeAnswer?: Parameters<typeof runRequestGroup>[0]['observeAnswer'];
+}): Promise<void> {
+	const { family, caller, replay } = props;
+	if (replay !== undefined && (replay.route !== routeKey(family.route) || replay.caller !== caller))
+		return;
+	const classification = routeClassification.find(
+		(row) => routeKey(row) === routeKey(family.route),
+	);
+	if (classification === undefined) throw new Error('S1 classification missing for request family');
+	await props.lanes.run(caller, async (harness) =>
+		runRequestGroup({
+			harness,
+			family,
+			caller,
+			classification,
+			replay,
+			observeAnswer: props.observeAnswer,
+			onCaseExecuted: (): void => {
+				props.receipt.executedCases += 1;
+			},
+		}),
+	);
+}
+
+/** A replay that executed nothing, or more than its one printed case, is not a replay. */
+export function assertReplayExecutedExactlyOnce(
+	replay: FailureReplay | undefined,
+	receipt: ReplayReceipt,
+): void {
+	if (replay !== undefined && receipt.executedCases !== 1)
+		throw new Error(`SIGN_IN_FUZZ_REPLAY executed ${receipt.executedCases} cases, not exactly one`);
 }

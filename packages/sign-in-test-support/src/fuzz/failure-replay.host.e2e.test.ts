@@ -1,7 +1,12 @@
 import { afterAll, expect, it } from 'vitest';
 
 import { parseFailureReplay } from '#sign-in-test-support/fuzz/fuzz-settings';
-import { runRequestGroup } from '#sign-in-test-support/fuzz/request-campaign';
+import {
+	assertReplayExecutedExactlyOnce,
+	runCampaignGroup,
+	runRequestGroup,
+	type ReplayReceipt,
+} from '#sign-in-test-support/fuzz/request-campaign';
 import type { ObservedRequestAnswer } from '#sign-in-test-support/fuzz/request-disclosure';
 import {
 	requestFamilies,
@@ -15,7 +20,9 @@ import { useControlledSignInClock } from '#sign-in-test-support/test-fixtures/co
 
 useControlledSignInClock();
 
-const lanes = createCallerHarnessLanes(['signed-out'] as const, { concurrent: false });
+const lanes = createCallerHarnessLanes(['signed-out', 'member', 'owner'] as const, {
+	concurrent: false,
+});
 afterAll(async () => lanes.close());
 
 const namedProperty = 'S2 no-server-error: generated input without injected storage faults';
@@ -227,4 +234,85 @@ it('replays a randomly selected string-boundary variant from its printed variant
 			runRequestGroup({ ...group, harness, replay: { ...replay, variant: otherVariant } }),
 		),
 	).rejects.toThrow(/misaligned/u);
+}, 900_000);
+
+/**
+ * The replay count through the group entry the host file uses. A replay that reproduces its failure
+ * fails with that case's own deciding error, and the case still counts as executed (the count is not
+ * the result's); a rejection carrying undefined is a failure, not a pass; a replay whose group never
+ * runs is told apart by its zero count.
+ */
+it('counts a reproduced failure as executed and reports its own error, and treats an undefined rejection as a failure', async () => {
+	if (family === undefined || classification === undefined)
+		throw new Error('the social sign-in family is missing');
+	const printed = await lanes
+		.run('signed-out', async (harness) =>
+			runRequestGroup({
+				family,
+				caller: 'signed-out',
+				classification,
+				harness,
+				observeAnswer: plantServerError([], 'callbackURL'),
+			}),
+		)
+		.then(
+			() => {
+				throw new Error('the planted failure did not fail the campaign group');
+			},
+			(error: unknown) => (error instanceof Error ? error.message : String(error)),
+		);
+	const replay = parseFailureReplay(printed);
+	// 1. The reproduced failure, through the group entry: the case's property, no zero-case error.
+	const receipt: ReplayReceipt = { executedCases: 0 };
+	const reproduced = await runCampaignGroup({
+		lanes,
+		family,
+		caller: 'signed-out',
+		replay,
+		receipt,
+		observeAnswer: plantServerError([], 'callbackURL'),
+	}).then(
+		() => {
+			throw new Error('the reproduced failure did not fail the group');
+		},
+		(error: unknown) => (error instanceof Error ? error.message : String(error)),
+	);
+	expect(reproduced).toContain(namedProperty);
+	expect(reproduced).not.toMatch(/executed \d+ cases/u);
+	expect(receipt.executedCases).toBe(1);
+	expect(() => {
+		assertReplayExecutedExactlyOnce(replay, receipt);
+	}).not.toThrow();
+	// 2. A rejection that carries undefined is a failure of the case, not a passed replay.
+	const undefinedReceipt: ReplayReceipt = { executedCases: 0 };
+	const outcome = await runCampaignGroup({
+		lanes,
+		family,
+		caller: 'signed-out',
+		replay,
+		receipt: undefinedReceipt,
+		observeAnswer: () => {
+			// eslint-disable-next-line no-throw-literal
+			throw undefined;
+		},
+	}).then(
+		() => 'resolved',
+		(error: unknown) =>
+			error === undefined ? 'rejected with undefined' : 'rejected with an error',
+	);
+	expect(outcome).toBe('rejected with undefined');
+	expect(undefinedReceipt.executedCases).toBe(1);
+	// 3. A replay whose group does not run executes nothing, and the count says so.
+	const idleReceipt: ReplayReceipt = { executedCases: 0 };
+	await runCampaignGroup({
+		lanes,
+		family,
+		caller: 'member',
+		replay,
+		receipt: idleReceipt,
+	});
+	expect(idleReceipt.executedCases).toBe(0);
+	expect(() => {
+		assertReplayExecutedExactlyOnce(replay, idleReceipt);
+	}).toThrow(/executed 0 cases, not exactly one/u);
 }, 900_000);
