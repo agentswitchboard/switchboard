@@ -57,6 +57,8 @@ export interface ControlledCentralProvisioning {
 	/** Every parsed revision push, in arrival order, whatever the reply was. */
 	readonly pushes: readonly AuthorizationRevisionPush[];
 	readonly replyToPushesWith: (mode: ControlledPushReply) => void;
+	/** How the stand-in currently answers pushes. */
+	readonly pushReplyMode: () => ControlledPushReply;
 	/** Simulates a recipient that lost its floors (r3 section 5): the next person push gets 412. */
 	readonly forgetFloors: () => void;
 	/** Resolves once the peer has received at least this many pushes in total. */
@@ -149,6 +151,7 @@ export function createControlledCentralProvisioning(): ControlledCentralProvisio
 		digestReads,
 		arrivals,
 		pushes,
+		pushReplyMode: (): ControlledPushReply => pushReply,
 		replyToPushesWith: (mode: ControlledPushReply): void => {
 			pushReply = mode;
 		},

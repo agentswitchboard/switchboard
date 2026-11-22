@@ -39,6 +39,16 @@ export function assertRequestRefusalEffects(props: {
 	readonly after: RequestStorageSnapshot;
 	readonly request?: GeneratedRequest;
 	readonly now?: number;
+	/** What Central's stand-in received and how it answers pushes: the only evidence of an acknowledgement. */
+	readonly central?: {
+		readonly pushes: readonly {
+			readonly kind: string;
+			readonly organizationId: string;
+			readonly personId?: string;
+			readonly revision: number;
+		}[];
+		readonly pushReply: string;
+	};
 }): void {
 	const { classification, fixture, before, after } = props;
 	const now = props.now ?? controlledSignInClock.now();
@@ -46,6 +56,22 @@ export function assertRequestRefusalEffects(props: {
 		(row) =>
 			row.id === fixture.sessionId && typeof row.expiresAt === 'number' && row.expiresAt <= now,
 	);
+	const sessionDeleted =
+		expired !== undefined && !(after.session ?? []).some((row) => row.id === expired.id);
+	// A refused expired-session read must do what it is permitted to: delete the expired session and
+	// advance every retained pair of that person by one, even where nothing else changed.
+	if (classification.permittedRefusalEffects.includes('expired-session-cleanup') && sessionDeleted)
+		for (const pair of (before.personOrganizationAuthorizationRevisions ?? []).filter(
+			(row) => row.person_id === expired?.userId,
+		)) {
+			const next = (after.personOrganizationAuthorizationRevisions ?? []).find(
+				(row) => row.id === pair.id,
+			);
+			if (next === undefined || Number(next.revision) !== Number(pair.revision) + 1)
+				throw new Error(
+					'S2 refusal-effects: expired-session cleanup did not advance every retained pair',
+				);
+		}
 	for (const table of new Set([...Object.keys(before), ...Object.keys(after)])) {
 		const original = before[table] ?? [];
 		const current = after[table] ?? [];
@@ -80,7 +106,7 @@ export function assertRequestRefusalEffects(props: {
 				removals[0]?.id === expired.id
 			)
 				continue;
-			if (table === 'personOrganizationAuthorizationRevisions') {
+			if (table === 'personOrganizationAuthorizationRevisions' && sessionDeleted) {
 				// The refused guard run advances each of the person's pairs once. Drain-on-use
 				// (authorization-revision-drainer.ts:78) may then deliver and acknowledge the new
 				// revision of a pair whose organization's central confirms it, in the same run.
@@ -90,6 +116,17 @@ export function assertRequestRefusalEffects(props: {
 						next_attempt_at: now,
 						updated_at: now,
 					});
+				// An acknowledgement is allowed only where Central's stand-in received that pair's new
+				// revision and answers pushes with an acknowledgement.
+				const acknowledgedByCentral = (row: Record<string, unknown>): boolean =>
+					props.central?.pushReply === 'acknowledge' &&
+					props.central.pushes.some(
+						(push) =>
+							push.kind === 'person' &&
+							push.organizationId === row.organization_id &&
+							push.personId === row.person_id &&
+							push.revision === Number(row.revision) + 1,
+					);
 				const drained = (row: Record<string, unknown>): Record<string, unknown> =>
 					Object.assign(advanced(row), {
 						acknowledged_revision: Number(row.revision) + 1,
@@ -102,7 +139,7 @@ export function assertRequestRefusalEffects(props: {
 						if (observed === undefined) return false;
 						if (row.person_id !== expired.userId || typeof row.revision !== 'number')
 							return rowBytes(observed) === rowBytes(row);
-						return [advanced(row), drained(row)].some(
+						return [advanced(row), ...(acknowledgedByCentral(row) ? [drained(row)] : [])].some(
 							(allowed) => rowBytes(allowed) === rowBytes(observed),
 						);
 					});

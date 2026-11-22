@@ -97,7 +97,18 @@ it('S2 permitted refused read deletes its expired session and advances every ret
 		const after = await readRequestStorageSnapshot(fixture.harness.database);
 		expect(answer.status).toBe(401);
 		assertRequestDisclosure({ fixture, path, request, answer, before, after });
-		assertRequestRefusalEffects({ fixture, classification, before, after, request, now });
+		assertRequestRefusalEffects({
+			fixture,
+			classification,
+			before,
+			after,
+			request,
+			now,
+			central: {
+				pushes: fixture.harness.centralProvisioning.pushes,
+				pushReply: fixture.harness.centralProvisioning.pushReplyMode(),
+			},
+		});
 		expect((after.session ?? []).some((row) => row.id === fixture.sessionId)).toBe(false);
 		for (const pair of before.personOrganizationAuthorizationRevisions ?? []) {
 			if (pair.person_id !== fixture.context.personId) continue;
