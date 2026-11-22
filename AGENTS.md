@@ -2,6 +2,17 @@
 
 Switchboard is a pnpm TypeScript monorepo with an existing uv Python SDK. Read the affected package's README, contracts and permanent tests before changing it. Keep authorization decisions, runtime adapters and user interfaces in their current owning packages.
 
+## Where this repository is going
+
+<!-- TODO: remove this section after the production change-over. -->
+
+Switchboard is being rebuilt together with its central service. Every Router enrolls with central, and nothing works without central. Production stays on the released version until the maintainer declares a single change-over, and that is not close. The change-over is a clean start on empty state: old stored state is moved somewhere safe at that point, and new code never reads it. So:
+
+- No migration of old stored data, no reader for an old stored form, and no test that an older store upgrades. A database migration only has to apply to an empty store.
+- No remembered old identity. For example, a machine is identified only by its machine ID; the former installation identity is refused.
+- No door that still accepts an old request form. A wire or route changes once, and the old form is refused.
+- The change-over itself is not designed or built until the maintainer asks for it.
+
 ## Standards
 
 Whose standards: this repository's own. Follow [.cursor/rules/ts-rules.md](.cursor/rules/ts-rules.md), [.cursor/rules/monorepo-rules.md](.cursor/rules/monorepo-rules.md), the checked-in tool configuration, and existing package conventions. Preserve existing import aliases and test placement when editing a module. Use narrow types, explicit function parameters and return types, discriminated unions and schema-derived boundary types. Never add `any`, unchecked casts, lint suppressions or real-time sleeps to make a check pass.
