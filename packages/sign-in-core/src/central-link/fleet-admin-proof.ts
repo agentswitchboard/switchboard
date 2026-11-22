@@ -1,3 +1,8 @@
+import type {
+	ProofClaims,
+	ProofHeader,
+	ProofJwk,
+} from '#sign-in-core/central-link/generated/central-sign-in.gen';
 import { canonicalJson } from '#sign-in-core/contracts/canonical-json';
 import type {
 	SignInCrypto,
@@ -12,12 +17,12 @@ import { base64UrlSha256 } from '#sign-in-core/organizations/fleet-admin-operati
  */
 export interface FleetAdminProofKey {
 	readonly privateKey: CryptoKey;
-	readonly publicJwk: {
-		readonly kty: 'EC';
-		readonly crv: 'P-256';
-		readonly x: string;
-		readonly y: string;
-	};
+	readonly publicJwk: Readonly<
+		ProofJwk & {
+			readonly kty: 'EC';
+			readonly crv: 'P-256';
+		}
+	>;
 }
 
 /** An ES256 private key as JWK: only for the CLI's Keychain item. */
@@ -107,19 +112,21 @@ export async function signFleetAdminProof(
 		readonly bound?: { readonly accessToken: string; readonly intent: string };
 	},
 ): Promise<string> {
-	const header = { typ: 'dpop+jwt', alg: 'ES256', jwk: props.key.publicJwk };
-	const claims = {
+	const header = { typ: 'dpop+jwt', alg: 'ES256', jwk: props.key.publicJwk } satisfies ProofHeader;
+	const requestClaims = {
 		jti: props.requestId,
 		htm: 'POST',
 		htu: props.htu,
 		iat: props.issuedAtSeconds,
-		...(props.bound === undefined
-			? {}
-			: {
+	} satisfies Omit<ProofClaims, 'ath' | 'intent'>;
+	const claims =
+		props.bound === undefined
+			? requestClaims
+			: ({
+					...requestClaims,
 					ath: await base64UrlSha256(crypto, props.bound.accessToken),
 					intent: props.bound.intent,
-				}),
-	};
+				} satisfies ProofClaims);
 	const signingInput = `${base64UrlJson(header)}.${base64UrlJson(claims)}`;
 	// WebCrypto ECDSA returns IEEE P1363 r||s, which is exactly the JWS ES256 encoding.
 	const signature = await crypto.subtle.sign(

@@ -1,6 +1,11 @@
 import { decodeJwt, decodeProtectedHeader } from 'jose';
 import { z } from 'zod';
 
+import type {
+	OrganizationStampHeader,
+	OrganizationStatement,
+	OrganizationStatementDigestReply,
+} from '#sign-in-core/central-link/generated/central-sign-in.gen';
 import {
 	organizationStatementClaimsSchema,
 	organizationStatementRenewalWindowSeconds,
@@ -27,12 +32,7 @@ import type {
 import type { OrganizationId } from '#sign-in-core/storage/models/sign-in-store';
 
 /** What central reports for a stored stamp, and what sign-in records once one is confirmed. */
-export interface OrganizationStampFacts {
-	/** Lowercase hex SHA-256 of the compact statement, central's own digest rule. */
-	readonly digest: string;
-	readonly expiresAt: number;
-	readonly signingKeyId: string;
-}
+export type OrganizationStampFacts = Readonly<OrganizationStatementDigestReply>;
 export const organizationStampTryOutcomes = [
 	'unanswered-unavailable',
 	'unanswered-timeout',
@@ -50,7 +50,7 @@ export interface OrganizationStampRecord {
 	readonly fleetState: OrganizationFleetState;
 	readonly confirmed: OrganizationStampFacts | null;
 	/** The signed statement whose answer is still unknown; at most one per organization. */
-	readonly sent: string | null;
+	readonly sent: OrganizationStatement | null;
 	readonly renewedAt: number | null;
 	readonly unansweredTries: number;
 	readonly refusedTries: number;
@@ -93,17 +93,17 @@ export interface OrganizationStampRecords {
 	}) => Promise<SignInStoreResult<boolean>>;
 	readonly claimSentStamp: (request: {
 		readonly organizationId: OrganizationId;
-		readonly statement: string;
+		readonly statement: OrganizationStatement;
 	}) => Promise<SignInStoreResult<boolean>>;
 	readonly confirmSentStamp: (request: {
 		readonly organizationId: OrganizationId;
-		readonly statement: string;
+		readonly statement: OrganizationStatement;
 		readonly stamp: OrganizationStampFacts;
 		readonly now: number;
 	}) => Promise<SignInStoreResult<boolean>>;
 	readonly recordStampTry: (request: {
 		readonly organizationId: OrganizationId;
-		readonly statement: string;
+		readonly statement: OrganizationStatement;
 		readonly outcome: OrganizationStampTryOutcome;
 		readonly settlement: OrganizationStampSettlement;
 		readonly now: number;
@@ -115,7 +115,7 @@ export type OrganizationStampStep =
 	| { readonly kind: 'not-ready' }
 	| { readonly kind: 'seed' }
 	| { readonly kind: 'current' }
-	| { readonly kind: 'resend'; readonly statement: string }
+	| { readonly kind: 'resend'; readonly statement: OrganizationStatement }
 	| { readonly kind: 'sent-expired' }
 	| { readonly kind: 'sign'; readonly replaces: string };
 
@@ -123,7 +123,7 @@ export function decideOrganizationStampStep(props: {
 	readonly record: OrganizationStampRecord;
 	readonly sentExpiresAt: number | null;
 	readonly nowSeconds: number;
-	readonly currentSigningKeyId: string;
+	readonly currentSigningKeyId: OrganizationStampHeader['kid'];
 }): OrganizationStampStep {
 	const { record } = props;
 	if (record.fleetState !== 'ready') return { kind: 'not-ready' };
@@ -169,7 +169,7 @@ export interface OrganizationStampRenewalProps {
 	readonly sign: SignOrganizationStatement;
 	readonly clock: SignInClock;
 	readonly crypto: SignInCrypto;
-	readonly currentSigningKeyId: string;
+	readonly currentSigningKeyId: OrganizationStampHeader['kid'];
 	/** D7: one deadline for this whole guard run; every central call ends by it. */
 	readonly deadline: AbortSignal;
 	/** WS7 R-floors: a central found holding nothing has none of this source's ACKs either. */
@@ -426,7 +426,10 @@ export async function readOrganizationStatementFacts(
 	statement: string,
 ): Promise<OrganizationStampFacts> {
 	const claims = organizationStatementClaimsSchema.parse(decodeJwt(statement));
-	const header = statementHeaderSchema.parse(decodeProtectedHeader(statement));
+	const header = statementHeaderSchema.parse(decodeProtectedHeader(statement)) satisfies Pick<
+		OrganizationStampHeader,
+		'kid'
+	>;
 	const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(statement));
 	return {
 		digest: Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, '0')).join(

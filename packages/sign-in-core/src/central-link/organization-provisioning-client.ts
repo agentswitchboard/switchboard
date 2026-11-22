@@ -1,6 +1,13 @@
 import { z } from 'zod';
 
 import type { CentralTransport } from '#sign-in-core/central-link/central-transport';
+import type {
+	OrganizationStatementDigestReply,
+	ProvisionOrganization,
+	ProvisionOrganizationResult,
+	ReadOrganizationStatementDigest,
+} from '#sign-in-core/central-link/generated/central-sign-in.gen';
+import type { AssertWireType, WireTypesEqual } from '#sign-in-core/central-link/wire-type-equality';
 import { organizationStatementDigestSchema } from '#sign-in-core/contracts/organization-statement';
 import type {
 	CentralLinkUncertainty,
@@ -33,6 +40,17 @@ export const centralStatementDigestReplySchema = z.strictObject({
 	expiresAt: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER),
 	signingKeyId: z.string().min(1),
 });
+export type CentralProvisioningReplyTypes = [
+	AssertWireType<
+		WireTypesEqual<z.output<typeof centralProvisioningReplySchema>, ProvisionOrganizationResult>
+	>,
+	AssertWireType<
+		WireTypesEqual<
+			z.output<typeof centralStatementDigestReplySchema>,
+			OrganizationStatementDigestReply
+		>
+	>,
+];
 
 const provisioningRoute = 'http://central.invalid/internal/organization-provisioning';
 const statementDigestRoute = 'http://central.invalid/internal/organization-statement-digest';
@@ -53,7 +71,7 @@ export function createOrganizationProvisioningClient(
 				centralProvisioningRequestSchema.parse({
 					organizationId: input.organizationId,
 					organizationStatement: input.organizationStatement,
-				}),
+				}) satisfies ProvisionOrganization,
 				input.signal,
 			);
 			if (reply.kind === 'unanswered') return { kind: 'unknown', reason: reply.reason };
@@ -76,7 +94,9 @@ export function createOrganizationProvisioningClient(
 			const reply = await postPrivately(
 				transport,
 				statementDigestRoute,
-				centralStatementDigestRequestSchema.parse({ organizationId }),
+				centralStatementDigestRequestSchema.parse({
+					organizationId,
+				}) satisfies ReadOrganizationStatementDigest,
 				options?.signal,
 			);
 			if (reply.kind === 'unanswered') return { kind: 'unavailable', reason: reply.reason };
