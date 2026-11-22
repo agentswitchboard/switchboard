@@ -34,6 +34,7 @@ export function createMachineLoginPlugin(login: MachineLoginProviderProps): Bett
 		requestSchemaFields: providerMachineExtensionFields,
 		deviceCodeSchemaFields: {
 			machineId: { type: 'string', required: true },
+			decisionClaim: { type: 'string', required: false },
 			machineLabel: { type: 'string', required: true },
 			organizationId: { type: 'string', required: true },
 			enrollmentId: { type: 'string', required: false },

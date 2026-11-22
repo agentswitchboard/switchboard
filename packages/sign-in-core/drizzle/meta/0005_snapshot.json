@@ -1,7 +1,7 @@
 {
 	"version": "6",
 	"dialect": "sqlite",
-	"id": "554d8e1d-0495-4d32-9ea4-8b811a05ac21",
+	"id": "de688054-0944-45df-93bf-f5953e518d7f",
 	"prevId": "7e14ec7c-33d3-4176-98e1-036a2f39e5ae",
 	"tables": {
 		"account": {
@@ -213,6 +213,13 @@
 					"type": "text",
 					"primaryKey": false,
 					"notNull": true,
+					"autoincrement": false
+				},
+				"decisionClaim": {
+					"name": "decisionClaim",
+					"type": "text",
+					"primaryKey": false,
+					"notNull": false,
 					"autoincrement": false
 				},
 				"machineLabel": {

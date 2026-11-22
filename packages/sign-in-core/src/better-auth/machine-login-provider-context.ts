@@ -41,6 +41,7 @@ export const machineDeviceRecordSchema = z.object({
 	userId: z.string().nullable().default(null),
 	expiresAt: z.date(),
 	machineId: uuid7Schema,
+	decisionClaim: z.string().nullable().default(null),
 	machineLabel: machineLabelSchema,
 	organizationId: organizationIdSchema,
 	enrollmentId: uuid7Schema.nullable().optional(),

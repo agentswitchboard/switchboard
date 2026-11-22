@@ -48,46 +48,6 @@ export async function readDeviceCodeForDecision(props: {
 	return stored ?? null;
 }
 
-export async function recordDeviceCodeDecision(props: {
-	readonly openDatabase: SignInDatabaseFactory;
-	readonly id: string;
-	readonly approver: string;
-	readonly now: number;
-	readonly decision:
-		| { readonly kind: 'approve'; readonly enrollmentId: string }
-		| { readonly kind: 'deny' };
-}): Promise<boolean> {
-	const database = props.openDatabase();
-	const unexpiredApproverCode = and(
-		eq(deviceCode.id, props.id),
-		eq(deviceCode.userId, props.approver),
-		gt(deviceCode.expiresAt, new Date(props.now)),
-	);
-	const update =
-		props.decision.kind === 'approve'
-			? { status: 'approved', enrollmentId: props.decision.enrollmentId }
-			: { status: 'denied' };
-	const [changed] = await database
-		.update(deviceCode)
-		.set(update)
-		.where(and(unexpiredApproverCode, eq(deviceCode.status, 'pending')))
-		.returning({ id: deviceCode.id });
-	if (changed !== undefined) return true;
-	if (props.decision.kind === 'deny') return false;
-	const [confirmed] = await database
-		.select({ id: deviceCode.id })
-		.from(deviceCode)
-		.where(
-			and(
-				unexpiredApproverCode,
-				eq(deviceCode.status, 'approved'),
-				eq(deviceCode.enrollmentId, props.decision.enrollmentId),
-			),
-		)
-		.limit(1);
-	return confirmed !== undefined;
-}
-
 export async function readDeviceCodeForPage(props: {
 	readonly openDatabase: SignInDatabaseFactory;
 	/** The stored form: uppercase, no hyphen or spaces. */

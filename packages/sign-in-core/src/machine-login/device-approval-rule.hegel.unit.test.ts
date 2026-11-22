@@ -14,12 +14,18 @@ it('keeps approval and denial confined to an unexpired code verified by the perm
 			const userId = testCase.draw(generators.sampledFrom([approver, otherPerson, null]));
 			const permitted = testCase.draw(generators.sampledFrom([true, false]));
 			const expiresAt = testCase.draw(generators.sampledFrom([now - 1, now, now + 1]));
+			const claimed = testCase.draw(generators.sampledFrom([true, false]));
 			const confirmationAge = testCase.draw(
 				generators.sampledFrom([null, -1, 0, 899_999, 900_000, 900_001]),
 			);
 			const facts = {
 				approver,
-				code: { status, userId, expiresAt: new Date(expiresAt) },
+				code: {
+					status,
+					userId,
+					expiresAt: new Date(expiresAt),
+					decisionClaim: claimed ? 'fixture' : null,
+				},
 				now,
 				permitted,
 				secondFactorAt: confirmationAge === null ? null : now - confirmationAge,
@@ -29,7 +35,7 @@ it('keeps approval and denial confined to an unexpired code verified by the perm
 			const approval = decideDeviceApproval({ ...facts, action: 'approve' });
 			const denial = decideDeviceApproval({ ...facts, action: 'deny' });
 			expect(approval.kind === 'approve').toBe(verified && status !== 'denied');
-			expect(denial.kind === 'deny').toBe(verified && status === 'pending' && fresh);
+			expect(denial.kind === 'deny').toBe(verified && status === 'pending' && !claimed && fresh);
 		},
 		{ testCases: 100, derandomize: true, database: hegel.Database.disabled },
 	);

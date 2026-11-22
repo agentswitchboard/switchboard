@@ -6,6 +6,7 @@ export const deviceRefusals = [
 	'other-organization',
 	'unknown-workspace',
 	'request-conflict',
+	'already-deciding',
 	'unavailable',
 ] as const;
 export type DeviceRefusal = (typeof deviceRefusals)[number];
@@ -56,6 +57,11 @@ export const deviceRefusalCopy: Readonly<Record<DeviceRefusal, DeviceOutcomeCopy
 		title: 'This login was already approved with different details',
 		message: 'Start a new login on your machine if you want to change the approval.',
 		action: { kind: 'link', label: 'Enter a different code', href: '/device' },
+	},
+	'already-deciding': {
+		title: 'This login is being decided',
+		message: 'Review the request again to see its current status.',
+		action: { kind: 'link', label: 'Open machine approvals', href: '/device' },
 	},
 	unavailable: {
 		title: "Switchboard can't approve this right now",

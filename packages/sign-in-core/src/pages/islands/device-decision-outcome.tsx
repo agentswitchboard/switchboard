@@ -63,8 +63,13 @@ export function deviceDecisionOutcome(
 			: { kind: 'refused', refusal: 'unavailable' };
 	}
 	if (status === 401) return { kind: 'signed-out' };
-	if (status === 409 && refusalBodySchema.parse(body).reason?.kind === 'requestConflict')
-		return { kind: 'refused', refusal: 'request-conflict' };
+	if (status === 409) {
+		const refusal = refusalBodySchema.parse(body);
+		if (refusal.reason?.kind === 'requestConflict')
+			return { kind: 'refused', refusal: 'request-conflict' };
+		if (refusal.error === 'already_deciding')
+			return { kind: 'refused', refusal: 'already-deciding' };
+	}
 	if (status === 403) {
 		const refusal = refusalBodySchema.parse(body);
 		if (refusal.error !== 'access_denied') return { kind: 'refused', refusal: 'expired' };

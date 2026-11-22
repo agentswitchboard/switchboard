@@ -5,6 +5,7 @@ type DeviceApprovalRefusal =
 	| { readonly kind: 'notPermitted' }
 	| { readonly kind: 'deviceNotVerified' }
 	| { readonly kind: 'alreadyDecided' }
+	| { readonly kind: 'alreadyDeciding' }
 	| { readonly kind: 'expired' }
 	| { readonly kind: 'secondFactorRequired'; readonly withinSeconds: number };
 
@@ -15,7 +16,10 @@ export type DeviceApprovalDecision =
 
 export function decideDeviceApproval(props: {
 	readonly action: 'approve' | 'deny';
-	readonly code: Pick<typeof deviceCode.$inferSelect, 'expiresAt' | 'status' | 'userId'>;
+	readonly code: Pick<
+		typeof deviceCode.$inferSelect,
+		'expiresAt' | 'status' | 'userId' | 'decisionClaim'
+	>;
 	readonly approver: string;
 	readonly permitted: boolean;
 	readonly secondFactorAt: number | null;
@@ -34,6 +38,8 @@ export function decideDeviceApproval(props: {
 
 	// Central knows whether the organization's first-approval exception still applies.
 	if (props.action === 'approve') return { kind: 'approve' };
+	if (props.code.decisionClaim !== null)
+		return { kind: 'refuse', reason: { kind: 'alreadyDeciding' } };
 	const age = props.secondFactorAt === null ? -1 : props.now - props.secondFactorAt;
 	return age < 0 || age > secondFactorWindowSeconds * 1000
 		? {

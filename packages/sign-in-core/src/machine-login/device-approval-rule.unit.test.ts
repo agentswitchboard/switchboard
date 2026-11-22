@@ -4,7 +4,12 @@ import { decideDeviceApproval } from '#sign-in-core/machine-login/device-approva
 
 const approver = '019a3dce-2000-7000-8000-0000000000a1';
 const now = 1_800_000_000_000;
-const code = { userId: approver, status: 'pending', expiresAt: new Date(now + 1) };
+const code = {
+	userId: approver,
+	status: 'pending',
+	expiresAt: new Date(now + 1),
+	decisionClaim: null,
+};
 
 it('delegates the first-approval factor exception to Central and enforces the factor window for deny', (): void => {
 	expect(

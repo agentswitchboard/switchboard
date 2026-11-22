@@ -321,6 +321,7 @@ export const deviceCode = sqliteTable(
 		resources: text('resources'),
 		oauthClientId: text('oauthClientId'),
 		machineId: text('machineId').notNull(),
+		decisionClaim: text('decisionClaim'),
 		machineLabel: text('machineLabel').notNull(),
 		organizationId: text('organizationId').notNull(),
 		enrollmentId: text('enrollmentId'),

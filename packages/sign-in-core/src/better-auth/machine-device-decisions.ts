@@ -11,6 +11,7 @@ import {
 	authorizeMachineDeviceAction,
 	type MachineLoginProviderProps,
 } from '#sign-in-core/better-auth/machine-login-provider-context';
+import type { DeviceApprovalCompletion } from '#sign-in-core/machine-login/device-approval-claim';
 import { decideDeviceApproval } from '#sign-in-core/machine-login/device-approval-rule';
 import {
 	approveDeviceRequestSchema,
@@ -21,7 +22,11 @@ import {
 	deviceLoginDecisionSchema,
 	type MachineDeviceApprovalResult,
 } from '#sign-in-core/machine-login/machine-login-contracts';
-import { recordDeviceCodeDecision } from '#sign-in-core/storage/device-code-store';
+import {
+	claimDeviceApprovalAttempt,
+	completeDeviceApprovalAttempt,
+	recordDeviceDenial,
+} from '#sign-in-core/storage/device-approval-store';
 
 export function machineDeviceDecisionEndpoints(
 	login: MachineLoginProviderProps,
@@ -34,69 +39,92 @@ export function machineDeviceDecisionEndpoints(
 			async (context): Promise<MachineDeviceApprovalResult> => {
 				const action = await requireDeviceDecision(context, login, 'approve');
 				const organizationId = action.record.organizationId;
-				// The workspace list constrains a new approval. Central owns a replay's stored snapshot.
-				if (action.record.status === 'pending') {
-					const workspaces =
-						context.request === undefined
-							? { result: 'unavailable' as const }
-							: await login.listWorkspaces({ request: context.request, organizationId });
-					if (workspaces.result === 'unavailable')
-						throw new APIError('SERVICE_UNAVAILABLE', { error: 'temporarily_unavailable' });
-					if (workspaces.result === 'refused')
-						throw new APIError('FORBIDDEN', { error: 'access_denied' });
-					const activeIds = new Set(
-						workspaces.workspaces
-							.filter((row) => row.state === 'active')
-							.map((row) => row.workspaceId),
-					);
-					if (context.body.allowedWorkspaces.some((workspaceId) => !activeIds.has(workspaceId)))
-						throw new APIError('FORBIDDEN', {
-							error: 'access_denied',
-							reason: { kind: 'unknownWorkspace' },
-						});
-				}
-				const request = decideDeviceLoginSchema.parse({
-					organizationId,
+				const scope = {
+					openDatabase: login.openDatabase,
+					id: action.record.id,
 					approver: action.approver,
-					permissionChecked: 'machine:enroll',
-					requestId: action.record.id,
-					machineId: action.record.machineId,
-					label: action.record.machineLabel,
-					allowedWorkspaces: context.body.allowedWorkspaces,
-					approverSecondFactorAt:
-						action.secondFactorAt === null ? null : Math.floor(action.secondFactorAt / 1000),
-					codeExpiresAt: Math.floor(action.record.expiresAt.getTime() / 1000),
-				});
-				const reply = await login.decisions.decideDeviceLogin(request);
-				const parsed =
-					reply.kind === 'answered' ? deviceLoginDecisionSchema.safeParse(reply.decision) : null;
-				if (parsed === null || !parsed.success)
-					throw new APIError('SERVICE_UNAVAILABLE', { error: 'temporarily_unavailable' });
-				const decision = parsed.data;
-				if (decision.result === 'refused')
-					throw new APIError(
-						decision.reason.kind === 'requestConflict' ? 'CONFLICT' : 'FORBIDDEN',
-						{
-							error: 'access_denied',
-							reason: decision.reason,
-						},
-					);
-				if (
-					!(await recordDeviceCodeDecision({
-						openDatabase: login.openDatabase,
-						id: action.record.id,
-						approver: action.approver,
-						now: login.platform.clock.now(),
-						decision: { kind: 'approve', enrollmentId: decision.enrollmentId },
-					}))
-				)
-					throw new APIError('CONFLICT', { error: 'already_decided' });
-				const result: MachineDeviceApprovalResult = {
-					enrollmentId: decision.enrollmentId,
-					label: decision.label,
-					allowedWorkspaces: decision.allowedWorkspaces,
+					now: login.platform.clock.now,
 				};
-				return context.json(result);
+				const claim = await claimDeviceApprovalAttempt({
+					...scope,
+					attempt: login.platform.ids.nextId(),
+				});
+				if (claim.kind === 'already-decided')
+					throw new APIError('CONFLICT', { error: 'already_decided' });
+				let completion: DeviceApprovalCompletion = { kind: 'not-sent' };
+				try {
+					// The workspace list constrains a new approval. Central owns a replay's stored snapshot.
+					if (claim.kind === 'claimed') {
+						const workspaces =
+							context.request === undefined
+								? { result: 'unavailable' as const }
+								: await login.listWorkspaces({ request: context.request, organizationId });
+						if (workspaces.result === 'unavailable')
+							throw new APIError('SERVICE_UNAVAILABLE', { error: 'temporarily_unavailable' });
+						if (workspaces.result === 'refused')
+							throw new APIError('FORBIDDEN', { error: 'access_denied' });
+						const activeIds = new Set(
+							workspaces.workspaces
+								.filter((row) => row.state === 'active')
+								.map((row) => row.workspaceId),
+						);
+						if (context.body.allowedWorkspaces.some((workspaceId) => !activeIds.has(workspaceId)))
+							throw new APIError('FORBIDDEN', {
+								error: 'access_denied',
+								reason: { kind: 'unknownWorkspace' },
+							});
+					}
+					const request = decideDeviceLoginSchema.parse({
+						organizationId,
+						approver: action.approver,
+						permissionChecked: 'machine:enroll',
+						requestId: action.record.id,
+						machineId: action.record.machineId,
+						label: action.record.machineLabel,
+						allowedWorkspaces: context.body.allowedWorkspaces,
+						approverSecondFactorAt:
+							action.secondFactorAt === null ? null : Math.floor(action.secondFactorAt / 1000),
+						codeExpiresAt: Math.floor(action.record.expiresAt.getTime() / 1000),
+					});
+					completion = { kind: 'unanswered' };
+					const reply = await login.decisions.decideDeviceLogin(request);
+					const parsed =
+						reply.kind === 'answered' ? deviceLoginDecisionSchema.safeParse(reply.decision) : null;
+					if (parsed === null || !parsed.success)
+						throw new APIError('SERVICE_UNAVAILABLE', { error: 'temporarily_unavailable' });
+					const decision = parsed.data;
+					completion = { kind: 'answered', decision };
+					if (decision.result === 'refused')
+						throw new APIError(
+							decision.reason.kind === 'requestConflict' ? 'CONFLICT' : 'FORBIDDEN',
+							{
+								error: 'access_denied',
+								reason: decision.reason,
+							},
+						);
+					if (claim.kind === 'approved' && claim.enrollmentId !== decision.enrollmentId)
+						throw new APIError('CONFLICT', { error: 'already_decided' });
+					const result: MachineDeviceApprovalResult = {
+						enrollmentId: decision.enrollmentId,
+						label: decision.label,
+						allowedWorkspaces: decision.allowedWorkspaces,
+					};
+					return context.json(result);
+				} finally {
+					if (claim.kind === 'claimed') {
+						const settled = await completeDeviceApprovalAttempt({
+							...scope,
+							attempt: claim.attempt,
+							completion,
+						});
+						if (
+							completion.kind === 'answered' &&
+							completion.decision.result === 'approved' &&
+							!settled
+						)
+							throw new APIError('CONFLICT', { error: 'already_decided' });
+					}
+				}
 			},
 		),
 		denyMachineDevice: createAuthEndpoint(
@@ -104,16 +132,16 @@ export function machineDeviceDecisionEndpoints(
 			{ ...shared, body: denyDeviceRequestSchema },
 			async (context): Promise<{ readonly success: true }> => {
 				const action = await requireDeviceDecision(context, login, 'deny');
-				if (
-					!(await recordDeviceCodeDecision({
-						openDatabase: login.openDatabase,
-						id: action.record.id,
-						approver: action.approver,
-						now: login.platform.clock.now(),
-						decision: { kind: 'deny' },
-					}))
-				)
-					throw new APIError('CONFLICT', { error: 'already_decided' });
+				const outcome = await recordDeviceDenial({
+					openDatabase: login.openDatabase,
+					id: action.record.id,
+					approver: action.approver,
+					now: login.platform.clock.now,
+				});
+				if (outcome !== 'denied')
+					throw new APIError('CONFLICT', {
+						error: outcome === 'already-deciding' ? 'already_deciding' : 'already_decided',
+					});
 				return context.json({ success: true });
 			},
 		),
@@ -138,6 +166,8 @@ async function requireDeviceDecision(
 			case 'notPermitted':
 			case 'secondFactorRequired':
 				throw new APIError('FORBIDDEN', { error: 'access_denied', reason: decision.reason });
+			case 'alreadyDeciding':
+				throw new APIError('CONFLICT', { error: 'already_deciding' });
 			case 'alreadyDecided':
 				throw new APIError('CONFLICT', { error: 'already_decided' });
 			case 'deviceNotVerified':

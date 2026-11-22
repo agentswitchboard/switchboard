@@ -33,6 +33,7 @@ const knownDeviceError = z.enum([
 	'unauthorized',
 	'access_denied',
 	'already_decided',
+	'already_deciding',
 	'device_not_verified',
 	'authorization_pending',
 	'slow_down',
