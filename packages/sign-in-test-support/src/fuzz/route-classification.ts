@@ -57,6 +57,19 @@ const reachableRouteGroups: readonly ReachableRouteGroup[] = [
 	},
 	{
 		method: 'GET',
+		paths: ['/me', '/people'],
+		exposure: ['signed-out', 'member', 'owner'],
+		requestParts: ['query'],
+		// Signed-in shell pages (sign-in-navigation.ts:92-122): the page for a person with a current
+		// organization (200), a step back to /sign-in or /owner-ready (303), a refusal for a person
+		// without the page's permission or for a request carrying an authorization header (403).
+		documentedAnswers: [200, 303, 403, 429],
+		disclosure: "Only the caller's own organization choices and the pages the current role allows.",
+		permittedRefusalEffects: ['none', 'expired-session-cleanup', 'cookie-delete'],
+		evidence: 'sign-in-navigation.ts:92-122; sign-in-navigation.host.e2e.test.ts',
+	},
+	{
+		method: 'GET',
 		paths: ['/api/auth/get-session', '/api/auth/list-accounts'],
 		exposure: ['signed-out', 'member', 'owner'],
 		requestParts: ['query'],

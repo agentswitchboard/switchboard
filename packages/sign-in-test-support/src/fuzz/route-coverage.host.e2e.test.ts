@@ -1,37 +1,16 @@
 import { afterAll, beforeAll, expect, it } from 'vitest';
 
-import { requestFamilies } from '#sign-in-test-support/fuzz/request-families/index';
 import {
-	routeClassification,
-	routeKey,
-	type RouteIdentity,
-} from '#sign-in-test-support/fuzz/route-classification';
+	actualOuterRoutes,
+	servedOuterRoutes,
+} from '#sign-in-test-support/fuzz/outer-handler-routes';
+import { requestFamilies } from '#sign-in-test-support/fuzz/request-families/index';
+import { routeClassification, routeKey } from '#sign-in-test-support/fuzz/route-classification';
 import { useControlledSignInClock } from '#sign-in-test-support/test-fixtures/controlled-node-test-clock';
 import { startLocalAuthHarness } from '#sign-in-test-support/test-fixtures/local-auth-harness';
 import { installedProviderEndpointInventory } from '#sign-in-test-support/test-fixtures/provider-endpoint-inventory';
 
 useControlledSignInClock();
-
-// Method identities for outer-owned entries. Source discovery independently checks the
-// paths and prefixes, including new branches, rather than trusting this list alone.
-const handlerRoutes: readonly RouteIdentity[] = [
-	{ method: 'GET', path: '/sign-in' },
-	{ method: 'GET', path: '/owner-ready' },
-	{ method: 'GET', path: '/organization-admin' },
-	{ method: 'GET', path: '/.well-known/oauth-authorization-server' },
-	{ method: 'GET', path: '/.well-known/openid-configuration' },
-	{ method: 'GET', path: '/api/auth/callback/google' },
-	{ method: 'GET', path: '/api/auth/callback/github' },
-	{ method: 'POST', path: '/api/auth/callback/google' },
-	{ method: 'POST', path: '/api/auth/callback/github' },
-	{ method: 'POST', path: '/api/auth/owner/bootstrap' },
-	{ method: 'POST', path: '/api/auth/organization-admin/create-workspace' },
-	{ method: 'POST', path: '/api/auth/organization-admin/workspace-lookup' },
-	{ method: 'POST', path: '/api/auth/organization-admin/change-records' },
-	{ method: 'POST', path: '/api/auth/organization-admin/v1/create-workspace' },
-	{ method: 'POST', path: '/api/auth/organization-admin/v1/workspace-lookup' },
-	{ method: 'POST', path: '/api/auth/organization-admin/v1/change-records' },
-];
 
 let harness: Awaited<ReturnType<typeof startLocalAuthHarness>>;
 beforeAll(async () => {
@@ -59,10 +38,32 @@ it('classifies exactly the installed provider and outer-handler routes, and give
 		{ endpointName: 'verifyJWT', serverOnly: true },
 		{ endpointName: 'viewBackupCodes', serverOnly: true },
 	]);
-	const installedKeys = new Set([...inventory.httpRoutes, ...handlerRoutes].map(routeKey));
 	const classificationKeys = routeClassification.map(routeKey);
 	expect(new Set(classificationKeys).size).toBe(classificationKeys.length);
-	expect([...installedKeys].toSorted()).toEqual(classificationKeys.toSorted());
+	const classified = new Set(classificationKeys);
+	const providerKeys = new Set(inventory.httpRoutes.map(routeKey));
+	// Every installed provider route is classified, and every classified route is installed or an
+	// outer pair the real route predicate admits (no stale row).
+	expect([...providerKeys].filter((key) => !classified.has(key))).toEqual([]);
+	const predicateAdmitted = new Set(
+		actualOuterRoutes(routeClassification.map((row) => row.path)).map(routeKey),
+	);
+	expect(
+		classificationKeys.filter((key) => !providerKeys.has(key) && !predicateAdmitted.has(key)),
+	).toEqual([]);
+	// Every pair the live outer handler serves is classified: a new page, or a new method on a
+	// known path, fails here. Each probe uses a fresh browser address, so no quota skews an answer.
+	let probe = 0;
+	const served = await servedOuterRoutes({
+		classifiedPaths: routeClassification.map((row) => row.path),
+		answer: async (route) => {
+			probe += 1;
+			harness.useBrowser(`route-probe-${probe}`);
+			const response = await harness.auth(route.path, { method: route.method, redirect: 'manual' });
+			return `${response.status} ${await response.text()}`;
+		},
+	});
+	expect(served.map(routeKey).filter((key) => !classified.has(key))).toEqual([]);
 	for (const route of inventory.httpRoutes) {
 		const row = routeClassification.find((candidate) => routeKey(candidate) === routeKey(route));
 		expect(row?.providerServerOnly).toBe(route.serverOnly);

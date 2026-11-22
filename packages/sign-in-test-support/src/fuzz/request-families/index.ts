@@ -41,6 +41,8 @@ import { requestFamily as jwksFamily } from './public-jwks';
 import { requestFamily as relayChangeRecordsFamily } from './relay-change-records';
 import { requestFamily as relayCreateWorkspaceFamily } from './relay-create-workspace';
 import { requestFamily as relayWorkspaceLookupFamily } from './relay-workspace-lookup';
+import { requestFamily as shellMeFamily } from './shell-me';
+import { requestFamily as shellPeopleFamily } from './shell-people';
 import { requestFamily as signInFamily } from './sign-in';
 import { requestFamily as signInSocialFamily } from './sign-in-social';
 import { requestFamily as switchboardSignOutFamily } from './switchboard-sign-out';
@@ -55,6 +57,8 @@ export type { GeneratedRequest, RequestFamily, RequestFamilyContext } from './re
 export const requestFamilies = [
 	signInFamily,
 	ownerReadyFamily,
+	shellMeFamily,
+	shellPeopleFamily,
 	organizationAdminPageFamily,
 	getSessionFamily,
 	listAccountsFamily,
