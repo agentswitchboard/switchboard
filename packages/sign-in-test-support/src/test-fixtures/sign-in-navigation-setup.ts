@@ -2,11 +2,16 @@ import { fileURLToPath } from 'node:url';
 
 import { member, passkey, session, twoFactor, user } from '@agent-collaboration/sign-in-core';
 import { and, eq } from 'drizzle-orm';
+import type { Request } from 'playwright';
 import { expect } from 'vitest';
 import { z } from 'zod';
 
 import { controlledSignInClock } from '#sign-in-test-support/test-fixtures/controlled-sign-in-clock';
 import { readCurrentBrowserSession } from '#sign-in-test-support/test-fixtures/current-browser-session';
+import {
+	createMePageRequestTracker,
+	type MePageRequestOutcome,
+} from '#sign-in-test-support/test-fixtures/me-page-request-tracker';
 import { loginThroughNativeOwnerCli } from '#sign-in-test-support/test-fixtures/native-cli-proof';
 import {
 	organizationBrowserCookie,
@@ -180,8 +185,79 @@ export async function observeNavigationReadiness(browser: NavigationBrowser): Pr
 		cookie: harness.cookie(),
 	});
 	await proof.navigate(`${harness.issuer}/owner-ready`);
-	await proof.page.getByRole('link', { name: 'Go to Me' }).click();
-	await proof.page.getByRole('heading', { name: 'Me', exact: true }).waitFor();
+	await followReadyLinkToMe(browser);
+}
+
+/** The requests the Me page's island must see end before the page is at rest. */
+const mePageTerminalRequestPaths = [
+	'/api/auth/passkey/list-user-passkeys',
+	'/api/auth/get-session',
+] as const;
+
+async function rejectWhenAborted<TValue>(
+	wait: Promise<TValue>,
+	signal: AbortSignal,
+): Promise<TValue> {
+	void wait.catch(() => undefined);
+	signal.throwIfAborted();
+	const aborted = Promise.withResolvers<never>();
+	const abort = (): void => aborted.reject(signal.reason);
+	signal.addEventListener('abort', abort, { once: true });
+	try {
+		return await Promise.race([wait, aborted.promise]);
+	} finally {
+		signal.removeEventListener('abort', abort);
+	}
+}
+
+/**
+ * Runs `reachMe`, which must end with the browser on the Me page, then waits for the requests
+ * that page's island issues to end. The Me heading is server-rendered, so it says nothing about
+ * them, and closing the harness rejects any request still open, so a journey must not go on or
+ * return before they have. Each request is bound to the document that issued it when it is
+ * issued, so a request of the page left behind that ends after Me has committed does not count.
+ */
+export async function awaitMePageRequestsAfter(
+	browser: NavigationBrowser,
+	reachMe: () => Promise<void>,
+): Promise<ReadonlyMap<string, MePageRequestOutcome>> {
+	const { harness, proof, signal } = browser;
+	const tracker = createMePageRequestTracker({
+		origin: new URL(harness.issuer).origin,
+		paths: mePageTerminalRequestPaths,
+	});
+	const issued = (request: Request): void =>
+		tracker.observeIssued(request, {
+			method: request.method(),
+			url: request.url(),
+			documentPathname: new URL(request.frame().url()).pathname,
+		});
+	const finished = (request: Request): void => tracker.observeTerminal(request, 'finished');
+	const failed = (request: Request): void => tracker.observeTerminal(request, 'failed');
+	proof.page.on('request', issued);
+	proof.page.on('requestfinished', finished);
+	proof.page.on('requestfailed', failed);
+	try {
+		await reachMe();
+		// Not the rendered rows: N4 makes more than the 10 passkey requests a minute that request class
+		// admits, so a late visit's list is a 429 and its skeleton never clears. The request being over,
+		// finished or failed after its headers, is the outcome this wait owns.
+		return await rejectWhenAborted(tracker.settled, signal);
+	} finally {
+		proof.page.off('request', issued);
+		proof.page.off('requestfinished', finished);
+		proof.page.off('requestfailed', failed);
+	}
+}
+
+export function followReadyLinkToMe(
+	browser: NavigationBrowser,
+): Promise<ReadonlyMap<string, MePageRequestOutcome>> {
+	const { proof } = browser;
+	return awaitMePageRequestsAfter(browser, async (): Promise<void> => {
+		await proof.page.getByRole('link', { name: 'Go to Me' }).click();
+		await proof.page.getByRole('heading', { name: 'Me', exact: true }).waitFor();
+	});
 }
 
 export async function observeNavigationCliContinuation(browser: NavigationBrowser): Promise<void> {
@@ -247,8 +323,7 @@ export async function observeNavigationFactors(browser: NavigationBrowser): Prom
 	await proof.afterNavigation('/owner-ready', () =>
 		proof.page.getByRole('button', { name: "I've saved my recovery codes" }).click(),
 	);
-	await proof.page.getByRole('link', { name: 'Go to Me' }).click();
-	await proof.page.getByRole('heading', { name: 'Me', exact: true }).waitFor();
+	await followReadyLinkToMe(browser);
 
 	await proof.addVirtualAuthenticator();
 	const registration = await proof.responseTo('/api/auth/passkey/verify-registration', () =>
@@ -265,7 +340,7 @@ export async function observeNavigationFactors(browser: NavigationBrowser): Prom
 		proof.page.getByRole('button', { name: 'Remove app before replacing it' }).click(),
 	);
 	expect(await rows()).toEqual([]);
-	await proof.page.getByRole('link', { name: 'Go to Me' }).click();
+	await followReadyLinkToMe(browser);
 	const enrollment = await proof.responseTo('/api/auth/two-factor/enable', () =>
 		proof.page.getByRole('button', { name: 'Set up replacement app' }).click(),
 	);
@@ -284,6 +359,5 @@ export async function observeNavigationFactors(browser: NavigationBrowser): Prom
 		proof.page.getByRole('button', { name: 'Confirm app', exact: true }).click(),
 	);
 	expect((await rows())[0]?.verified).toBe(true);
-	await proof.page.getByRole('link', { name: 'Go to Me' }).click();
-	await proof.page.getByRole('heading', { name: 'Me', exact: true }).waitFor();
+	await followReadyLinkToMe(browser);
 }

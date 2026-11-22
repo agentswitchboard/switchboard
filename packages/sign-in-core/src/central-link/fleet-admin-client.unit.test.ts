@@ -8,7 +8,11 @@ import {
 	fleetAdminResultSchemas,
 } from '#sign-in-core/central-link/fleet-admin-client';
 import { organizationChangeFixtures } from '#sign-in-core/central-link/generated/organization-change-fixtures';
-import type { FleetAdminRequest } from '#sign-in-core/organizations/fleet-admin-operation';
+import type { Uuid7 } from '#sign-in-core/contracts/sign-in-platform';
+import {
+	fleetAdminIntent,
+	type FleetAdminRequest,
+} from '#sign-in-core/organizations/fleet-admin-operation';
 
 const organizationId = '019a3dce-2000-7000-8000-000000000001';
 const create: FleetAdminRequest = {
@@ -394,6 +398,137 @@ it('reads a mixed page of every Central change kind and keeps the record vocabul
 	await expect(
 		read([{ ...base, kind: 'machineExpired', origin: { ...automatic, personId: organizationId } }]),
 	).resolves.toEqual({
+		kind: 'unknown',
+		reason: 'malformed-reply',
+	});
+});
+
+// One page in central's current producer shape: an older targeted record, an automatic expiry and
+// the named allowance record. The page carries no cursor; central's next page uses `after` = the
+// last record ID of the previous page.
+const mixedPageEnrolled = {
+	id: '019a3dce-2000-7000-8000-000000000011',
+	requestId: 'mixed-page-enrolled',
+	kind: 'machineEnrolled',
+	origin: { kind: 'person', personId: 'person-opaque-1', permissionChecked: 'machine:enroll' },
+	targetId: 'enrollment-opaque-1',
+	createdAtMillis: 1_800_000_000_001,
+};
+const mixedPageExpired = {
+	id: '019a3dce-2000-7000-8000-000000000012',
+	requestId: 'mixed-page-expired',
+	kind: 'machineExpired',
+	origin: { kind: 'automatic' },
+	targetId: 'enrollment-opaque-1',
+	createdAtMillis: 1_800_000_000_002,
+};
+const mixedPageAllowance = {
+	id: '019a3dce-2000-7000-8000-000000000013',
+	requestId: 'mixed-page-allowance',
+	kind: 'machineAllowanceChanged',
+	origin: { kind: 'person', personId: 'person-opaque-2', permissionChecked: 'machine:allow' },
+	machineId: '019a3dce-2000-7000-8000-000000000021',
+	workspaceId: '019a3dce-2000-7000-8000-000000000022',
+	state: 'withdrawn',
+	createdAtMillis: 1_800_000_000_003,
+};
+const mixedPage = [mixedPageEnrolled, mixedPageExpired, mixedPageAllowance];
+
+async function readMixedPage(
+	replyRecords: readonly unknown[],
+): Promise<
+	Awaited<ReturnType<ReturnType<typeof createFleetAdminLinkClient>['sendFleetAdminRequest']>>
+> {
+	const transport = scripted(async () =>
+		Response.json({ result: 'records', records: replyRecords }),
+	);
+	return createFleetAdminLinkClient(transport).sendFleetAdminRequest({
+		operation: operations.ReadChangeRecords,
+		accessToken: 'test-token',
+		proof: 'test-proof',
+	});
+}
+
+it('mixed page: decodes a targeted record, an automatic expiry and the allowance record in order with branded IDs', async (): Promise<void> => {
+	// Act
+	const answer = await readMixedPage(mixedPage);
+	// Assert
+	expect(answer).toEqual({ kind: 'answered', result: { result: 'records', records: mixedPage } });
+	if (answer.kind !== 'answered' || answer.result.result !== 'records') {
+		throw new Error('Mixed page was not decoded as records');
+	}
+	const [enrolled, expired, allowance] = answer.result.records;
+	if (enrolled === undefined || expired === undefined) throw new Error('Page is missing records');
+	if (allowance?.kind !== 'machineAllowanceChanged') {
+		throw new Error('Third record is not the allowance record');
+	}
+	// These annotations compile only while the decoder brands every ID as Uuid7.
+	const brandedIds: readonly Uuid7[] = [
+		enrolled.id,
+		expired.id,
+		allowance.id,
+		allowance.machineId,
+		allowance.workspaceId,
+	];
+	expect(brandedIds).toEqual([
+		mixedPageEnrolled.id,
+		mixedPageExpired.id,
+		mixedPageAllowance.id,
+		mixedPageAllowance.machineId,
+		mixedPageAllowance.workspaceId,
+	]);
+	expect(answer.result.records.map((record) => record.kind)).toEqual([
+		'machineEnrolled',
+		'machineExpired',
+		'machineAllowanceChanged',
+	]);
+});
+
+it('mixed page: the next ReadChangeRecords request carries the last record ID as after, in the body and the signed intent', async (): Promise<void> => {
+	// Arrange: the last decoded record's id is the next page's cursor.
+	const answer = await readMixedPage(mixedPage);
+	if (answer.kind !== 'answered' || answer.result.result !== 'records') {
+		throw new Error('Mixed page was not decoded as records');
+	}
+	const lastRecord = answer.result.records.at(-1);
+	if (lastRecord === undefined) throw new Error('Mixed page decoded empty');
+	const next: FleetAdminRequest = {
+		operation: 'ReadChangeRecords',
+		organizationId,
+		after: lastRecord.id,
+		limit: 10,
+	};
+	const transport = scripted(async () => new Response(null, { status: 503 }));
+	// Act
+	await createFleetAdminLinkClient(transport).sendFleetAdminRequest({
+		operation: next,
+		accessToken: 'token',
+		proof: 'proof',
+	});
+	// Assert
+	const request = transport.sent[0];
+	if (request === undefined) throw new Error('No admin request sent');
+	expect(new URL(request.url).pathname).toBe('/organization-admin/v1/change-records');
+	expect(await request.text()).toBe(
+		`{"organizationId":"${organizationId}","after":"019a3dce-2000-7000-8000-000000000013","limit":10}`,
+	);
+	expect(fleetAdminIntent(next)).toEqual({
+		v: 1,
+		operation: 'ReadChangeRecords',
+		organization: organizationId,
+		target: organizationId,
+		operationId: null,
+		params: { after: '019a3dce-2000-7000-8000-000000000013', limit: 10 },
+	});
+});
+
+it('mixed page: one unknown kind makes the whole page malformed and returns no partial list', async (): Promise<void> => {
+	const page = [
+		mixedPageEnrolled,
+		{ ...mixedPageExpired, kind: 'unrecognized-change-kind' },
+		mixedPageAllowance,
+	];
+	await expect(readMixedPage(page)).resolves.toEqual({
 		kind: 'unknown',
 		reason: 'malformed-reply',
 	});
