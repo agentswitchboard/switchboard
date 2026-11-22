@@ -362,15 +362,15 @@ export function createControlledCentralAdmin(props: {
 						workspaces.find((workspace) => workspace.workspaceId === body.workspaceId) ?? null,
 				};
 			case 'ListWorkspaces': {
-				const { after, limit } = body;
+				const { after = null, limit = 100 } = body;
 				const remaining = workspaces
-					.filter((workspace) => after === undefined || workspace.workspaceId > after)
+					.filter((workspace) => after === null || workspace.workspaceId > after)
 					.toSorted((left, right) => left.workspaceId.localeCompare(right.workspaceId));
 				const page = remaining.slice(0, limit);
 				return {
 					result: 'workspaces',
 					workspaces: page,
-					nextAfter: remaining.length > limit ? (page.at(-1)?.workspaceId ?? null) : null,
+					next: remaining.length > limit ? (page.at(-1)?.workspaceId ?? null) : null,
 				};
 			}
 			case 'ReadChangeRecords': {
@@ -421,7 +421,7 @@ export function createControlledCentralAdmin(props: {
 					bodySha256,
 					request: null,
 				});
-				return new Response(null, { status: 400 });
+				return new Response(null, { status: route === 'ListWorkspaces' ? 401 : 400 });
 			}
 			const verified = await verify(request, route, parsed.data);
 			const facts = {

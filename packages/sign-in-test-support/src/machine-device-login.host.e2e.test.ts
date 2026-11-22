@@ -189,7 +189,7 @@ it('the real host approves one machine ID, presents active workspaces and releas
 							state: 'archived',
 						},
 					],
-					nextAfter: enrollmentId,
+					next: enrollmentId,
 				};
 			});
 			harness.centralAdmin.scriptNextAnswer('ListWorkspaces', (request) => {
@@ -202,7 +202,7 @@ it('the real host approves one machine ID, presents active workspaces and releas
 				return {
 					result: 'workspaces',
 					workspaces: [{ workspaceId, name: 'Active workspace', description: '', state: 'active' }],
-					nextAfter: null,
+					next: null,
 				};
 			});
 		}

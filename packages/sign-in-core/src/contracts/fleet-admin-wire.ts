@@ -57,24 +57,23 @@ export const fleetAdminRefusedSchema = z.strictObject({
 	result: z.literal('refused'),
 	reason: fleetAdminRefusalReasonSchema,
 });
-/** Provisional until Central DEL-08 delivers its exact request, signed intent and reply. */
+/** Provisional mirror of Central 054c8fcc4 until DEL-08 merges and generated types replace it. */
 export const listWorkspacesPath = '/organization-admin/v1/list-workspaces';
 export const listWorkspacesPageLimit = 100;
 export const listWorkspacesReplySchema = z.discriminatedUnion('result', [
 	z.strictObject({
 		result: z.literal('workspaces'),
 		workspaces: z.array(fleetAdminWorkspaceSchema).max(listWorkspacesPageLimit),
-		nextAfter: fleetAdminWorkspaceSchema.shape.workspaceId.nullable(),
+		next: fleetAdminWorkspaceSchema.shape.workspaceId.nullable(),
 	}),
 	fleetAdminRefusedSchema,
 ]);
 
-/** Provisional until Central DEL-08 delivers its exact request, signed intent and reply. */
 export const listWorkspacesRequestSchema = z.strictObject({
 	operation: z.literal('ListWorkspaces'),
 	organizationId: centralUuid7Schema,
-	after: centralUuid7Schema.optional(),
-	limit: z.number().int().min(1).max(listWorkspacesPageLimit),
+	after: centralUuid7Schema.nullish(),
+	limit: z.number().int().min(1).max(listWorkspacesPageLimit).optional(),
 });
 type ListWorkspacesRequest = z.infer<typeof listWorkspacesRequestSchema>;
 
@@ -82,7 +81,7 @@ export function listWorkspacesRequestBody(request: ListWorkspacesRequest): Canon
 	return {
 		organizationId: request.organizationId,
 		...(request.after === undefined ? {} : { after: request.after }),
-		limit: request.limit,
+		...(request.limit === undefined ? {} : { limit: request.limit }),
 	};
 }
 
@@ -93,6 +92,6 @@ export function listWorkspacesIntent(request: ListWorkspacesRequest): CanonicalJ
 		organization: request.organizationId,
 		target: request.organizationId,
 		operationId: null,
-		params: { after: request.after ?? null, limit: request.limit },
+		params: { after: request.after ?? null, limit: request.limit ?? listWorkspacesPageLimit },
 	};
 }

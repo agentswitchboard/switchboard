@@ -25,9 +25,9 @@ it('follows the cursor and returns the entire checked workspace list', async ():
 			? {
 					result: 'workspaces',
 					workspaces: [firstWorkspace],
-					nextAfter: firstWorkspace.workspaceId,
+					next: firstWorkspace.workspaceId,
 				}
-			: { result: 'workspaces', workspaces: [secondWorkspace], nextAfter: null };
+			: { result: 'workspaces', workspaces: [secondWorkspace], next: null };
 	});
 	expect(calls).toEqual([undefined, firstWorkspace.workspaceId]);
 	expect(result).toEqual({ result: 'workspaces', workspaces: [firstWorkspace, secondWorkspace] });
@@ -37,7 +37,7 @@ it('discards a partial list when a later page repeats the cursor or refuses', as
 	const firstPage = {
 		result: 'workspaces',
 		workspaces: [firstWorkspace],
-		nextAfter: firstWorkspace.workspaceId,
+		next: firstWorkspace.workspaceId,
 	} as const;
 	const repeated = await collectWorkspacePages(async () => ({
 		...firstPage,

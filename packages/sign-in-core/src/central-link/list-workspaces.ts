@@ -37,8 +37,8 @@ export async function collectWorkspacePages(
 			previous = workspace.workspaceId;
 			workspaces.push(workspace);
 		}
-		if (page.nextAfter === null) return { result: 'workspaces', workspaces };
-		if (page.nextAfter !== previous || page.nextAfter === after) return { result: 'unavailable' };
-		after = page.nextAfter;
+		if (page.next === null) return { result: 'workspaces', workspaces };
+		if (page.next !== previous || page.next === after) return { result: 'unavailable' };
+		after = page.next;
 	}
 }

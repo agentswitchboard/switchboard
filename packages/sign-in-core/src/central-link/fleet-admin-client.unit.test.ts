@@ -84,8 +84,8 @@ const routesForResult: Readonly<Record<string, readonly FleetAdminRequest['opera
 	refused: ['CreateWorkspace', 'WorkspaceLookup', 'ListWorkspaces', 'ReadChangeRecords'],
 };
 
-it('lists an organization using only its ID and parses the closed WorkspaceLookup row shape', async (): Promise<void> => {
-	const payload = { result: 'workspaces', workspaces: [workspace], nextAfter: null };
+it('parses a terminal workspace page containing the shared WorkspaceLookup row', async (): Promise<void> => {
+	const payload = { result: 'workspaces', workspaces: [workspace], next: null };
 	const transport = scripted(async () => Response.json(payload));
 	const client = createFleetAdminLinkClient(transport);
 	const answer = await client.sendFleetAdminRequest({
@@ -97,6 +97,17 @@ it('lists an organization using only its ID and parses the closed WorkspaceLooku
 	const [request] = transport.sent;
 	expect(request?.url).toBe('http://central.invalid/organization-admin/v1/list-workspaces');
 	expect(await request?.json()).toEqual({ organizationId, limit: 100 });
+});
+
+it('requires next on a Central workspace page', async (): Promise<void> => {
+	const transport = scripted(async () => Response.json({ result: 'workspaces', workspaces: [] }));
+	await expect(
+		createFleetAdminLinkClient(transport).sendFleetAdminRequest({
+			operation: operations.ListWorkspaces,
+			accessToken: 'token',
+			proof: 'proof',
+		}),
+	).resolves.toEqual({ kind: 'unknown', reason: 'malformed-reply' });
 });
 async function producerResults(kind: 'fixtures' | 'negatives'): Promise<readonly unknown[]> {
 	return z
