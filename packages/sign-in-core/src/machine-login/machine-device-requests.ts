@@ -2,7 +2,10 @@ import { z } from 'zod';
 
 import { uuid7Schema } from '#sign-in-core/contracts/sign-in-platform';
 import { parseDeviceUserCode } from '#sign-in-core/machine-login/device-user-code';
-import { machineLabelSchema } from '#sign-in-core/machine-login/machine-login-contracts';
+import {
+	machineLabelSchema,
+	revokeMachineEnrollmentRequestSchema,
+} from '#sign-in-core/machine-login/machine-login-contracts';
 
 export const machineDeviceFields = {
 	machine_id: uuid7Schema,
@@ -73,6 +76,7 @@ export async function machineDeviceRequestIsValid(
 	machineToken: boolean,
 ): Promise<boolean> {
 	const { pathname, searchParams } = new URL(request.url);
+	if (request.method === 'POST' && searchParams.size !== 0) return false;
 	switch (pathname) {
 		case '/.well-known/fleet-login':
 			return searchParams.size === 0;
@@ -88,6 +92,11 @@ export async function machineDeviceRequestIsValid(
 			return await strictBody(request, denyDeviceRequestSchema);
 		case '/api/auth/oauth2/revoke':
 			return await strictBody(request, machineRevocationRequestSchema);
+		case revokeMachineEnrollmentPublicPath:
+			return (
+				requestMediaType(request) === 'application/json' &&
+				(await strictBody(request, revokeMachineEnrollmentRequestSchema))
+			);
 		case '/api/auth/oauth2/token':
 			return !machineToken || (await strictBody(request, machineTokenRequestSchema));
 		default:
@@ -103,8 +112,12 @@ function strictParameters(parameters: URLSearchParams, schema: z.ZodType): boole
 	);
 }
 
+function requestMediaType(request: Request): string | undefined {
+	return request.headers.get('content-type')?.split(';')[0]?.trim().toLowerCase();
+}
+
 async function strictBody(request: Request, schema: z.ZodType): Promise<boolean> {
-	const contentType = request.headers.get('content-type')?.split(';')[0]?.trim().toLowerCase();
+	const contentType = requestMediaType(request);
 	try {
 		if (contentType === 'application/json') {
 			const body: unknown = await request.clone().json();

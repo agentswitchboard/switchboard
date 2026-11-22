@@ -248,7 +248,8 @@ export function createSignInHttpHandler(
 					signIn: (inner) => respondToSignInRequest(inner, createProviderRequestState()),
 				});
 			}
-			if (machineLogin !== undefined && url.pathname === revokeMachineEnrollmentPublicPath)
+			if (machineLogin !== undefined && url.pathname === revokeMachineEnrollmentPublicPath) {
+				if (!(await machineDeviceRequestIsValid(request, false))) return invalidRequestResponse();
 				return await forwardMachineEnrollmentRevocation({
 					request,
 					configuration: configuration.configuration,
@@ -257,6 +258,7 @@ export function createSignInHttpHandler(
 					signIn: (inner) => respondToSignInRequest(inner, createProviderRequestState()),
 					runFleetCall,
 				});
+			}
 			passkeyAuditPending = url.pathname === '/api/auth/passkey/verify-authentication';
 			if (isFleetAdminRelayRoute(url.pathname))
 				return await relayFleetAdminRequest({
