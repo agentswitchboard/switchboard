@@ -121,7 +121,10 @@ function mutateFields(
 	const originalValue = valid[step.field];
 	const value =
 		step.mutation === 'wrong-type'
-			? null
+			? // null is the wrong type of any value but null, whose wrong type is an array.
+				originalValue === null || originalValue === undefined
+				? ['wrong-type']
+				: null
 			: typeof originalValue === 'number'
 				? step.mutation === 'near-valid'
 					? -1
@@ -208,10 +211,14 @@ export function queryFamily(path: string, validFields: FieldsForContext): Reques
 	};
 }
 
+/**
+ * A form route that also accepts JSON plans field mutations under both encodings (the reach
+ * random generation had before the coverage pass), and a malformed JSON body as a transport fault.
+ */
 function formSteps(valid: Fields, allowJson: boolean): readonly VariantStep[] {
 	return [
 		...fieldSteps(valid, 'form'),
-		...(allowJson ? [transportStep('json'), transportStep('malformed')] : []),
+		...(allowJson ? [...fieldSteps(valid, 'json'), transportStep('malformed')] : []),
 		transportStep('wrong-content-type'),
 	];
 }
