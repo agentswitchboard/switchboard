@@ -1,9 +1,10 @@
 import ts from 'typescript';
-import { expect, it } from 'vitest';
+import { describe, expect, it } from 'vitest';
 
 import {
 	discoverHandlerRoutes,
 	discoverRoutesInSource,
+	type OuterRouteIdentity,
 	probedHttpMethods,
 	reachableOuterRoutes,
 	unclassifiedHandlerRoutes,
@@ -12,9 +13,18 @@ import {
 import {
 	actualOuterRoutes,
 	discoverOuterHandlerRoutes,
+	servedOuterRoutes,
 } from '#sign-in-test-support/fuzz/outer-handler-routes';
 import { requestFamilies } from '#sign-in-test-support/fuzz/request-families/index';
 import { routeClassification, routeKey } from '#sign-in-test-support/fuzz/route-classification';
+
+function requestHandlerSourceName(program: ts.Program): string {
+	const source = program.getSourceFile(
+		'packages/sign-in-core/src/response-release/sign-in-request-handler.ts',
+	);
+	if (source === undefined) throw new Error('Request handler source not found');
+	return source.fileName;
+}
 
 it('discovers pathname comparisons, route tables and prefixes', () => {
 	const routes = discoverHandlerRoutes(
@@ -51,7 +61,9 @@ it('resolves the actual handler imported literal route through the compiler', ()
 		'packages/sign-in-core/src/better-auth/sign-in-http-handler.ts',
 	);
 	if (source === undefined) throw new Error('Sign-in HTTP handler source not found');
-	const routes = discoverRoutesInSource(source, program.getTypeChecker());
+	const routes = discoverRoutesInSource(source, program.getTypeChecker(), {
+		scannedFiles: [source.fileName, requestHandlerSourceName(program)],
+	});
 	expect(routes.paths).toContain('/organization-admin');
 });
 
@@ -70,7 +82,12 @@ it('covers every pathname branch and prefix in the actual outer handlers', () =>
 	]) {
 		const source = program.getSourceFile(file);
 		if (source === undefined) throw new Error(`Handler source not found: ${file}`);
-		const discovered = discoverRoutesInSource(source, program.getTypeChecker());
+		const discovered = discoverRoutesInSource(source, program.getTypeChecker(), {
+			scannedFiles: [
+				'packages/sign-in-core/src/response-release/sign-in-request-handler.ts',
+				'packages/sign-in-core/src/better-auth/sign-in-http-handler.ts',
+			].map((name) => program.getSourceFile(name)?.fileName ?? name),
+		});
 		expect(unclassifiedHandlerRoutes(discovered, classifiedPaths)).toEqual({
 			paths: [],
 			prefixes: [],
@@ -178,4 +195,55 @@ it('a new HTTP method on a known path, or a new shell page, is unclassified unti
 	expect(
 		unclassifiedOuterRoutes(reachableOuterRoutes(['/me', '/billing'], withPage), classified),
 	).toEqual([{ method: 'GET', path: '/billing' }]);
+});
+
+describe('B1 closure: effective method dispatch and unsupported predicate forms', (): void => {
+	it('fails closed on a route predicate form it cannot read', (): void => {
+		const files: Record<string, string> = {
+			'/predicate.ts':
+				'export function isKnown(pathname: string): boolean { return pathname.length > 3 && pathname !== computed(); }\nfunction computed(): string { return "/a"; }',
+			'/handler.ts':
+				"import { isKnown } from './predicate';\nexport function handle(pathname: string): boolean { return isKnown(pathname); }",
+		};
+		const host = ts.createCompilerHost({ noLib: true });
+		host.getSourceFile = (name: string): ts.SourceFile | undefined =>
+			files[name] === undefined
+				? undefined
+				: ts.createSourceFile(name, files[name], ts.ScriptTarget.Latest, true);
+		host.fileExists = (name: string): boolean => files[name] !== undefined;
+		host.readFile = (name: string): string | undefined => files[name];
+		const program = ts.createProgram(
+			['/handler.ts', '/predicate.ts'],
+			{ noLib: true, module: ts.ModuleKind.ESNext },
+			host,
+		);
+		const source = program.getSourceFile('/handler.ts');
+		if (source === undefined) throw new Error('handler missing');
+		expect(() =>
+			discoverRoutesInSource(source, program.getTypeChecker(), { scannedFiles: ['/handler.ts'] }),
+		).toThrow(/Unsupported route predicate form/);
+	});
+
+	it('discovers a method the unauthenticated plain probe cannot tell from a refusal (the relay POSTs)', async (): Promise<void> => {
+		// The relay refuses a non-POST and a POST that lacks an origin with the same 403, and only a
+		// well-formed POST reaches its DPoP check (401).
+		const relayLike = async (
+			route: OuterRouteIdentity,
+			init: RequestInit | undefined,
+		): Promise<string> => {
+			const headers = new Headers(init?.headers);
+			if (route.method !== 'POST' || !headers.has('origin') || !headers.has('content-type'))
+				return '403 {"error":"not-allowed"}';
+			return '401 {"error":"dpop-required"}';
+		};
+		const served = await servedOuterRoutes({
+			classifiedPaths: ['/api/auth/organization-admin/v1/create-workspace'],
+			answer: relayLike,
+			issuerOrigin: 'https://issuer.example.invalid',
+			isPublicRoute: (pathname) => pathname === '/api/auth/organization-admin/v1/create-workspace',
+		});
+		expect(served).toEqual([
+			{ method: 'POST', path: '/api/auth/organization-admin/v1/create-workspace' },
+		]);
+	});
 });

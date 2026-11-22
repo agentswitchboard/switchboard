@@ -78,12 +78,45 @@ function pathsOfRouteTable(table: ts.Expression, checker: ts.TypeChecker): reado
 	});
 }
 
+/** The string-literal keys of a const object literal (`as const` and `satisfies` allowed). */
+function keysOfRouteObject(table: ts.Expression, checker: ts.TypeChecker): readonly string[] {
+	const declaration = resolveDeclaration(table, checker);
+	const initializer =
+		declaration !== undefined && ts.isVariableDeclaration(declaration)
+			? declaration.initializer
+			: undefined;
+	const object = initializer === undefined ? undefined : unwrapExpression(initializer);
+	if (object === undefined || !ts.isObjectLiteralExpression(object))
+		throw new Error('Non-literal route object behind a route predicate');
+	return object.properties.map((property) => {
+		const name = ts.isPropertyAssignment(property) ? property.name : undefined;
+		if (name === undefined || !(ts.isStringLiteral(name) || ts.isIdentifier(name)))
+			throw new Error('Non-literal key in a route object behind a route predicate');
+		return name.text;
+	});
+}
+
+export interface DiscoveryOptions {
+	/**
+	 * The files being scanned (as the program names them). A predicate declared in one of them is
+	 * understood because its own comparisons are scanned; one declared elsewhere must have a form this
+	 * scanner can follow (a route table's `.some`, or `Object.hasOwn(table, pathname)`) or the scan fails.
+	 */
+	readonly scannedFiles?: readonly string[];
+}
+
 /**
  * A call such as `isSignedInNavigationPath(pathname)` hides its routes in a table: its body is
- * `table.some((route) => route.path === pathname)`. Follow it to the table. Predicates of any
- * other shape are ignored (their own file is scanned where it is a handler).
+ * `table.some((route) => route.path === pathname)`, and `isFleetAdminRelayRoute(pathname)` is
+ * `Object.hasOwn(table, pathname)`. Follow either to the table. A predicate declared in a scanned
+ * file is read where it is declared. Any other predicate form is unsupported and fails the scan,
+ * never silently ignored.
  */
-function pathsBehindPredicate(call: ts.CallExpression, checker: ts.TypeChecker): readonly string[] {
+function pathsBehindPredicate(
+	call: ts.CallExpression,
+	checker: ts.TypeChecker,
+	options: DiscoveryOptions,
+): readonly string[] {
 	if (!ts.isIdentifier(call.expression) || !call.arguments.some(isPathname)) return [];
 	const declaration = resolveDeclaration(call.expression, checker);
 	if (
@@ -92,7 +125,9 @@ function pathsBehindPredicate(call: ts.CallExpression, checker: ts.TypeChecker):
 		declaration.body === undefined
 	)
 		return [];
+	if (options.scannedFiles?.includes(declaration.getSourceFile().fileName) === true) return [];
 	const found: string[] = [];
+	let followed = false;
 	function scan(node: ts.Node): void {
 		if (
 			ts.isCallExpression(node) &&
@@ -104,11 +139,31 @@ function pathsBehindPredicate(call: ts.CallExpression, checker: ts.TypeChecker):
 				callback !== undefined &&
 				(ts.isArrowFunction(callback) || ts.isFunctionExpression(callback)) &&
 				JSON.stringify(callback.body.getText()).includes('.path');
-			if (comparesPath) found.push(...pathsOfRouteTable(node.expression.expression, checker));
+			if (comparesPath) {
+				followed = true;
+				found.push(...pathsOfRouteTable(node.expression.expression, checker));
+			}
+		}
+		if (
+			ts.isCallExpression(node) &&
+			ts.isPropertyAccessExpression(node.expression) &&
+			node.expression.name.text === 'hasOwn' &&
+			ts.isIdentifier(node.expression.expression) &&
+			node.expression.expression.text === 'Object' &&
+			node.arguments[0] !== undefined
+		) {
+			followed = true;
+			found.push(...keysOfRouteObject(node.arguments[0], checker));
 		}
 		ts.forEachChild(node, scan);
 	}
 	scan(declaration.body);
+	if (!followed) {
+		const at = call.getSourceFile().getLineAndCharacterOfPosition(call.getStart());
+		throw new Error(
+			`Unsupported route predicate form: ${call.expression.text}(...) at ${call.getSourceFile().fileName}:${at.line + 1}`,
+		);
+	}
 	return found;
 }
 
@@ -151,6 +206,7 @@ export function discoverHandlerRoutes(
 export function discoverRoutesInSource(
 	source: ts.SourceFile,
 	checker?: ts.TypeChecker,
+	options: DiscoveryOptions = {},
 ): DiscoveredHandlerRoutes {
 	const fileName = source.fileName;
 	const paths = new Set<string>();
@@ -175,7 +231,7 @@ export function discoverRoutesInSource(
 			if (isPathname(node.right)) paths.add(requireLiteral(node.left, source, checker));
 		}
 		if (ts.isCallExpression(node) && checker !== undefined)
-			for (const path of pathsBehindPredicate(node, checker)) paths.add(path);
+			for (const path of pathsBehindPredicate(node, checker, options)) paths.add(path);
 		if (ts.isCallExpression(node) && ts.isPropertyAccessExpression(node.expression)) {
 			const { expression, name } = node.expression;
 			if (name.text === 'startsWith' && isPathname(expression)) {

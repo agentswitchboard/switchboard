@@ -23,10 +23,17 @@ export function discoverOuterHandlerRoutes(): readonly DiscoveredHandlerRoutes[]
 		throw new Error(ts.flattenDiagnosticMessageText(config.error.messageText, '\n'));
 	const parsed = ts.parseJsonConfigFileContent(config.config, ts.sys, 'packages/sign-in-core');
 	const program = ts.createProgram(parsed.fileNames, parsed.options);
+	const scannedFileNames = outerHandlerFiles.map((file) => {
+		const source = program.getSourceFile(file);
+		if (source === undefined) throw new Error(`Handler source not found: ${file}`);
+		return source.fileName;
+	});
 	return outerHandlerFiles.map((file) => {
 		const source = program.getSourceFile(file);
 		if (source === undefined) throw new Error(`Handler source not found: ${file}`);
-		return discoverRoutesInSource(source, program.getTypeChecker());
+		return discoverRoutesInSource(source, program.getTypeChecker(), {
+			scannedFiles: scannedFileNames,
+		});
 	});
 }
 
@@ -41,20 +48,43 @@ export function actualOuterRoutes(
 }
 
 /**
+ * The request a method is probed with: a well-formed one of its kind (a body-carrying method gets a
+ * JSON body, a content type and the issuer's origin), so a route that refuses a plain request the
+ * same way for every method (the relay answers 403 to a non-POST and to a POST without an origin)
+ * still answers differently once a real POST of that kind arrives.
+ */
+export function outerProbeInit(method: string, issuerOrigin: string): RequestInit {
+	return ['POST', 'PUT', 'PATCH'].includes(method)
+		? {
+				method,
+				headers: { 'content-type': 'application/json', origin: issuerOrigin },
+				body: '{}',
+			}
+		: { method };
+}
+
+/**
  * The pairs the outer handler serves. Where the real predicate admits a path under only some
  * methods, those pairs are exact. Where it admits a path under every method (the handler decides
- * downstream), each method is asked of the live host and compared with the answer to a method that
- * is not served on that path: a pair that answers differently is served (a page, a redirect, an
- * auth or input refusal), a pair that answers alike is not a route. PUT is the reference, DELETE
- * the reference for PUT itself; if both were served alike the pair would be missed, so the unit
- * proof pins what a served method looks like.
+ * downstream), each method is asked of the live host with a well-formed request of its kind and
+ * compared with the answer to a method that is not served on that path: a pair that answers
+ * differently is served, a pair that answers alike is not a route. PUT is the reference, PATCH the
+ * reference for PUT itself.
  */
 export async function servedOuterRoutes(props: {
 	readonly classifiedPaths: readonly string[];
-	/** The answer (status and body) of the live host to a method and path. */
-	readonly answer: (route: OuterRouteIdentity) => Promise<string>;
+	/** The answer (status and body) of the live host to a method and path, asked with this request. */
+	readonly answer: (route: OuterRouteIdentity, init: RequestInit) => Promise<string>;
+	readonly issuerOrigin: string;
+	/** The route predicate asked; the real one unless a unit test injects another. */
+	readonly isPublicRoute?: (pathname: string, method: string) => boolean;
 }): Promise<readonly OuterRouteIdentity[]> {
-	const admitted = actualOuterRoutes(props.classifiedPaths);
+	const admitted = reachableOuterRoutes(
+		[...discoverOuterHandlerRoutes().flatMap((routes) => routes.paths), ...props.classifiedPaths],
+		props.isPublicRoute ?? isPublicSignInRoute,
+	);
+	const ask = (route: OuterRouteIdentity): Promise<string> =>
+		props.answer(route, outerProbeInit(route.method, props.issuerOrigin));
 	const served: OuterRouteIdentity[] = [];
 	for (const path of new Set(admitted.map((route) => route.path))) {
 		const pairs = admitted.filter((route) => route.path === path);
@@ -62,12 +92,55 @@ export async function servedOuterRoutes(props: {
 			served.push(...pairs);
 			continue;
 		}
-		const reference = await props.answer({ method: 'PUT', path });
-		const secondReference = await props.answer({ method: 'DELETE', path });
+		const reference = await ask({ method: 'PUT', path });
+		const secondReference = await ask({ method: 'PATCH', path });
 		for (const route of pairs) {
 			const against = route.method === 'PUT' ? secondReference : reference;
-			if ((await props.answer(route)) !== against) served.push(route);
+			if ((await ask(route)) !== against) served.push(route);
 		}
 	}
 	return served;
+}
+
+/**
+ * For every path the predicate admits under every method, the methods the live host serves must be
+ * exactly the methods the classification names (a classified method that is not served is stale, a
+ * served method that is not classified is missing), except a documented admitted-but-unserved row.
+ */
+export function ambiguousMethodMismatches(props: {
+	readonly served: readonly OuterRouteIdentity[];
+	readonly classification: readonly {
+		readonly method: string;
+		readonly path: string;
+		readonly documentedAnswers: readonly number[];
+	}[];
+	readonly admitted: readonly OuterRouteIdentity[];
+}): readonly string[] {
+	const ambiguousPaths = new Set(
+		[...new Set(props.admitted.map((route) => route.path))].filter(
+			(path) =>
+				props.admitted.filter((route) => route.path === path).length === probedHttpMethods.length,
+		),
+	);
+	const mismatches: string[] = [];
+	for (const path of ambiguousPaths) {
+		const servedMethods = new Set(
+			props.served.filter((route) => route.path === path).map((route) => route.method),
+		);
+		const classifiedMethods = new Set(
+			props.classification
+				.filter(
+					(row) =>
+						row.path === path &&
+						!row.documentedAnswers.every((status) => status === 404 || status === 429),
+				)
+				.map((row) => row.method),
+		);
+		for (const method of servedMethods)
+			if (!classifiedMethods.has(method))
+				mismatches.push(`${method} ${path}: served, not classified`);
+		for (const method of classifiedMethods)
+			if (!servedMethods.has(method)) mismatches.push(`${method} ${path}: classified, not served`);
+	}
+	return mismatches;
 }

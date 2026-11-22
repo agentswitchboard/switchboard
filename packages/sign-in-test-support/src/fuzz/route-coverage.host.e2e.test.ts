@@ -2,6 +2,7 @@ import { afterAll, beforeAll, expect, it } from 'vitest';
 
 import {
 	actualOuterRoutes,
+	ambiguousMethodMismatches,
 	servedOuterRoutes,
 } from '#sign-in-test-support/fuzz/outer-handler-routes';
 import { requestFamilies } from '#sign-in-test-support/fuzz/request-families/index';
@@ -51,19 +52,44 @@ it('classifies exactly the installed provider and outer-handler routes, and give
 	expect(
 		classificationKeys.filter((key) => !providerKeys.has(key) && !predicateAdmitted.has(key)),
 	).toEqual([]);
-	// Every pair the live outer handler serves is classified: a new page, or a new method on a
-	// known path, fails here. Each probe uses a fresh browser address, so no quota skews an answer.
+	// Every pair the live outer handler serves is classified, and every classified method of a path
+	// admitted under every method is served: a new page, a new method on a known path, a stale method
+	// or a method the plain probe cannot tell from a refusal all fail here. Each probe is a well-formed
+	// request of its kind from a fresh browser address, so no quota skews an answer.
 	let probe = 0;
+	const classifiedPaths = routeClassification.map((row) => row.path);
 	const served = await servedOuterRoutes({
-		classifiedPaths: routeClassification.map((row) => row.path),
-		answer: async (route) => {
+		classifiedPaths,
+		issuerOrigin: new URL(harness.issuer).origin,
+		answer: async (route, init) => {
 			probe += 1;
 			harness.useBrowser(`route-probe-${probe}`);
-			const response = await harness.auth(route.path, { method: route.method, redirect: 'manual' });
+			// No cookie from an earlier probe (the relay refuses any cookie), and a fresh captcha token for
+			// the routes that demand one before they look at the method.
+			harness.clearBrowserSession();
+			const response = await harness.auth(route.path, {
+				...init,
+				headers: {
+					...Object.fromEntries(new Headers(init.headers)),
+					'x-captcha-response': harness.turnstile.issueToken({
+						action: 'sign_in_social',
+						hostname: new URL(harness.issuer).hostname,
+						verdict: 'accepted',
+					}),
+				},
+				redirect: 'manual',
+			});
 			return `${response.status} ${await response.text()}`;
 		},
 	});
 	expect(served.map(routeKey).filter((key) => !classified.has(key))).toEqual([]);
+	expect(
+		ambiguousMethodMismatches({
+			served,
+			classification: routeClassification,
+			admitted: actualOuterRoutes(classifiedPaths),
+		}),
+	).toEqual([]);
 	for (const route of inventory.httpRoutes) {
 		const row = routeClassification.find((candidate) => routeKey(candidate) === routeKey(route));
 		expect(row?.providerServerOnly).toBe(route.serverOnly);
