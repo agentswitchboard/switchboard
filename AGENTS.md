@@ -4,16 +4,24 @@ Switchboard is a pnpm TypeScript monorepo with an existing uv Python SDK. Read t
 
 ## Where this repository is going
 
-<!-- TODO: remove this section after the production change-over. -->
+<!-- TODO: remove this section after the production change-over. It is here because agents kept designing and building against the old system. -->
 
-Switchboard is being rebuilt together with its central service. Every Router enrolls with central, and nothing works without central. Production stays on the released version until the maintainer declares a single change-over, and that is not close. The change-over is a clean start on empty state: old stored state is moved somewhere safe at that point, and new code never reads it. So:
+- **One new system.** Switchboard sign-in, central and the Router are being rebuilt as one new system. Every Router enrolls with central, and nothing works without central. Production stays on the released version until the maintainer declares one change-over, and that is not close. Build the system first.
+- **A clean start.** The change-over starts the new system on empty state. Old stored state is moved somewhere safe as a backup at that time, and new code never reads it.
+- **What not to design or write:**
+  - a migration of old stored data, or a reader for an old stored form;
+  - a remembered old identity: a machine is identified only by its machine ID, and the former installation identity is refused;
+  - a door that still accepts an old request form;
+  - a test or proof that a store made by an older build upgrades.
 
-- No migration of old stored data, no reader for an old stored form, and no test that an older store upgrades. A database migration only has to apply to an empty store.
-- No remembered old identity. For example, a machine is identified only by its machine ID; the former installation identity is refused.
-- No door that still accepts an old request form. A wire or route changes once, and the old form is refused.
-- The change-over itself is not designed or built until the maintainer asks for it.
-- Nothing built here is deployed to production before the change-over. Testing happens on a new staging installation. So don't weigh a design by what it would cost a Router or service that is already installed: its identities, stored data and request forms are left behind. Only the backup taken at the change-over is kept.
-- When stored data makes you want to preserve it, or to ask what happens to it across the change-over, the answer is already here: it is left behind.
+  A database migration only has to apply to an empty store.
+- **Change once.** Wires and doors change once. The old form is refused with a message saying what to send instead: no backward compatibility, no shim, no flag.
+- **The change-over itself.** Don't design or build the backup, the install or the enrollment procedure until the maintainer asks for it.
+- **Nothing installed matters.** Nothing built here is deployed to production before the change-over, and testing happens on a new staging installation. Don't weigh a design by what it would cost a Router or service that is already installed: its identities, stored data and request forms are left behind. When stored data makes you want to preserve it, or to ask what happens to it across the change-over, the answer is already here: it is left behind.
+- **No stand-ins.** When work needs something that is decided and not yet built (the approval system, central's half of a call), build that thing's first complete component and hold the step that depends on it. Don't invent an interim rule that lets the step work without it, and don't ask the maintainer to choose among such rules. Build by components; each component is complete.
+- **Unproven calls.** A call that shows no proof of who it is does nothing on its own. What needs the maintainer's say goes through the approval system, and nothing is deployed until the approval system works with central.
+- **Approvals, built whole.** That includes sign-in's half: a person's signed way to list, read and answer. Building by components sets the order of the work; it doesn't make a smaller system acceptable.
+- **The maintainer's words, 22 November 2026:** "I kept saying cut over, what did you carry over?"; "Just build the approval system or some part to fit. Please don't do shortcuts"; "Don't repeat same mistakes with keeping old stuff and worrying about backward compatibility"; "Build the whole thing".
 
 ## Standards
 
