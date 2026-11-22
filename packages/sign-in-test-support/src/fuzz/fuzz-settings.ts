@@ -49,6 +49,53 @@ function isHegelControlFlow(error: unknown): boolean {
 	return error instanceof Error && (error.name === 'StopTestError' || error.name === 'AssumeError');
 }
 
+/** What an executed case did, kept so a stopped shrink can still print it. */
+interface ExecutedCaseRecord {
+	readonly draws: string[];
+	readonly notes: string[];
+}
+
+const maximumRecordedEntries = 200;
+const maximumRecordedLength = 300;
+
+function printable(value: unknown): string {
+	let text: string;
+	try {
+		text = JSON.stringify(value, (_key, item: unknown) =>
+			typeof item === 'bigint' ? item.toString() : item,
+		);
+	} catch {
+		text = String(value);
+	}
+	return text.length > maximumRecordedLength ? `${text.slice(0, maximumRecordedLength)}...` : text;
+}
+
+/**
+ * The test case the property sees: every draw and every note goes on to Hegel unchanged and is also
+ * kept in the record, so a property that writes its trace to the test case directly (the sequence
+ * campaign) and the values it drew are available when the budget stops the final replay.
+ */
+function recordingTestCase(testCase: hegel.TestCase, record: ExecutedCaseRecord): hegel.TestCase {
+	return new Proxy(testCase, {
+		get(target, property): unknown {
+			const value: unknown = Reflect.get(target, property, target);
+			if (typeof value !== 'function') return value;
+			if (property === 'draw')
+				return (generator: Parameters<hegel.TestCase['draw']>[0]): unknown => {
+					const drawn: unknown = target.draw(generator);
+					if (record.draws.length < maximumRecordedEntries) record.draws.push(printable(drawn));
+					return drawn;
+				};
+			if (property === 'note')
+				return (message: string): void => {
+					if (record.notes.length < maximumRecordedEntries) record.notes.push(message);
+					target.note(message);
+				};
+			return (value as (...args: unknown[]) => unknown).bind(target);
+		},
+	});
+}
+
 export function boundShrinking(
 	property: (testCase: hegel.TestCase, note: (text: string) => void) => Promise<void>,
 	options: { readonly maximumReplays?: number } = {},
@@ -65,15 +112,19 @@ export function boundShrinking(
 						`UNSHRUNK finding, the latest failure an executed case produced:\n${latestExecutedFailure}`,
 				);
 		}
-		const notes: string[] = [];
+		const record: ExecutedCaseRecord = { draws: [], notes: [] };
+		const recorded = recordingTestCase(testCase, record);
 		try {
-			await property(testCase, (text): void => {
-				notes.push(text);
-				testCase.note(text);
+			await property(recorded, (text): void => {
+				recorded.note(text);
 			});
 		} catch (error) {
 			if (!isHegelControlFlow(error))
-				latestExecutedFailure = `${error instanceof Error ? error.message : String(error)}\n${notes.join('\n')}`;
+				latestExecutedFailure = [
+					error instanceof Error ? error.message : String(error),
+					`draws: [${record.draws.join(', ')}]`,
+					...record.notes,
+				].join('\n');
 			throw error;
 		}
 	};
