@@ -7,7 +7,13 @@ import { deviceCode } from '#sign-in-core/storage/sign-in-schema';
  * decision still goes through the native verify and the guarded endpoints. */
 export type DeviceCodeForPage = Pick<
 	typeof deviceCode.$inferSelect,
-	'status' | 'userId' | 'expiresAt' | 'clientId' | 'machineLabel' | 'organizationId'
+	| 'status'
+	| 'userId'
+	| 'expiresAt'
+	| 'clientId'
+	| 'machineLabel'
+	| 'organizationId'
+	| 'decisionClaim'
 >;
 
 export async function listPendingDeviceCodesForApprover(props: {
@@ -63,6 +69,7 @@ export async function readDeviceCodeForPage(props: {
 				clientId: deviceCode.clientId,
 				machineLabel: deviceCode.machineLabel,
 				organizationId: deviceCode.organizationId,
+				decisionClaim: deviceCode.decisionClaim,
 			})
 			.from(deviceCode)
 			.where(eq(deviceCode.userCode, props.userCode))

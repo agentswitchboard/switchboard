@@ -114,6 +114,7 @@ export function DeviceApproval(props: {
 				</>
 			);
 		case 'review':
+		case 'recovering':
 			return <ReviewDeviceApproval {...props} state={state} />;
 		case 'approved':
 			return <ApprovedDevice label={state.machineLabel} organization={state.organizationName} />;
@@ -131,7 +132,7 @@ export function DeviceApproval(props: {
 }
 
 function ReviewDeviceApproval(props: {
-	readonly state: Extract<DeviceApprovalPageState, { kind: 'review' }>;
+	readonly state: Extract<DeviceApprovalPageState, { kind: 'review' | 'recovering' }>;
 	readonly interactive: boolean;
 	readonly onSessionEnded?: (path: string) => void;
 }): ReactElement {
@@ -150,7 +151,11 @@ function ReviewDeviceApproval(props: {
 				headers: { 'content-type': 'application/json' },
 				body: JSON.stringify({
 					userCode: state.userCode,
-					...(decision === 'approve' ? { allowedWorkspaces: selected } : {}),
+					...(decision === 'approve'
+						? {
+								allowedWorkspaces: state.kind === 'recovering' ? state.allowedWorkspaces : selected,
+							}
+						: {}),
 				}),
 			});
 			outcome = deviceDecisionOutcome(decision, response.status, await response.json());
@@ -225,16 +230,20 @@ function ReviewDeviceApproval(props: {
 	}
 	const disabled = !props.interactive || phase.kind === 'sending';
 	return (
-		<Card data-device-page-state="review">
+		<Card data-device-page-state={state.kind}>
 			<CardHeader>
-				<CardTitle>Check the code on your machine</CardTitle>
+				<CardTitle>
+					{state.kind === 'recovering' ? 'Approval in progress' : 'Check the code on your machine'}
+				</CardTitle>
 				<CardDescription>
 					{state.machineLabel} · {state.organizationName}
 				</CardDescription>
 			</CardHeader>
 			<CardContent className="flex flex-col gap-4">
 				<p className="font-mono text-3xl font-semibold">{formatDeviceUserCode(state.userCode)}</p>
-				{state.workspaces === null ? (
+				{state.kind === 'recovering' ? (
+					<p>Retry approval with the original workspace selection.</p>
+				) : state.workspaces === null ? (
 					<Alert variant="destructive">
 						<AlertDescription>
 							Couldn't load workspaces. Reload this page to try again.
@@ -272,23 +281,25 @@ function ReviewDeviceApproval(props: {
 			<CardFooter className="gap-2">
 				<Button
 					id="device-approve"
-					disabled={disabled || state.workspaces === null}
+					disabled={disabled || (state.kind === 'review' && state.workspaces === null)}
 					onClick={() => {
 						void submit('approve');
 					}}
 				>
-					Approve
+					{state.kind === 'recovering' ? 'Retry approval' : 'Approve'}
 				</Button>
-				<Button
-					id="device-deny"
-					variant="outline"
-					disabled={disabled}
-					onClick={() => {
-						void submit('deny');
-					}}
-				>
-					Deny
-				</Button>
+				{state.kind === 'review' && (
+					<Button
+						id="device-deny"
+						variant="outline"
+						disabled={disabled}
+						onClick={() => {
+							void submit('deny');
+						}}
+					>
+						Deny
+					</Button>
+				)}
 			</CardFooter>
 		</Card>
 	);

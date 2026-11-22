@@ -1,57 +1,167 @@
 import { z } from 'zod';
 
-import { uuid7Schema } from '#sign-in-core/contracts/sign-in-platform';
-import type {
-	DeviceLoginDecision,
-	deviceLoginRefusalSchema,
+import { uuid7Schema, type Uuid7 } from '#sign-in-core/contracts/sign-in-platform';
+import { approveDeviceRequestSchema } from '#sign-in-core/machine-login/machine-device-requests';
+import {
+	machineLabelSchema,
+	type DeviceLoginDecision,
+	type deviceLoginRefusalSchema,
 } from '#sign-in-core/machine-login/machine-login-contracts';
 
-export const deviceApprovalClaimSchema = z
-	.strictObject({
-		attempts: z.array(uuid7Schema).readonly(),
-		mayHaveCommitted: z.boolean(),
-	})
-	.readonly();
+export const deviceApprovalSelectionSchema = z.strictObject({
+	label: machineLabelSchema,
+	allowedWorkspaces: approveDeviceRequestSchema.shape.allowedWorkspaces.readonly(),
+});
+type DeviceApprovalSelection = z.infer<typeof deviceApprovalSelectionSchema>;
 
-export type DeviceApprovalClaim = z.infer<typeof deviceApprovalClaimSchema>;
+const attemptStatusSchema = z.enum(['outstanding', 'refused', 'uncertain']);
+type AttemptStatus = z.infer<typeof attemptStatusSchema>;
+export const deviceApprovalClaimSchema = z.strictObject({
+	kind: z.literal('claimed'),
+	selection: deviceApprovalSelectionSchema,
+	attempts: z
+		.record(uuid7Schema, attemptStatusSchema)
+		.refine((attempts) => Object.values(attempts).some((status) => status !== 'refused'))
+		.readonly()
+		.brand<'PendingApprovalAttempts'>(),
+});
+type DeviceApprovalClaim = z.infer<typeof deviceApprovalClaimSchema>;
+
+export type DeviceApprovalState =
+	| { readonly kind: 'unclaimed' }
+	| DeviceApprovalClaim
+	| { readonly kind: 'approved'; readonly enrollmentId: string | null }
+	| { readonly kind: 'denied' }
+	| { readonly kind: 'closed' };
+
 type DeviceLoginRefusal = z.infer<typeof deviceLoginRefusalSchema>;
-
 export type DeviceApprovalCompletion =
 	| { readonly kind: 'not-sent' }
 	| { readonly kind: 'unanswered' }
 	| { readonly kind: 'answered'; readonly decision: DeviceLoginDecision };
 
-export type DeviceApprovalClaimTransition =
-	| { readonly kind: 'unchanged' }
-	| { readonly kind: 'approve'; readonly enrollmentId: string }
-	| { readonly kind: 'release' }
-	| { readonly kind: 'retain'; readonly claim: DeviceApprovalClaim };
+export type DeviceApprovalAction =
+	| {
+			readonly kind: 'begin';
+			readonly attempt: Uuid7;
+			readonly selection: DeviceApprovalSelection;
+			readonly validated: boolean;
+	  }
+	| {
+			readonly kind: 'settle';
+			readonly attempt: Uuid7;
+			readonly completion: DeviceApprovalCompletion;
+	  }
+	| { readonly kind: 'deny' };
 
-export function settleDeviceApprovalClaim(props: {
-	readonly claim: DeviceApprovalClaim;
-	readonly attempt: z.infer<typeof uuid7Schema>;
-	readonly completion: DeviceApprovalCompletion;
-}): DeviceApprovalClaimTransition {
-	const { claim, attempt, completion } = props;
-	if (!claim.attempts.includes(attempt)) return { kind: 'unchanged' };
-	const decision = completion.kind === 'answered' ? completion.decision : null;
-	if (decision?.result === 'approved')
-		return { kind: 'approve', enrollmentId: decision.enrollmentId };
-	const attempts = claim.attempts.filter((active) => active !== attempt);
-	const mayHaveCommitted =
-		claim.mayHaveCommitted ||
-		completion.kind === 'unanswered' ||
-		(decision !== null && !refusalCertifiesNoApproval(decision.reason));
-	return attempts.length === 0 && !mayHaveCommitted
-		? { kind: 'release' }
-		: { kind: 'retain', claim: { attempts, mayHaveCommitted } };
+export type DeviceApprovalOutcome =
+	| { readonly kind: 'validate-selection' }
+	| { readonly kind: 'send'; readonly selection: DeviceApprovalSelection }
+	| { readonly kind: 'approved'; readonly enrollmentId: string | null }
+	| { readonly kind: 'selection-conflict' }
+	| { readonly kind: 'already-decided' }
+	| { readonly kind: 'already-deciding' }
+	| { readonly kind: 'settled' }
+	| { readonly kind: 'not-settled' }
+	| { readonly kind: 'denied' };
+
+interface DeviceApprovalTransition {
+	readonly next: DeviceApprovalState;
+	readonly outcome: DeviceApprovalOutcome;
 }
 
-/** Assumption at the Central seam: it looks up an existing approval for this
- * request ID before returning one of the four definitive refusals. A lost or
- * unreadable earlier reply can still hide a commit. Only a confirmed approval
- * or expiry disposes of that uncertainty.
- */
+export function transitionDeviceApproval(
+	state: DeviceApprovalState,
+	action: DeviceApprovalAction,
+): DeviceApprovalTransition {
+	switch (action.kind) {
+		case 'begin': {
+			if (state.kind === 'approved') return { next: state, outcome: state };
+			if (state.kind !== 'claimed' && state.kind !== 'unclaimed')
+				return { next: state, outcome: { kind: 'already-decided' } };
+			if (state.kind === 'unclaimed' && !action.validated)
+				return { next: state, outcome: { kind: 'validate-selection' } };
+			const selection = state.kind === 'claimed' ? state.selection : action.selection;
+			if (!sameSelection(selection, action.selection))
+				return { next: state, outcome: { kind: 'selection-conflict' } };
+			const attempts = state.kind === 'claimed' ? state.attempts : {};
+			if (Object.hasOwn(attempts, action.attempt))
+				return { next: state, outcome: { kind: 'already-decided' } };
+			return {
+				next: deviceApprovalClaimSchema.parse({
+					kind: 'claimed',
+					selection,
+					attempts: { ...attempts, [action.attempt]: 'outstanding' },
+				}),
+				outcome: { kind: 'send', selection },
+			};
+		}
+		case 'settle': {
+			const { completion } = action;
+			if (
+				state.kind === 'approved' &&
+				completion.kind === 'answered' &&
+				completion.decision.result === 'approved' &&
+				completion.decision.enrollmentId === state.enrollmentId
+			)
+				return { next: state, outcome: { kind: 'settled' } };
+			if (state.kind !== 'claimed' || state.attempts[action.attempt] !== 'outstanding')
+				return { next: state, outcome: { kind: 'not-settled' } };
+			return settleClaim(state, action.attempt, completion);
+		}
+		case 'deny':
+			if (state.kind === 'claimed') return { next: state, outcome: { kind: 'already-deciding' } };
+			if (state.kind !== 'unclaimed') return { next: state, outcome: { kind: 'already-decided' } };
+			return { next: { kind: 'denied' }, outcome: { kind: 'denied' } };
+		default:
+			return action satisfies never;
+	}
+}
+
+function sameSelection(left: DeviceApprovalSelection, right: DeviceApprovalSelection): boolean {
+	return (
+		left.label === right.label &&
+		left.allowedWorkspaces.length === right.allowedWorkspaces.length &&
+		left.allowedWorkspaces.every((workspace) => right.allowedWorkspaces.includes(workspace))
+	);
+}
+
+function settleClaim(
+	claim: DeviceApprovalClaim,
+	attempt: Uuid7,
+	completion: DeviceApprovalCompletion,
+): DeviceApprovalTransition {
+	let status: AttemptStatus;
+	switch (completion.kind) {
+		case 'not-sent':
+			status = 'refused';
+			break;
+		case 'unanswered':
+			status = 'uncertain';
+			break;
+		case 'answered':
+			if (completion.decision.result === 'approved') {
+				return {
+					next: { kind: 'approved', enrollmentId: completion.decision.enrollmentId },
+					outcome: { kind: 'settled' },
+				};
+			}
+			status = refusalCertifiesNoApproval(completion.decision.reason) ? 'refused' : 'uncertain';
+			break;
+		default:
+			return completion satisfies never;
+	}
+	const attempts = { ...claim.attempts, [attempt]: status };
+	return {
+		next: Object.values(attempts).some((value) => value !== 'refused')
+			? deviceApprovalClaimSchema.parse({ ...claim, attempts })
+			: { kind: 'unclaimed' },
+		outcome: { kind: 'settled' },
+	};
+}
+
+/** Central's definitive replies can retire only this attempt. Earlier unanswered
+ * sends or crash-left outstanding attempts may still have committed. */
 function refusalCertifiesNoApproval(refusal: DeviceLoginRefusal): boolean {
 	switch (refusal.kind) {
 		case 'notPermitted':

@@ -6,6 +6,7 @@ import type { DeviceApprovalPageState } from '#sign-in-core/contracts/device-app
 import { mintPageNonce } from '#sign-in-core/contracts/page-nonce';
 import { signedInNavigationRoutes } from '#sign-in-core/contracts/sign-in-navigation';
 import { uuid7Schema } from '#sign-in-core/contracts/sign-in-platform';
+import { deviceApprovalClaimSchema } from '#sign-in-core/machine-login/device-approval-claim';
 import { parseDeviceUserCode } from '#sign-in-core/machine-login/device-user-code';
 import {
 	renderDeviceApprovalPage,
@@ -118,6 +119,15 @@ export async function respondToDeviceApprovalPage(props: {
 	if (stored.status === 'approved') return render({ kind: 'approved', ...facts });
 	if (stored.status !== 'pending' || !verified.ok)
 		return render({ kind: 'refused', refusal: 'expired', userCode });
+	if (stored.decisionClaim !== null) {
+		const { selection } = deviceApprovalClaimSchema.parse(JSON.parse(stored.decisionClaim));
+		return render({
+			kind: 'recovering',
+			...facts,
+			machineLabel: selection.label,
+			allowedWorkspaces: selection.allowedWorkspaces,
+		});
+	}
 	const listed = await configuration.listWorkspaces?.({
 		request,
 		organizationId: stored.organizationId,
