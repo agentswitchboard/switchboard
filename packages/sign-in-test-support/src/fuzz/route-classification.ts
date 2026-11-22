@@ -1,70 +1,26 @@
-export interface RouteIdentity {
-	readonly method: string;
-	readonly path: string;
-}
+import {
+	documentedAnswersFor,
+	supportedSocialProviders,
+	type DocumentedErrorBody,
+	type PermittedRefusalEffect,
+	type RequestPart,
+	type RouteCaller,
+	type RouteClassification,
+	type RouteExposure,
+	type RouteIdentity,
+} from '#sign-in-test-support/fuzz/route-classification-types';
 
-export type RouteExposure = 'signed-out' | 'member' | 'owner' | 'cli' | 'server-only' | 'blocked';
-export type RequestPart = 'query' | 'form' | 'json';
-export type PermittedRefusalEffect =
-	| 'clear-current-choice'
-	| 'callback-outcome'
-	| 'none'
-	| 'consume-passkey-challenge'
-	| 'factor-intent'
-	| 'people-change-intent'
-	| 'login-link-intent'
-	| 'expired-session-cleanup'
-	| 'oauth-code-consumption'
-	| 'provider-verification-consumption'
-	| 'cookie-delete';
-
-/** The configured social providers: the concrete callback routes below (sign-in-request-handler.ts). */
-export const supportedSocialProviders = ['google', 'github'] as const;
-
-export type RouteCaller = 'signed-out' | 'member' | 'owner';
-
-/**
- * A status that is documented only together with its body and the conditions that produce it: the
- * exact set of body keys, the values the native error carries, the callers it is for, and the
- * request input (a changed field) that causes it. Missing any condition is not the documented answer.
- */
-export interface DocumentedErrorBody {
-	readonly values: Readonly<Record<string, unknown>>;
-	readonly exactKeys: readonly string[];
-	readonly callers?: readonly RouteCaller[];
-	/**
-	 * The actual request must be a JSON body whose string field is not one of the supported values:
-	 * the input that causes the native refusal (not the generator's variant tag, and not null).
-	 */
-	readonly whenRequest?: {
-		readonly jsonStringField: string;
-		readonly notOneOf: readonly string[];
-	};
-}
-
-/** The answers a caller may get from a route: its own list where the route names one. */
-export function documentedAnswersFor(
-	classification: Pick<RouteClassification, 'documentedAnswers' | 'documentedAnswersByCaller'>,
-	caller: RouteCaller,
-): readonly number[] {
-	return classification.documentedAnswersByCaller?.[caller] ?? classification.documentedAnswers;
-}
-
-export interface RouteClassification extends RouteIdentity {
-	readonly exposure: readonly RouteExposure[];
-	readonly requestParts: readonly RequestPart[];
-	readonly documentedAnswers: readonly number[];
-	readonly disclosure: string;
-	readonly permittedRefusalEffects: readonly PermittedRefusalEffect[];
-	readonly evidence: string;
-	readonly providerServerOnly?: boolean;
-	/** Fields the body of a native error answer must carry; the only way a 5xx or 404 is documented. */
-	readonly documentedErrorBodies?: Readonly<Record<number, DocumentedErrorBody>>;
-	/** Statuses whose refusal may be an HTML page (a documented page refusal), not a generic JSON error. */
-	readonly htmlRefusals?: readonly number[];
-	/** Where a caller may get fewer answers than the route-wide list, its own list. */
-	readonly documentedAnswersByCaller?: Readonly<Partial<Record<RouteCaller, readonly number[]>>>;
-}
+export {
+	documentedAnswersFor,
+	supportedSocialProviders,
+	type DocumentedErrorBody,
+	type PermittedRefusalEffect,
+	type RequestPart,
+	type RouteCaller,
+	type RouteClassification,
+	type RouteExposure,
+	type RouteIdentity,
+};
 
 interface ReachableRouteGroup {
 	readonly method: 'GET' | 'POST';
