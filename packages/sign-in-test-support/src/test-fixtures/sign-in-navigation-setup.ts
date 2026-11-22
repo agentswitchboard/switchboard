@@ -180,8 +180,25 @@ export async function observeNavigationReadiness(browser: NavigationBrowser): Pr
 		cookie: harness.cookie(),
 	});
 	await proof.navigate(`${harness.issuer}/owner-ready`);
+	await followReadyLinkToMe(browser);
+}
+
+export async function followReadyLinkToMe(browser: NavigationBrowser): Promise<void> {
+	const { proof } = browser;
 	await proof.page.getByRole('link', { name: 'Go to Me' }).click();
+	await awaitMePageSettled(browser);
+}
+
+/**
+ * The Me heading is server-rendered, so it says nothing about the requests the page's island
+ * issues after mounting. The empty passkey list is its terminal outcome, and the proof server
+ * must then have finished answering, because closing the harness rejects any request still open.
+ */
+export async function awaitMePageSettled(browser: NavigationBrowser): Promise<void> {
+	const { harness, proof } = browser;
 	await proof.page.getByRole('heading', { name: 'Me', exact: true }).waitFor();
+	await proof.page.getByText('No passkeys yet.', { exact: true }).waitFor();
+	await harness.settleHttpRequests();
 }
 
 export async function observeNavigationCliContinuation(browser: NavigationBrowser): Promise<void> {

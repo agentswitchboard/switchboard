@@ -13,9 +13,10 @@ export interface AuthProofHttpResponseHold {
 	readonly release: () => void;
 }
 
-/** Holds real JWKS response bytes on the existing HTTP listener, after receipt recording. */
+/** Holds real response bytes on the existing HTTP listener, after receipt recording. */
 export function createAuthProofHttpResponseHolds(): {
 	readonly armNextJwksResponse: () => AuthProofHttpResponseHold;
+	readonly armNextGetResponse: (pathname: string) => AuthProofHttpResponseHold;
 	readonly send: (props: {
 		readonly pathname: string;
 		readonly method: string;
@@ -25,6 +26,7 @@ export function createAuthProofHttpResponseHolds(): {
 } {
 	let armed:
 		| {
+				readonly pathname: string;
 				readonly entered: PromiseWithResolvers<void>;
 				readonly finished: PromiseWithResolvers<'closed' | 'released'>;
 				readonly outcome: PromiseWithResolvers<'closed' | 'released'>;
@@ -32,8 +34,12 @@ export function createAuthProofHttpResponseHolds(): {
 		| undefined;
 	return {
 		armNextJwksResponse(): AuthProofHttpResponseHold {
-			if (armed !== undefined) throw new Error('JWKS HTTP response hold already armed');
+			return this.armNextGetResponse('/api/auth/jwks');
+		},
+		armNextGetResponse(pathname): AuthProofHttpResponseHold {
+			if (armed !== undefined) throw new Error('HTTP response hold already armed');
 			const hold = {
+				pathname,
 				entered: Promise.withResolvers<void>(),
 				finished: Promise.withResolvers<'closed' | 'released'>(),
 				outcome: Promise.withResolvers<'closed' | 'released'>(),
@@ -46,7 +52,7 @@ export function createAuthProofHttpResponseHolds(): {
 			};
 		},
 		async send({ pathname, method, response, body }): Promise<void> {
-			if (armed === undefined || pathname !== '/api/auth/jwks' || method !== 'GET') {
+			if (armed === undefined || pathname !== armed.pathname || method !== 'GET') {
 				response.end(body);
 				return;
 			}

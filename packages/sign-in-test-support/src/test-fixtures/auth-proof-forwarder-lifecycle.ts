@@ -14,6 +14,8 @@ export class AuthProofCloseError extends Error {
 export function createAuthProofForwarderLifecycle(): {
 	readonly trackRequest: (operation: () => Promise<void>) => Promise<void>;
 	readonly settleAfterHttpCleanup: () => Promise<void>;
+	/** Resolves once every request the proof server has accepted so far has finished. */
+	readonly settleAcceptedRequests: () => Promise<void>;
 	readonly closeWithReceiptSnapshot: (props: {
 		readonly report: (state: AuthProofCloseState) => Promise<void>;
 		readonly capture: () => Promise<() => void | Promise<void>>;
@@ -43,6 +45,9 @@ export function createAuthProofForwarderLifecycle(): {
 						finishRequest();
 					},
 				);
+		},
+		async settleAcceptedRequests(): Promise<void> {
+			await requestsFinished.promise;
 		},
 		async settleAfterHttpCleanup(): Promise<void> {
 			await requestsFinished.promise;
