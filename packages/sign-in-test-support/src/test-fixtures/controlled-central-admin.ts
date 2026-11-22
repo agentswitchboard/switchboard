@@ -58,6 +58,7 @@ export interface AdminArrival {
 	readonly outcome:
 		| { readonly kind: 'refused-unauthenticated'; readonly failure: AdminVerificationFailure }
 		| { readonly kind: 'bad-request' }
+		| { readonly kind: 'scripted-raw' }
 		| { readonly kind: 'answered'; readonly result: FleetAdminResult };
 	/** The verified binding, kept to prove each request used its own key and token. */
 	readonly proofKeyThumbprint: string | null;
@@ -101,6 +102,7 @@ export interface ControlledCentralAdmin {
 		route: AdminRouteName,
 		answer: (request: FleetAdminRequest) => FleetAdminResult,
 	) => void;
+	readonly scriptNextRawAnswer: (route: AdminRouteName, body: object) => void;
 }
 
 const proofClaimsSchema = z.strictObject({
@@ -196,7 +198,11 @@ export function createControlledCentralAdmin(props: {
 	const workspaces: AdminWorkspace[] = [];
 	const usedRequestIds = new Set<string>();
 	const ledger = new Map<string, { readonly intent: string; readonly result: FleetAdminResult }>();
-	const scripted = new Map<AdminRouteName, (request: FleetAdminRequest) => FleetAdminResult>();
+	const scripted = new Map<
+		AdminRouteName,
+		| { readonly kind: 'typed'; readonly answer: (request: FleetAdminRequest) => FleetAdminResult }
+		| { readonly kind: 'raw'; readonly body: object }
+	>();
 	const records: {
 		readonly id: string;
 		readonly requestId: string;
@@ -365,7 +371,10 @@ export function createControlledCentralAdmin(props: {
 		workspaces,
 		changeRecords: records,
 		scriptNextAnswer(route, answer): void {
-			scripted.set(route, answer);
+			scripted.set(route, { kind: 'typed', answer });
+		},
+		scriptNextRawAnswer(route, body): void {
+			scripted.set(route, { kind: 'raw', body });
 		},
 		async fetch(request, route): Promise<Response> {
 			const authorization = request.headers.get('authorization');
@@ -421,11 +430,15 @@ export function createControlledCentralAdmin(props: {
 			const refused = admit(route, verified.claims, verified.requestId);
 			const script = refused === null ? scripted.get(route) : undefined;
 			if (script !== undefined) scripted.delete(route);
+			if (script?.kind === 'raw') {
+				arrivals.push({ route, outcome: { kind: 'scripted-raw' }, ...facts });
+				return Response.json(script.body);
+			}
 			const result =
 				refused ??
 				(script === undefined
 					? apply(parsed.data, verified.claims, verified.intent)
-					: script(parsed.data));
+					: script.answer(parsed.data));
 			arrivals.push({ route, outcome: { kind: 'answered', result }, ...facts });
 			return Response.json(result);
 		},

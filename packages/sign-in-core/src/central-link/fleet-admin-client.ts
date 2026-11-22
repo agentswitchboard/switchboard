@@ -36,7 +36,7 @@ const workspaceSchema = z.strictObject({
 		.refine((text) => new TextEncoder().encode(text).length <= 2048, 'Description too long'),
 	state: z.enum(['active', 'archiving', 'archived']),
 });
-export const fleetAdminRefusalReasonSchema = z.enum([
+const signInAdminRefusalReasons = [
 	/** Another workspace already holds this name (case-insensitive, trimmed). */
 	'nameInUse',
 	'notPermitted',
@@ -49,13 +49,14 @@ export const fleetAdminRefusalReasonSchema = z.enum([
 	/** The same operation ID arrived with a different request. */
 	'conflict',
 	'rejected',
-	'notFound',
-	'notRetired',
-	'discardUnsupported',
-	'stale',
-	'subjectUnreadable',
-]);
-export type FleetAdminRefusalReason = AdminRefusal;
+] as const satisfies readonly AdminRefusal[];
+
+// All three current Sign-in routes share this subset; engine operations own the other reasons.
+export type FleetAdminRefusalReason = Extract<
+	AdminRefusal,
+	(typeof signInAdminRefusalReasons)[number]
+>;
+export const fleetAdminRefusalReasonSchema = z.enum(signInAdminRefusalReasons);
 const refusedSchema = z.strictObject({
 	result: z.literal('refused'),
 	reason: fleetAdminRefusalReasonSchema,
@@ -111,14 +112,20 @@ export const fleetAdminResultSchemas = {
 		refusedSchema,
 	]),
 } as const;
-type AdminReplyFor<Results extends OrganizationAdminResult_Serialize['result']> = Extract<
-	OrganizationAdminResult_Serialize,
+type GeneratedAdminRefusal = Extract<OrganizationAdminResult_Serialize, { result: 'refused' }>;
+type SignInAdminWireResult =
+	| Exclude<OrganizationAdminResult_Serialize, GeneratedAdminRefusal>
+	| (GeneratedAdminRefusal & { reason: FleetAdminRefusalReason });
+type AdminReplyFor<Results extends SignInAdminWireResult['result']> = Extract<
+	SignInAdminWireResult,
 	{ result: Results }
 >;
 export type FleetAdminResult = AdminReplyFor<'applied' | 'found' | 'records' | 'refused'>;
 export type FleetAdminWireSchemaTypes = [
 	AssertWireType<WireTypesEqual<z.output<typeof workspaceSchema>, WorkspaceView_Serialize>>,
-	AssertWireType<WireTypesEqual<z.output<typeof fleetAdminRefusalReasonSchema>, AdminRefusal>>,
+	AssertWireType<
+		WireTypesEqual<z.output<typeof fleetAdminRefusalReasonSchema>, FleetAdminRefusalReason>
+	>,
 	AssertWireType<
 		WireTypesEqual<z.output<typeof targetedChangeKindSchema>, TargetedOrganizationChangeKind>
 	>,

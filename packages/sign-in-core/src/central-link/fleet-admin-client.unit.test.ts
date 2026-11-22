@@ -105,6 +105,30 @@ async function producerResults(kind: 'fixtures' | 'negatives'): Promise<readonly
 const resultFixtures = await producerResults('fixtures');
 const resultNegatives = await producerResults('negatives');
 
+const engineOnlyRefusals = [
+	'notFound',
+	'notRetired',
+	'discardUnsupported',
+	'stale',
+	'subjectUnreadable',
+] as const;
+
+it.each(engineOnlyRefusals)(
+	'treats engine-only refusal %s as malformed on every Sign-in admin route',
+	async (reason): Promise<void> => {
+		for (const operation of Object.values(operations)) {
+			const transport = scripted(async () => Response.json({ result: 'refused', reason }));
+			await expect(
+				createFleetAdminLinkClient(transport).sendFleetAdminRequest({
+					operation,
+					accessToken: 'token',
+					proof: 'proof',
+				}),
+			).resolves.toEqual({ kind: 'unknown', reason: 'malformed-reply' });
+		}
+	},
+);
+
 it.each(
 	organizationChangeFixtures.map(
 		(record) =>

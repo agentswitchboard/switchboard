@@ -231,6 +231,30 @@ it('organization admin: the owner creates, looks up and lists through each route
 	}
 });
 
+it('organization admin forwarding treats an engine-only refusal as upstream unavailable', async (): Promise<void> => {
+	const fixture = await setup();
+	try {
+		fixture.harness.centralAdmin.scriptNextRawAnswer('WorkspaceLookup', {
+			result: 'refused',
+			reason: 'notFound',
+		});
+		const response = await adminPost(fixture, 'workspace-lookup', {
+			organizationId: fixture.organizationId,
+			workspaceId: controlledSignInIds.nextId(),
+		});
+		expect(fixture.harness.centralAdmin.arrivals.at(-1)).toMatchObject({
+			route: 'WorkspaceLookup',
+			outcome: { kind: 'scripted-raw' },
+		});
+		expect([response.status, await response.json()]).toEqual([
+			503,
+			{ error: 'central-unavailable' },
+		]);
+	} finally {
+		await fixture.harness.close();
+	}
+});
+
 it('organization admin page: renders the machine, workspace and state of an allowance change', async (): Promise<void> => {
 	const { harness, cookie } = await setup();
 	try {
