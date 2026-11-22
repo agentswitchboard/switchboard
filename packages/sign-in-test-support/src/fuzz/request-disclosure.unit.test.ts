@@ -8,14 +8,12 @@ import {
 	observeRequestAnswer,
 	type ObservedRequestAnswer,
 } from '#sign-in-test-support/fuzz/request-disclosure';
-import type {
-	GeneratedRequest,
-	VariantStep,
-} from '#sign-in-test-support/fuzz/request-families/index';
+import type { GeneratedRequest } from '#sign-in-test-support/fuzz/request-families/index';
 import type { RequestStorageSnapshot } from '#sign-in-test-support/fuzz/request-storage-snapshot';
 import {
 	documentedAnswersFor,
 	routeClassification,
+	supportedSocialProviders,
 	type RouteClassification,
 } from '#sign-in-test-support/fuzz/route-classification';
 import { controlledSignInClock } from '#sign-in-test-support/test-fixtures/controlled-sign-in-clock';
@@ -58,7 +56,7 @@ const request: GeneratedRequest = {
 	expectation: 'success-or-refusal',
 };
 function answer(body: unknown, status = 403, headers = new Headers()): ObservedRequestAnswer {
-	return { status, headers, body, text: JSON.stringify(body) };
+	return { status, headers, body, text: JSON.stringify(body), bodyKind: 'json' };
 }
 function check(
 	response: ObservedRequestAnswer,
@@ -371,7 +369,7 @@ describe('documented error answers', (): void => {
 		404: {
 			values: { code: 'PROVIDER_NOT_FOUND' },
 			exactKeys: ['code', 'message'],
-			variantFields: ['provider'],
+			whenRequest: { jsonStringField: 'provider', notOneOf: supportedSocialProviders },
 		},
 		409: {
 			values: { kind: 'refused' },
@@ -379,34 +377,40 @@ describe('documented error answers', (): void => {
 			callers: ['member', 'owner'],
 		},
 	} as const;
-	const providerMutation: VariantStep = {
-		encoding: 'json',
-		field: 'provider',
-		mutation: 'near-valid',
-	};
+	/** What the generator's own mutations of the provider field actually send. */
+	const jsonRequest = (fields: Record<string, unknown>): GeneratedRequest => ({
+		pathname: '/api/auth/sign-in/social',
+		init: {
+			method: 'POST',
+			headers: { 'content-type': 'application/json' },
+			body: JSON.stringify(fields),
+		},
+		label: 'request',
+		variant: { encoding: 'json', field: null, mutation: 'valid' },
+		expectation: 'success-or-refusal',
+	});
+	const unknownProviderRequest = jsonRequest({ provider: 'no-such-provider', callbackURL: '/x' });
 	const documented = (props: {
 		readonly status: number;
 		readonly body: unknown;
 		readonly caller?: 'signed-out' | 'member' | 'owner';
-		readonly variant?: VariantStep;
+		readonly request?: GeneratedRequest;
 	}): void =>
 		assertDocumentedErrorBody({
 			documentedErrorBodies,
 			answer: { status: props.status, body: props.body },
 			caller: props.caller ?? 'owner',
-			variant: props.variant ?? providerMutation,
+			request: props.request ?? unknownProviderRequest,
 		});
 
 	it('accepts the native answer for its caller and input, and nothing else', (): void => {
 		const notFound = { code: 'PROVIDER_NOT_FOUND', message: 'Provider not found' };
 		expect(() => documented({ status: 404, body: notFound })).not.toThrow();
-		expect(() =>
-			documented({
-				status: 404,
-				body: notFound,
-				variant: { ...providerMutation, mutation: 'boundary' },
-			}),
-		).not.toThrow();
+		// The generator's other string mutations of the provider (an empty or an oversized value) are unknown providers too.
+		for (const provider of ['', 'x'.repeat(4096), 'invalid'])
+			expect(() =>
+				documented({ status: 404, body: notFound, request: jsonRequest({ provider }) }),
+			).not.toThrow();
 		expect(() =>
 			documented({ status: 409, body: { kind: 'refused', reason: 'stale' } }),
 		).not.toThrow();
@@ -423,13 +427,27 @@ describe('documented error answers', (): void => {
 			'instead of exactly',
 		);
 		expect(() => documented({ status: 404, body: null })).toThrow('no documented error body');
-		for (const variant of [
-			{ encoding: 'json', field: 'provider', mutation: 'valid' },
-			{ encoding: 'json', field: 'callbackURL', mutation: 'near-valid' },
-			{ encoding: 'json', field: null, mutation: 'valid' },
-		] as const)
-			expect(() => documented({ status: 404, body: notFound, variant })).toThrow(
-				'did not change its documented input',
+		// Requests that did not send an unknown provider value: a supported one, null (the generator's
+		// wrong-type), a number, an absent field, another field, and a non-JSON encoding.
+		const form = {
+			...jsonRequest({}),
+			init: {
+				method: 'POST',
+				headers: { 'content-type': 'application/x-www-form-urlencoded' },
+				body: 'provider=no-such-provider',
+			},
+		};
+		for (const request of [
+			jsonRequest({ provider: 'google' }),
+			jsonRequest({ provider: 'github' }),
+			jsonRequest({ provider: null }),
+			jsonRequest({ provider: 7 }),
+			jsonRequest({ callbackURL: '/x' }),
+			jsonRequest({ other: 'no-such-provider' }),
+			form,
+		])
+			expect(() => documented({ status: 404, body: notFound, request })).toThrow(
+				'did not send its documented input',
 			);
 		expect(() =>
 			documented({ status: 409, body: { kind: 'refused', reason: 'stale' }, caller: 'signed-out' }),
@@ -440,26 +458,31 @@ describe('documented error answers', (): void => {
 		expect(() => documented({ status: 400, body: { anything: true } })).not.toThrow();
 	});
 
+	const refusal = (
+		status: number,
+		body: unknown,
+	): Parameters<typeof assertGenericRefusalBody>[0] => ({
+		status,
+		headers: new Headers(),
+		body,
+		bodyKind: body === null ? 'empty' : 'json',
+	});
+
 	it('requires a refusal body to be a generic error', (): void => {
+		expect(() => assertGenericRefusalBody(refusal(403, { kind: 'refused' }))).not.toThrow();
+		expect(() => assertGenericRefusalBody(refusal(401, null))).not.toThrow();
 		expect(() =>
-			assertGenericRefusalBody({ status: 403, body: { kind: 'refused' } }),
+			assertGenericRefusalBody(refusal(400, { error: 'invalid_request', error_description: 'x' })),
 		).not.toThrow();
-		expect(() => assertGenericRefusalBody({ status: 401, body: null })).not.toThrow();
-		expect(() =>
-			assertGenericRefusalBody({
-				status: 400,
-				body: { error: 'invalid_request', error_description: 'x' },
-			}),
-		).not.toThrow();
-		expect(() => assertGenericRefusalBody({ status: 200, body: { people: [] } })).not.toThrow();
+		expect(() => assertGenericRefusalBody(refusal(200, { people: [] }))).not.toThrow();
 		// A refusal that carries data (or a nested value) is not generic.
 		expect(() =>
-			assertGenericRefusalBody({ status: 403, body: { kind: 'refused', people: [{ id: 'x' }] } }),
+			assertGenericRefusalBody(refusal(403, { kind: 'refused', people: [{ id: 'x' }] })),
 		).toThrow('beyond a generic error');
-		expect(() =>
-			assertGenericRefusalBody({ status: 400, body: { message: { nested: true } } }),
-		).toThrow('beyond a generic error');
-		expect(() => assertGenericRefusalBody({ status: 400, body: ['list'] })).toThrow(
+		expect(() => assertGenericRefusalBody(refusal(400, { message: { nested: true } }))).toThrow(
+			'beyond a generic error',
+		);
+		expect(() => assertGenericRefusalBody(refusal(400, ['list']))).toThrow(
 			'not a generic error object',
 		);
 	});
@@ -508,4 +531,62 @@ it('set-active: the incoming session row must already be the caller’s own live
 	).toThrow(expectsRefusal);
 	// The positive same-session re-issue (live before and after) still passes.
 	expect(() => checkSetActive({ cookieValue: 'session-secret.signature' })).not.toThrow();
+});
+
+describe('S2 closure: the documented refusals are bound to the actual input and body', (): void => {
+	const unknownProvider404 = { code: 'PROVIDER_NOT_FOUND', message: 'Provider not found' };
+	const socialErrorBodies = {
+		404: {
+			values: { code: 'PROVIDER_NOT_FOUND' },
+			exactKeys: ['code', 'message'],
+			whenRequest: { jsonStringField: 'provider', notOneOf: supportedSocialProviders },
+		},
+	} as const;
+	const socialRequest = (provider: unknown): GeneratedRequest => ({
+		pathname: '/api/auth/sign-in/social',
+		init: {
+			method: 'POST',
+			headers: { 'content-type': 'application/json' },
+			// What the generator's wrong-type mutation sends is null; its tag is not the input.
+			body: JSON.stringify({ provider }),
+		},
+		label: 'wrong-type:provider',
+		variant: { encoding: 'json', field: 'provider', mutation: 'wrong-type' },
+		expectation: 'success-or-refusal',
+	});
+	const documented404 = (request: GeneratedRequest): void =>
+		assertDocumentedErrorBody({
+			documentedErrorBodies: socialErrorBodies,
+			answer: { status: 404, body: unknownProvider404 },
+			caller: 'owner',
+			request,
+		});
+
+	it('does not document the unknown-provider 404 for a provider set to null, even with the wrong-type tag', (): void => {
+		expect(() => documented404(socialRequest(null))).toThrow('did not send its documented input');
+		expect(() => documented404(socialRequest('no-such-provider'))).not.toThrow();
+	});
+
+	it('does not treat a nonempty non-JSON refusal body as empty, and keeps a documented HTML refusal', async (): Promise<void> => {
+		const page = await observeRequestAnswer(
+			new Response('<html><body>secret page content</body></html>', {
+				status: 403,
+				headers: { 'content-type': 'text/html' },
+			}),
+		);
+		expect(page.bodyKind).toBe('other');
+		expect(() => assertGenericRefusalBody(page)).toThrow('nonempty refusal body');
+		// A route that documents an HTML refusal may send one; a non-HTML nonempty body never.
+		expect(() => assertGenericRefusalBody(page, { htmlRefusalDocumented: true })).not.toThrow();
+		const text = await observeRequestAnswer(
+			new Response('plain secret text', { status: 403, headers: { 'content-type': 'text/plain' } }),
+		);
+		expect(() => assertGenericRefusalBody(text, { htmlRefusalDocumented: true })).toThrow(
+			'nonempty refusal body',
+		);
+		// An empty refusal, labelled JSON or not, is still generic.
+		const empty = await observeRequestAnswer(new Response('', { status: 403 }));
+		expect(empty.bodyKind).toBe('empty');
+		expect(() => assertGenericRefusalBody(empty)).not.toThrow();
+	});
 });

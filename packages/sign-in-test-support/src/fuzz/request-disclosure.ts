@@ -5,7 +5,6 @@ import type { RequestCaseFixture } from '#sign-in-test-support/fuzz/request-case
 import type {
 	GeneratedRequest,
 	RequestFamilyContext,
-	VariantStep,
 } from '#sign-in-test-support/fuzz/request-families/index';
 import {
 	storedCredentials,
@@ -23,6 +22,8 @@ export interface ObservedRequestAnswer {
 	readonly headers: Headers;
 	readonly text: string;
 	readonly body: unknown;
+	/** Empty, parsed JSON, or another (nonempty, unparsed) body such as an HTML page. */
+	readonly bodyKind: 'empty' | 'json' | 'other';
 }
 
 export async function observeRequestAnswer(response: Response): Promise<ObservedRequestAnswer> {
@@ -39,7 +40,17 @@ export async function observeRequestAnswer(response: Response): Promise<Observed
 			throw new Error('S2 documented-answer: response claims JSON but is malformed');
 		}
 	}
-	return { status: response.status, headers: response.headers, text, body };
+	const bodyKind = text === '' ? 'empty' : body === null && !isJsonLiteral(text) ? 'other' : 'json';
+	return { status: response.status, headers: response.headers, text, body, bodyKind };
+}
+
+function isJsonLiteral(text: string): boolean {
+	try {
+		JSON.parse(text);
+		return true;
+	} catch {
+		return false;
+	}
 }
 
 function forbid(value: string, forbidden: readonly string[], property: string): void {
@@ -319,6 +330,20 @@ export function assertRequestDisclosure(props: {
 	}
 }
 
+/** The request is a JSON body whose named string field holds a value outside the supported ones. */
+function requestCausesNativeRefusal(
+	request: GeneratedRequest,
+	when: { readonly jsonStringField: string; readonly notOneOf: readonly string[] },
+): boolean {
+	const contentType = new Headers(request.init.headers).get('content-type') ?? '';
+	if (!contentType.startsWith('application/json') || typeof request.init.body !== 'string')
+		return false;
+	const body = z.record(z.string(), z.unknown()).safeParse(safeJson(request.init.body));
+	if (!body.success) return false;
+	const value = body.data[when.jsonStringField];
+	return typeof value === 'string' && !when.notOneOf.includes(value);
+}
+
 /**
  * A native error status (the unknown-provider 404, a refused 409) is documented only together with
  * its exact body, the callers it is for and the input that causes it. Any condition missing, an
@@ -328,7 +353,7 @@ export function assertDocumentedErrorBody(props: {
 	readonly documentedErrorBodies: RouteClassification['documentedErrorBodies'];
 	readonly answer: Pick<ObservedRequestAnswer, 'status' | 'body'>;
 	readonly caller: RouteCaller;
-	readonly variant: VariantStep;
+	readonly request: GeneratedRequest;
 }): void {
 	const documented = props.documentedErrorBodies?.[props.answer.status];
 	if (documented === undefined) return;
@@ -338,12 +363,10 @@ export function assertDocumentedErrorBody(props: {
 	if (documented.callers !== undefined && !documented.callers.includes(props.caller))
 		refuse(`is not documented for the ${props.caller} caller`);
 	if (
-		documented.variantFields !== undefined &&
-		(props.variant.field === null ||
-			props.variant.mutation === 'valid' ||
-			!documented.variantFields.includes(props.variant.field))
+		documented.whenRequest !== undefined &&
+		!requestCausesNativeRefusal(props.request, documented.whenRequest)
 	)
-		refuse('is not documented for a request that did not change its documented input');
+		refuse('is not documented for a request that did not send its documented input');
 	const actual = z.record(z.string(), z.unknown()).safeParse(props.answer.body);
 	if (!actual.success) return refuse('has no documented error body');
 	if (Object.entries(documented.values).some(([field, value]) => actual.data[field] !== value))
@@ -370,9 +393,20 @@ const genericRefusalKeys = new Set([
 ]);
 
 export function assertGenericRefusalBody(
-	answer: Pick<ObservedRequestAnswer, 'status' | 'body'>,
+	answer: Pick<ObservedRequestAnswer, 'status' | 'body' | 'bodyKind' | 'headers'>,
+	options: { readonly htmlRefusalDocumented?: boolean } = {},
 ): void {
-	if (answer.status < 400 || answer.body === null) return;
+	if (answer.status < 400 || answer.bodyKind === 'empty') return;
+	// A nonempty body that is not JSON is a page, not a generic error: only a route that documents
+	// an HTML refusal for that status may send one.
+	if (answer.bodyKind === 'other') {
+		if (
+			options.htmlRefusalDocumented === true &&
+			(answer.headers.get('content-type') ?? '').startsWith('text/html')
+		)
+			return;
+		throw new Error('S2 documented-answer: a nonempty refusal body is not a generic error object');
+	}
 	const record = z.record(z.string(), z.unknown()).safeParse(answer.body);
 	if (!record.success)
 		throw new Error('S2 documented-answer: a refusal body is not a generic error object');

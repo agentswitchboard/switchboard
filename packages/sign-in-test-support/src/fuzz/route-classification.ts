@@ -18,6 +18,9 @@ export type PermittedRefusalEffect =
 	| 'provider-verification-consumption'
 	| 'cookie-delete';
 
+/** The configured social providers: the concrete callback routes below (sign-in-request-handler.ts). */
+export const supportedSocialProviders = ['google', 'github'] as const;
+
 export type RouteCaller = 'signed-out' | 'member' | 'owner';
 
 /**
@@ -29,7 +32,14 @@ export interface DocumentedErrorBody {
 	readonly values: Readonly<Record<string, unknown>>;
 	readonly exactKeys: readonly string[];
 	readonly callers?: readonly RouteCaller[];
-	readonly variantFields?: readonly string[];
+	/**
+	 * The actual request must be a JSON body whose string field is not one of the supported values:
+	 * the input that causes the native refusal (not the generator's variant tag, and not null).
+	 */
+	readonly whenRequest?: {
+		readonly jsonStringField: string;
+		readonly notOneOf: readonly string[];
+	};
 }
 
 /** The answers a caller may get from a route: its own list where the route names one. */
@@ -50,6 +60,8 @@ export interface RouteClassification extends RouteIdentity {
 	readonly providerServerOnly?: boolean;
 	/** Fields the body of a native error answer must carry; the only way a 5xx or 404 is documented. */
 	readonly documentedErrorBodies?: Readonly<Record<number, DocumentedErrorBody>>;
+	/** Statuses whose refusal may be an HTML page (a documented page refusal), not a generic JSON error. */
+	readonly htmlRefusals?: readonly number[];
 	/** Where a caller may get fewer answers than the route-wide list, its own list. */
 	readonly documentedAnswersByCaller?: Readonly<Partial<Record<RouteCaller, readonly number[]>>>;
 }
@@ -65,6 +77,7 @@ interface ReachableRouteGroup {
 	readonly evidence: string;
 	readonly documentedErrorBodies?: Readonly<Record<number, DocumentedErrorBody>>;
 	readonly documentedAnswersByCaller?: Readonly<Partial<Record<RouteCaller, readonly number[]>>>;
+	readonly htmlRefusals?: readonly number[];
 }
 
 // These groups are transcribed from the sign-in route contracts and permanent host tests,
@@ -383,7 +396,7 @@ const reachableRouteGroups: readonly ReachableRouteGroup[] = [
 			404: {
 				values: { code: 'PROVIDER_NOT_FOUND' },
 				exactKeys: ['code', 'message'],
-				variantFields: ['provider'],
+				whenRequest: { jsonStringField: 'provider', notOneOf: supportedSocialProviders },
 			},
 		},
 		disclosure: 'Only the caller’s authorized redirect; no credential in refusal.',

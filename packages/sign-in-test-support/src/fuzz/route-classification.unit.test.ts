@@ -1,6 +1,10 @@
 import { expect, it } from 'vitest';
 
-import { routeClassification, routeKey } from '#sign-in-test-support/fuzz/route-classification';
+import {
+	routeClassification,
+	routeKey,
+	supportedSocialProviders,
+} from '#sign-in-test-support/fuzz/route-classification';
 
 it('classifies each route once and supplies an answer and request parts for reachable routes', () => {
 	const keys = routeClassification.map(routeKey);
@@ -49,4 +53,11 @@ it('documents no 5xx answer for any route: F1 injects no storage or central faul
 				.filter((s) => s >= 500),
 		).toEqual([]);
 	}
+});
+
+it('the supported social providers are exactly the concrete callback routes', () => {
+	const callbacks = routeClassification
+		.filter((row) => row.method === 'GET' && /^\/api\/auth\/callback\/[a-z]+$/u.test(row.path))
+		.map((row) => row.path.split('/').at(-1));
+	expect([...supportedSocialProviders].toSorted()).toEqual(callbacks.toSorted());
 });

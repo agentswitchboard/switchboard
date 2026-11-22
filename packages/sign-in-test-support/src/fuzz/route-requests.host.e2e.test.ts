@@ -119,9 +119,12 @@ for (const family of requestFamilies) {
 								documentedErrorBodies: classification.documentedErrorBodies,
 								answer,
 								caller,
-								variant: generated.variant,
+								request: generated,
 							});
-							assertGenericRefusalBody(answer);
+							assertGenericRefusalBody(answer, {
+								htmlRefusalDocumented:
+									classification.htmlRefusals?.includes(answer.status) === true,
+							});
 							assertRequestDisclosure({
 								fixture,
 								path: family.route.path,
