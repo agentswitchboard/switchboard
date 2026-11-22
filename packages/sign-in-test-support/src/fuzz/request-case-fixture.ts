@@ -1,17 +1,14 @@
 import { createHash } from 'node:crypto';
 
-import {
-	invitation,
-	organization,
-	passkey,
-	signInSchema,
-	verification,
-} from '@agent-collaboration/sign-in-core';
+import { invitation, organization, passkey, verification } from '@agent-collaboration/sign-in-core';
 import { eq } from 'drizzle-orm';
 import { z } from 'zod';
 
 import type { RequestFamilyContext } from '#sign-in-test-support/fuzz/request-families/index';
-import { readRequestStorageSnapshot } from '#sign-in-test-support/fuzz/request-storage-snapshot';
+import {
+	readRequestStorageRowCounts,
+	wipeRequestStorage,
+} from '#sign-in-test-support/fuzz/request-storage-snapshot';
 import {
 	controlledSignInClock,
 	controlledSignInIds,
@@ -55,16 +52,12 @@ async function requireId(response: Response): Promise<string> {
 /** Empty every table and the cookie jar, then prove the baseline is empty (S2 fresh-case baseline). */
 export async function resetRequestHarness(harness: RequestHarness): Promise<void> {
 	await harness.settleDeferredWork();
-	await Object.values(signInSchema)
-		.toReversed()
-		.reduce(async (previous, table): Promise<void> => {
-			await previous;
-			await harness.database.delete(table);
-		}, Promise.resolve());
+	await wipeRequestStorage(harness.database);
 	harness.clearBrowserSession();
-	const baseline = await readRequestStorageSnapshot(harness.database);
-	for (const [table, rows] of Object.entries(baseline)) {
-		if (rows.length !== 0) throw new Error(`S2 fresh-case-baseline: retained rows in ${table}`);
+	for (const [table, count] of Object.entries(
+		await readRequestStorageRowCounts(harness.database),
+	)) {
+		if (count !== 0) throw new Error(`S2 fresh-case-baseline: retained rows in ${table}`);
 	}
 	if (harness.cookie() !== '') throw new Error('S2 fresh-case-baseline: retained cookie');
 }
