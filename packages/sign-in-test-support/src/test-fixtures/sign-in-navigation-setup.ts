@@ -211,14 +211,15 @@ async function rejectWhenAborted<TValue>(
 }
 
 /**
- * The Me heading is server-rendered, so it says nothing about the requests the page's island
- * issues after mounting. The ready link's terminal outcome is those requests ending; closing the
- * harness rejects any request still open, so this wait must not return before they have. Each
- * request is bound to the document that issued it when it is issued, so a ready-page request that
- * ends after Me has committed does not count.
+ * Runs `reachMe`, which must end with the browser on the Me page, then waits for the requests
+ * that page's island issues to end. The Me heading is server-rendered, so it says nothing about
+ * them, and closing the harness rejects any request still open, so a journey must not go on or
+ * return before they have. Each request is bound to the document that issued it when it is
+ * issued, so a request of the page left behind that ends after Me has committed does not count.
  */
-export async function followReadyLinkToMe(
+export async function awaitMePageRequestsAfter(
 	browser: NavigationBrowser,
+	reachMe: () => Promise<void>,
 ): Promise<ReadonlyMap<string, MePageRequestOutcome>> {
 	const { harness, proof, signal } = browser;
 	const tracker = createMePageRequestTracker({
@@ -232,13 +233,12 @@ export async function followReadyLinkToMe(
 			documentPathname: new URL(request.frame().url()).pathname,
 		});
 	const finished = (request: Request): void => tracker.observeTerminal(request, 'finished');
-	proof.page.on('request', issued);
 	const failed = (request: Request): void => tracker.observeTerminal(request, 'failed');
+	proof.page.on('request', issued);
 	proof.page.on('requestfinished', finished);
 	proof.page.on('requestfailed', failed);
 	try {
-		await proof.page.getByRole('link', { name: 'Go to Me' }).click();
-		await proof.page.getByRole('heading', { name: 'Me', exact: true }).waitFor();
+		await reachMe();
 		// Not the rendered rows: N4 makes more than the 10 passkey requests a minute that request class
 		// admits, so a late visit's list is a 429 and its skeleton never clears. The request being over,
 		// finished or failed after its headers, is the outcome this wait owns.
@@ -248,6 +248,16 @@ export async function followReadyLinkToMe(
 		proof.page.off('requestfinished', finished);
 		proof.page.off('requestfailed', failed);
 	}
+}
+
+export function followReadyLinkToMe(
+	browser: NavigationBrowser,
+): Promise<ReadonlyMap<string, MePageRequestOutcome>> {
+	const { proof } = browser;
+	return awaitMePageRequestsAfter(browser, async (): Promise<void> => {
+		await proof.page.getByRole('link', { name: 'Go to Me' }).click();
+		await proof.page.getByRole('heading', { name: 'Me', exact: true }).waitFor();
+	});
 }
 
 export async function observeNavigationCliContinuation(browser: NavigationBrowser): Promise<void> {
