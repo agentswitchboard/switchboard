@@ -89,6 +89,13 @@ it('rejects query inputs on every machine POST and requires JSON for enrollment 
 			body: revokeBody,
 		});
 		expect(wrongMediaType.status).toBe(400);
+		const formRevocation = await harness.auth(revokePath, {
+			method: 'POST',
+			headers: { 'content-type': form, origin: harness.issuer },
+			body: new URLSearchParams({ organizationId: organizationOne, enrollmentId }),
+		});
+		expect(formRevocation.status).toBe(400);
+		expect(await formRevocation.json()).toEqual({ error: 'invalid-request' });
 		expect(await harness.database.select({ id: deviceCode.id }).from(deviceCode)).toEqual([]);
 		expect(harness.centralProvisioning.arrivals).toEqual([]);
 	} finally {
