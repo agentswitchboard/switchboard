@@ -1,6 +1,10 @@
 import type { z } from 'zod';
 
 import type { CentralTransport } from '#sign-in-core/central-link/central-transport';
+import type {
+	DecideDeviceLogin_Deserialize,
+	DecideMachineToken,
+} from '#sign-in-core/central-link/generated/central-sign-in.gen';
 import {
 	decideDeviceLoginSchema,
 	decideMachineTokenSchema,
@@ -12,8 +16,7 @@ import {
 } from '#sign-in-core/machine-login/machine-login-contracts';
 
 // Central: codex-router `organization_signin_http.rs`. Each route answers 200 with the decision,
-// 503 when its port fails, and 400 for a body it cannot read. The wire is sign-in's own contract,
-// mirrored by central as `issuer-mirror/machine-login-validation-vectors.json`.
+// 503 when its port fails, and 400 for a body it cannot read.
 const deviceLoginRoute = 'http://central.invalid/internal/device-login-decisions';
 const machineTokenRoute = 'http://central.invalid/internal/machine-token-decisions';
 
@@ -26,7 +29,7 @@ export function createMachineLoginDecisionsClient(
 			decide(
 				transport,
 				deviceLoginRoute,
-				decideDeviceLoginSchema.parse(request),
+				decideDeviceLoginSchema.parse(request) satisfies DecideDeviceLogin_Deserialize,
 				deviceLoginDecisionSchema,
 				options,
 			),
@@ -34,7 +37,7 @@ export function createMachineLoginDecisionsClient(
 			decide(
 				transport,
 				machineTokenRoute,
-				decideMachineTokenSchema.parse(request),
+				decideMachineTokenSchema.parse(request) satisfies DecideMachineToken,
 				machineTokenDecisionSchema,
 				options,
 			),

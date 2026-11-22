@@ -3,6 +3,7 @@ import { APIError } from 'better-auth/api';
 import { z } from 'zod';
 
 import type { MachineLoginProviderProps } from '#sign-in-core/better-auth/machine-login-provider-context';
+import type { MachineTokenClaims } from '#sign-in-core/central-link/generated/central-sign-in.gen';
 import {
 	machineEnrollmentMetadataSchema,
 	machineTokenDecisionSchema,
@@ -82,5 +83,5 @@ export async function contributeMachineTokenClaims(
 		},
 		organization_id: family.organizationId,
 		grant_expires_at: decision.grantExpiresAt,
-	};
+	} satisfies MachineTokenClaims;
 }

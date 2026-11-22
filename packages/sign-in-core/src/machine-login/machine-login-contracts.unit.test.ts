@@ -88,6 +88,23 @@ it('keeps revocation actor and second-factor time out of the request body', (): 
 	}
 });
 
+it('admits the serialized machine grant with an omitted or populated superseded client', (): void => {
+	const grant = {
+		result: 'grant',
+		machineId,
+		enrollmentId,
+		decidedAt: 2_208_988_800,
+		grantExpiresAt: 2_208_989_400,
+	};
+	const superseded = { enrollmentId: requestId, clientId: requestId };
+	expect(machineTokenDecisionSchema.parse(grant)).toEqual(grant);
+	expect(machineTokenDecisionSchema.parse({ ...grant, superseded })).toEqual({
+		...grant,
+		superseded,
+	});
+	expect(machineTokenDecisionSchema.safeParse({ ...grant, superseded: null }).success).toBe(false);
+});
+
 it('admits the closed revocation outcome vocabulary', (): void => {
 	for (const outcome of [
 		{ result: 'revoked' },
