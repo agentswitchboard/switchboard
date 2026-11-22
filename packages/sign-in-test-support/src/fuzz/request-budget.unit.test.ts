@@ -1,5 +1,5 @@
 import * as hegel from '@hegeldev/hegel';
-import { expect, it } from 'vitest';
+import { describe, expect, it } from 'vitest';
 
 import { fuzzSettingsExact } from '#sign-in-test-support/fuzz/fuzz-settings';
 import {
@@ -99,10 +99,15 @@ function assertRequestsAreTheirVariants(built: readonly GeneratedRequest[]): voi
 		const fields = fieldsOf(request);
 		const contentType = new Headers(request.init.headers).get('content-type') ?? '';
 		if (step.encoding === 'wrong-content-type') {
+			// Planned: a valid-looking body under a text/plain media type, nothing else.
 			expect(contentType).toBe('text/plain');
+			expect(request.init.body, `${variantKey(step)} keeps its planned body`).toBeTypeOf('string');
 			continue;
 		}
 		if (step.encoding === 'malformed') {
+			// Planned: exactly an unclosed JSON object under application/json, not any unparsable input.
+			expect(contentType).toBe('application/json');
+			expect(request.init.body).toBe('{');
 			expect(fields).toBeUndefined();
 			continue;
 		}
@@ -119,6 +124,69 @@ function assertRequestsAreTheirVariants(built: readonly GeneratedRequest[]): voi
 	}
 }
 
+/**
+ * The encoding x field x mutation inventory of a route, written here from the route's own kind and
+ * the field names on its valid request's wire, not built from the step constructors the schedules use.
+ */
+const independentMutations = ['near-valid', 'boundary', 'wrong-type'] as const;
+/** Form routes that also accept a JSON body (the provider callbacks); authorize takes a form only. */
+const formAndJsonRoutes = new Set(['/api/auth/callback/google', '/api/auth/callback/github']);
+const formOnlyRoutes = new Set(['/api/auth/oauth2/authorize']);
+
+function independentInventory(family: RequestFamily): readonly string[] {
+	const path = family.route.path;
+	const method = family.route.method;
+	const primary: string =
+		method === 'GET'
+			? 'query'
+			: formAndJsonRoutes.has(path) || formOnlyRoutes.has(path)
+				? 'form'
+				: 'json';
+	const acceptsJsonToo = method === 'POST' && formAndJsonRoutes.has(path);
+	if (path === '/api/auth/oauth2/token')
+		return [
+			'form|-|valid',
+			'form|grant_type|unsupported-grant',
+			'wrong-content-type|-|valid',
+			...['client_id', 'code', 'code_verifier', 'redirect_uri', 'resource'].flatMap((field) => [
+				`form|${field}|near-valid`,
+				`form|${field}|boundary`,
+			]),
+		].toSorted();
+	if (path === '/api/auth/oauth2/introspect')
+		return [
+			'form|-|valid',
+			'form|token|near-valid',
+			'form|token|boundary',
+			'wrong-content-type|-|valid',
+		].toSorted();
+	const valid = generateOnce(family, family.variantSteps(context)[0]);
+	const names = Object.keys(fieldsOf(valid) ?? {});
+	const fieldCases = (encoding: string): string[] => [
+		`${encoding}|-|valid`,
+		...(names.length === 0
+			? independentMutations.map((mutation) => `${encoding}|-|${mutation}`)
+			: names.flatMap((field) =>
+					independentMutations.map((mutation) => `${encoding}|${field}|${mutation}`),
+				)),
+	];
+	return [
+		...fieldCases(primary),
+		...(acceptsJsonToo ? [...fieldCases('json'), 'malformed|-|valid'] : []),
+		...(primary === 'json' ? ['malformed|-|valid'] : []),
+		...(method === 'POST' ? ['wrong-content-type|-|valid'] : []),
+	].toSorted();
+}
+
+/** Both schedules, the coverage plan and what random draws produce, equal the independent inventory. */
+function assertSchedulesEqualInventory(family: RequestFamily): void {
+	const inventory = independentInventory(family);
+	expect(family.variantSteps(context).map(variantKey).toSorted(), 'coverage plan').toEqual(
+		inventory,
+	);
+	expect([...randomVariantKeys(family, 4000)].toSorted(), 'random generator').toEqual(inventory);
+}
+
 /** Nothing random draws can produce is missing from the pass. */
 function assertRandomDrawsStayInsidePass(family: RequestFamily): void {
 	const keys = family.variantSteps(context).map(variantKey);
@@ -127,6 +195,7 @@ function assertRandomDrawsStayInsidePass(family: RequestFamily): void {
 }
 
 function assertFamilyIsProved(family: RequestFamily): void {
+	assertSchedulesEqualInventory(family);
 	assertRequestsAreTheirVariants(assertPassMatchesWhatIsBuilt(family));
 	assertRandomDrawsStayInsidePass(family);
 }
@@ -187,4 +256,74 @@ it('wrong builds are caught: unchanged valid JSON labelled as a field mutation, 
 	expect(() => assertRandomDrawsStayInsidePass(dropsOne)).toThrow();
 	// The real family passes the same checks.
 	expect(() => assertFamilyIsProved(callbackFamily)).not.toThrow();
+});
+
+describe('B4 closure: independent inventory, token fields, and the planned malformed input', (): void => {
+	const tokenFamily = ((): RequestFamily => {
+		const found = requestFamilies.find(
+			(candidate) => candidate.route.path === '/api/auth/oauth2/token',
+		);
+		if (found === undefined) throw new Error('token family missing');
+		return found;
+	})();
+
+	/** The same case removed from the coverage plan AND from what random draws produce. */
+	function dropsFromBoth(family: RequestFamily, dropped: string): RequestFamily {
+		const fallback = family.variantSteps(context)[0];
+		if (fallback === undefined) throw new Error('empty plan');
+		return {
+			...family,
+			variantSteps: (ctx) =>
+				family.variantSteps(ctx).filter((step) => variantKey(step) !== dropped),
+			generate: (testCase, ctx, step) => {
+				const request = family.generate(testCase, ctx, step);
+				return variantKey(request.variant) === dropped && step === undefined
+					? family.generate(testCase, ctx, fallback)
+					: request;
+			},
+		};
+	}
+
+	it('fails when the same case is missing from both the plan and the random generator', (): void => {
+		const dropped = 'form|code_verifier|boundary';
+		expect(tokenFamily.variantSteps(context).map(variantKey)).toContain(dropped);
+		expect(() => assertFamilyIsProved(dropsFromBoth(tokenFamily, dropped))).toThrow();
+	});
+
+	it('accepts only the malformed input it planned, not any unparsable wire input', (): void => {
+		const planned = callbackFamily
+			.variantSteps(context)
+			.find((step) => step.encoding === 'malformed');
+		if (planned === undefined) throw new Error('no malformed step');
+		// A wrong build: the "malformed" step sends no body under another media type, which is also
+		// unparsable but is not the malformed JSON it planned.
+		const sendsAnotherUnparsableInput: RequestFamily = {
+			...callbackFamily,
+			generate: (testCase, ctx, step) => {
+				const request = callbackFamily.generate(testCase, ctx, step);
+				return request.variant.encoding === 'malformed'
+					? {
+							...request,
+							init: { method: 'POST', headers: { 'content-type': 'application/octet-stream' } },
+						}
+					: request;
+			},
+		};
+		expect(() =>
+			assertRequestsAreTheirVariants(assertPassMatchesWhatIsBuilt(sendsAnotherUnparsableInput)),
+		).toThrow();
+	});
+});
+
+it('the token request has five near-valid and five boundary field mutations, one family each (independent of the plan builder)', (): void => {
+	const family = requestFamilies.find(
+		(candidate) => candidate.route.path === '/api/auth/oauth2/token',
+	);
+	if (family === undefined) throw new Error('token family missing');
+	const keys = family.variantSteps(context).map(variantKey);
+	for (const field of ['client_id', 'code', 'code_verifier', 'redirect_uri', 'resource'])
+		for (const mutation of ['near-valid', 'boundary'])
+			expect(keys.filter((key) => key === `form|${field}|${mutation}`)).toHaveLength(1);
+	expect(keys.filter((key) => key.endsWith('|near-valid'))).toHaveLength(5);
+	expect(keys.filter((key) => key.endsWith('|boundary'))).toHaveLength(5);
 });
