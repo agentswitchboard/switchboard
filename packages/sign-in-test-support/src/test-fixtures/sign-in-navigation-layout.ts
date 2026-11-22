@@ -13,13 +13,25 @@ import {
 	type NavigationBrowser,
 } from '#sign-in-test-support/test-fixtures/sign-in-navigation-browser';
 
-interface HeldBrowserReply {
+export interface HeldBrowserReply {
 	readonly status: Promise<number>;
+	/** How many requests the route has seen, including those it passed through after the first. */
+	readonly matchedRequests: () => number;
 	readonly release: () => void;
 	readonly close: () => Promise<void>;
 }
 
-async function holdBrowserReply(
+/**
+ * Holds the first request matching `pattern` and passes every later one through.
+ *
+ * The route is never registered with `{ times: 1 }`. Playwright drops a spent route at
+ * once, and when it was the last one it sends `Fetch.disable` while the held document's
+ * own subresources are being requested. A request that Chromium creates during that
+ * disable is neither paused nor served, the document never reaches DOMContentLoaded, and
+ * the zero-timeout `goto` waits forever. `close()` removes the route once the page has
+ * settled.
+ */
+export async function holdBrowserReply(
 	browser: NavigationBrowser,
 	pattern: RegExp,
 	signal: AbortSignal = browser.signal,
@@ -30,6 +42,7 @@ async function holdBrowserReply(
 	void requested.promise.catch(() => undefined);
 	void ended.promise.catch(() => undefined);
 	let entered = false;
+	let matchedRequests = 0;
 	function abort(): void {
 		requested.reject(signal.reason);
 		release.resolve();
@@ -37,6 +50,11 @@ async function holdBrowserReply(
 	if (signal.aborted) abort();
 	else signal.addEventListener('abort', abort, { once: true });
 	async function hold(route: Route): Promise<void> {
+		matchedRequests += 1;
+		if (entered) {
+			await route.fallback();
+			return;
+		}
 		entered = true;
 		try {
 			const response = await route.fetch();
@@ -49,9 +67,10 @@ async function holdBrowserReply(
 			ended.reject(error);
 		}
 	}
-	await browser.proof.page.route(pattern, hold, { times: 1 });
+	await browser.proof.page.route(pattern, hold);
 	return {
 		status: requested.promise,
+		matchedRequests: () => matchedRequests,
 		release: () => release.resolve(),
 		async close(): Promise<void> {
 			signal.removeEventListener('abort', abort);

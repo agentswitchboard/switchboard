@@ -33,7 +33,10 @@ import {
 	type ManagementProofControls,
 } from '#sign-in-test-support/test-fixtures/auth-proof-barrier-server';
 import { createAuthProofForwarderLifecycle } from '#sign-in-test-support/test-fixtures/auth-proof-forwarder-lifecycle';
-import { createAuthProofHttpResponseHolds } from '#sign-in-test-support/test-fixtures/auth-proof-http-response-holds';
+import {
+	authProofHoldTokenHeader,
+	createAuthProofHttpResponseHolds,
+} from '#sign-in-test-support/test-fixtures/auth-proof-http-response-holds';
 import { createAuthProofOutbound } from '#sign-in-test-support/test-fixtures/auth-proof-outbound';
 import { recordAuthProofPhase } from '#sign-in-test-support/test-fixtures/auth-proof-phase-recording';
 import { observeAuthProofForwarder } from '#sign-in-test-support/test-fixtures/auth-proof-transport-events';
@@ -330,6 +333,8 @@ export async function startLocalAuthHarness(
 					headers.cookie,
 					headers['x-auth-proof-browser'],
 				);
+				const holdToken = headers[authProofHoldTokenHeader] ?? null;
+				delete headers[authProofHoldTokenHeader];
 				delete headers['x-auth-proof-browser'];
 				// This relay is the fixture's trusted proxy/edge. Incoming copies
 				// cannot select an address; each browser has one stable assignment.
@@ -404,6 +409,7 @@ export async function startLocalAuthHarness(
 				await httpResponseHolds.send({
 					pathname: pathnameOnly,
 					method: request.method ?? 'GET',
+					holdToken,
 					response,
 					body: outgoingBody,
 				});

@@ -7,15 +7,18 @@ import { createAuthProofHttpResponseHolds } from '#sign-in-test-support/test-fix
 function observedResponse(): {
 	readonly events: EventEmitter;
 	readonly chunks: Uint8Array[];
+	readonly destroyed: { count: number };
 	readonly response: Parameters<
 		ReturnType<typeof createAuthProofHttpResponseHolds>['send']
 	>[0]['response'];
 } {
 	const events = new EventEmitter();
 	const chunks: Uint8Array[] = [];
+	const destroyed = { count: 0 };
 	return {
 		events,
 		chunks,
+		destroyed,
 		response: {
 			destroyed: false,
 			once: (event, listener) => events.once(event, listener),
@@ -23,6 +26,9 @@ function observedResponse(): {
 			flushHeaders: () => {},
 			write: (chunk) => chunks.push(chunk),
 			end: (chunk) => chunks.push(chunk),
+			destroy: () => {
+				destroyed.count += 1;
+			},
 		},
 	};
 }
@@ -35,6 +41,7 @@ it('holds actual response bytes until the HTTP close event without a manual rele
 	const sent = controls.send({
 		pathname: '/api/auth/jwks',
 		method: 'GET',
+		holdToken: null,
 		response: observed.response,
 		body,
 	});
@@ -54,6 +61,7 @@ it('releases the exact remaining body bytes when the explicit control is used', 
 	const sent = controls.send({
 		pathname: '/api/auth/jwks',
 		method: 'GET',
+		holdToken: null,
 		response: observed.response,
 		body,
 	});
@@ -72,9 +80,83 @@ it('keeps an armed JWKS hold out of unrelated HTTP responses', async () => {
 	await controls.send({
 		pathname: '/api/auth/other',
 		method: 'GET',
+		holdToken: null,
 		response: observed.response,
 		body,
 	});
 	expect(Buffer.concat(observed.chunks)).toEqual(body);
 	expect(() => controls.armNextJwksResponse()).toThrow('already armed');
+});
+
+it('rejects hold entry and disarms the hold when its signal aborts before any response arrives', async () => {
+	const controls = createAuthProofHttpResponseHolds();
+	const cancellation = new AbortController();
+	const hold = controls.armNextGetResponse('/api/auth/other', cancellation.signal);
+	const reason = new Error('scenario ended');
+	cancellation.abort(reason);
+	await expect(hold.entered).rejects.toBe(reason);
+	const observed = observedResponse();
+	const body = Buffer.from('unheld');
+	await controls.send({
+		pathname: '/api/auth/other',
+		method: 'GET',
+		holdToken: null,
+		response: observed.response,
+		body,
+	});
+	expect(Buffer.concat(observed.chunks)).toEqual(body);
+	expect(() => controls.armNextGetResponse('/api/auth/other')).not.toThrow();
+});
+
+it('lets an entered hold finish as closed when its signal aborts', async () => {
+	const controls = createAuthProofHttpResponseHolds();
+	const cancellation = new AbortController();
+	const hold = controls.armNextGetResponse('/api/auth/other', cancellation.signal);
+	const observed = observedResponse();
+	const sent = controls.send({
+		pathname: '/api/auth/other',
+		method: 'GET',
+		holdToken: null,
+		response: observed.response,
+		body: Buffer.from('held'),
+	});
+	await hold.entered;
+	cancellation.abort(new Error('scenario ended'));
+	await sent;
+	expect(await hold.settled).toBe('closed');
+});
+
+it('holds only the response whose request carries the armed token', async () => {
+	const controls = createAuthProofHttpResponseHolds();
+	controls.armNextGetResponse('/api/auth/other', undefined, 'token-one');
+	const unmarked = observedResponse();
+	const body = Buffer.from('unmarked');
+	await controls.send({
+		pathname: '/api/auth/other',
+		method: 'GET',
+		holdToken: null,
+		response: unmarked.response,
+		body,
+	});
+	expect(Buffer.concat(unmarked.chunks)).toEqual(body);
+	expect(() => controls.armNextGetResponse('/api/auth/other')).toThrow('already armed');
+});
+
+it('drops the connection after the first byte when the hold is failed', async () => {
+	const controls = createAuthProofHttpResponseHolds();
+	const hold = controls.armNextGetResponse('/api/auth/other');
+	const observed = observedResponse();
+	const sent = controls.send({
+		pathname: '/api/auth/other',
+		method: 'GET',
+		holdToken: null,
+		response: observed.response,
+		body: Buffer.from('held body'),
+	});
+	await hold.entered;
+	hold.fail();
+	await sent;
+	expect(await hold.settled).toBe('failed');
+	expect(Buffer.concat(observed.chunks).toString()).toBe('h');
+	expect(observed.destroyed.count).toBe(1);
 });

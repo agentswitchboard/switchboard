@@ -35,6 +35,8 @@ export interface FreshNavigationBrowser {
 	readonly harness: Awaited<ReturnType<typeof startLocalAuthHarness>>;
 	readonly proof: PlaywrightBrowserPage;
 	readonly signal: AbortSignal;
+	/** Closes the harness once; later callers, including this fixture's cleanup, get the same outcome. */
+	readonly closeHarness: () => Promise<void>;
 }
 export interface NavigationBrowser extends FreshNavigationBrowser {
 	readonly organization: { readonly id: string; readonly name: string };
@@ -58,6 +60,8 @@ export async function withFreshNavigationBrowser(
 		issuerHostname: 'localhost',
 	});
 	let proof: PlaywrightBrowserPage | undefined;
+	let closing: Promise<void> | undefined;
+	const closeHarness = (): Promise<void> => (closing ??= harness.close());
 	await withNativeBrowserCleanup(
 		async (): Promise<void> => {
 			expect(harness.signInHost).toBe(props.host);
@@ -71,15 +75,12 @@ export async function withFreshNavigationBrowser(
 			process.stdout.write(
 				`${JSON.stringify({ event: 'sign-in-navigation-browser', requestedHost: props.host, actualHarnessHost: harness.signInHost, evidence })}\n`,
 			);
-			await props.exercise({ harness, proof, signal: props.signal });
+			await props.exercise({ harness, proof, signal: props.signal, closeHarness });
 		},
 		() =>
-			withNativeBrowserCleanup(
-				async (): Promise<void> => {
-					await proof?.close();
-				},
-				() => harness.close(),
-			),
+			withNativeBrowserCleanup(async (): Promise<void> => {
+				await proof?.close();
+			}, closeHarness),
 	);
 }
 
