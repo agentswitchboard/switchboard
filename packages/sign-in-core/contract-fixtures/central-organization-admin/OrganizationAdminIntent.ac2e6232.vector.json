@@ -1,0 +1,11 @@
+{
+	"canonicalIntent": "{\"operation\":\"CreateWorkspace\",\"operationId\":\"019a3dce-2000-7000-8000-000000000003\",\"organization\":\"019a3dce-2000-7000-8000-000000000001\",\"params\":{\"description\":\"Fixture description\",\"name\":\"Fixture workspace\"},\"target\":\"019a3dce-2000-7000-8000-000000000001\",\"v\":1}",
+	"intentSha256Base64Url": "1CguPwMG2K0cqmSsdO63vc2Jtp1so2d8_9t1scVvtjY",
+	"requestBody": {
+		"description": "Fixture description",
+		"name": "Fixture workspace",
+		"operationId": "019a3dce-2000-7000-8000-000000000003",
+		"organizationId": "019a3dce-2000-7000-8000-000000000001"
+	},
+	"route": "createWorkspace"
+}
