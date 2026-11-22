@@ -52,6 +52,8 @@ export function machineDeviceDecisionEndpoints(
 				if (claim.kind === 'already-decided')
 					throw new APIError('CONFLICT', { error: 'already_decided' });
 				let completion: DeviceApprovalCompletion = { kind: 'not-sent' };
+				let result: MachineDeviceApprovalResult;
+				let settled = true;
 				try {
 					// The workspace list constrains a new approval. Central owns a replay's stored snapshot.
 					if (claim.kind === 'claimed') {
@@ -104,27 +106,22 @@ export function machineDeviceDecisionEndpoints(
 						);
 					if (claim.kind === 'approved' && claim.enrollmentId !== decision.enrollmentId)
 						throw new APIError('CONFLICT', { error: 'already_decided' });
-					const result: MachineDeviceApprovalResult = {
+					result = {
 						enrollmentId: decision.enrollmentId,
 						label: decision.label,
 						allowedWorkspaces: decision.allowedWorkspaces,
 					};
-					return context.json(result);
 				} finally {
 					if (claim.kind === 'claimed') {
-						const settled = await completeDeviceApprovalAttempt({
+						settled = await completeDeviceApprovalAttempt({
 							...scope,
 							attempt: claim.attempt,
 							completion,
 						});
-						if (
-							completion.kind === 'answered' &&
-							completion.decision.result === 'approved' &&
-							!settled
-						)
-							throw new APIError('CONFLICT', { error: 'already_decided' });
 					}
 				}
+				if (!settled) throw new APIError('CONFLICT', { error: 'already_decided' });
+				return context.json(result);
 			},
 		),
 		denyMachineDevice: createAuthEndpoint(
