@@ -35,6 +35,7 @@ const secondFactorWindowSeconds = 900;
 const routePermission: Readonly<Record<AdminRouteName, string>> = {
 	CreateWorkspace: 'workspace:create',
 	WorkspaceLookup: 'organization:view',
+	ListWorkspaces: 'organization:view',
 	ReadChangeRecords: 'organization:readAudit',
 };
 
@@ -144,6 +145,17 @@ function base64UrlSha256(text: string): string {
 /** Central's `AdminOperation::intent`, restated from its published vectors. */
 function independentIntent(request: FleetAdminRequest): string {
 	const organization = request.organizationId;
+	if (request.operation === 'ListWorkspaces')
+		return base64UrlSha256(
+			sortedJson({
+				v: 1,
+				operation: 'ListWorkspaces',
+				organization,
+				target: organization,
+				operationId: null,
+				params: {},
+			}),
+		);
 	const intent =
 		request.operation === 'CreateWorkspace'
 			? {
@@ -348,6 +360,13 @@ export function createControlledCentralAdmin(props: {
 					result: 'found',
 					workspace:
 						workspaces.find((workspace) => workspace.workspaceId === body.workspaceId) ?? null,
+				};
+			case 'ListWorkspaces':
+				return {
+					result: 'workspaces',
+					workspaces: workspaces.toSorted((left, right) =>
+						left.workspaceId.localeCompare(right.workspaceId),
+					),
 				};
 			case 'ReadChangeRecords': {
 				const start =

@@ -2,6 +2,11 @@ import { z } from 'zod';
 
 import type { CentralTransport } from '#sign-in-core/central-link/central-transport';
 import {
+	revokeMachineEnrollmentResultSchema,
+	type RevokeMachineEnrollmentRequest,
+	type RevokeMachineEnrollmentResult,
+} from '#sign-in-core/machine-login/machine-login-contracts';
+import {
 	fleetAdminRequestBody,
 	fleetAdminRoutePaths,
 	fleetAdminWorkspaceNameSchema,
@@ -12,7 +17,7 @@ import type { CentralLinkUncertainty } from '#sign-in-core/organizations/organiz
 // Central's closed `OrganizationAdminResult` (codex-router #275, merged as `ea030e513`,
 // `collaboration-central-core/src/organization_admin_contract.rs`; mirrored in
 // `contract-fixtures/central-organization-admin/`), tag `result`.
-const workspaceSchema = z.strictObject({
+export const fleetAdminWorkspaceSchema = z.strictObject({
 	workspaceId: z
 		.string()
 		.regex(/^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u),
@@ -38,10 +43,17 @@ export const fleetAdminRefusalReasonSchema = z.enum([
 	'rejected',
 ]);
 export type FleetAdminRefusalReason = z.infer<typeof fleetAdminRefusalReasonSchema>;
-const refusedSchema = z.strictObject({
+export const fleetAdminRefusedSchema = z.strictObject({
 	result: z.literal('refused'),
 	reason: fleetAdminRefusalReasonSchema,
 });
+export const listWorkspacesReplySchema = z.discriminatedUnion('result', [
+	z.strictObject({
+		result: z.literal('workspaces'),
+		workspaces: z.array(fleetAdminWorkspaceSchema),
+	}),
+	fleetAdminRefusedSchema,
+]);
 const changeRecordSchema = z.strictObject({
 	id: z.uuidv7().refine((id) => id === id.toLowerCase()),
 	requestId: z
@@ -72,29 +84,29 @@ const changeRecordSchema = z.strictObject({
 });
 export const fleetAdminResultSchemas = {
 	CreateWorkspace: z.union([
-		z.strictObject({ result: z.literal('applied'), workspace: workspaceSchema }),
-		refusedSchema,
+		z.strictObject({ result: z.literal('applied'), workspace: fleetAdminWorkspaceSchema }),
+		fleetAdminRefusedSchema,
 	]),
 	WorkspaceLookup: z.union([
-		z.strictObject({ result: z.literal('found'), workspace: workspaceSchema.nullable() }),
-		refusedSchema,
+		z.strictObject({ result: z.literal('found'), workspace: fleetAdminWorkspaceSchema.nullable() }),
+		fleetAdminRefusedSchema,
 	]),
+	ListWorkspaces: listWorkspacesReplySchema,
 	ReadChangeRecords: z.union([
 		z.strictObject({ result: z.literal('records'), records: z.array(changeRecordSchema) }),
-		refusedSchema,
+		fleetAdminRefusedSchema,
 	]),
 } as const;
-export type FleetAdminResult =
-	| z.infer<(typeof fleetAdminResultSchemas)['CreateWorkspace']>
-	| z.infer<(typeof fleetAdminResultSchemas)['WorkspaceLookup']>
-	| z.infer<(typeof fleetAdminResultSchemas)['ReadChangeRecords']>;
+export type FleetAdminResult = z.infer<
+	(typeof fleetAdminResultSchemas)[keyof typeof fleetAdminResultSchemas]
+>;
 
 /**
  * Central's answer, or why there is none. 401 (any token or proof failure, empty body) and 400
  * (a body central could not parse: our defect, never retried) are their own outcomes.
  */
-export type FleetAdminAnswer =
-	| { readonly kind: 'answered'; readonly result: FleetAdminResult }
+export type FleetAdminAnswer<TResult = FleetAdminResult> =
+	| { readonly kind: 'answered'; readonly result: TResult }
 	| { readonly kind: 'unauthenticated' }
 	| { readonly kind: 'request-refused' }
 	/**
@@ -128,19 +140,30 @@ export interface FleetAdminLinkClient {
 	}) => Promise<FleetAdminAnswer>;
 }
 
+export const revokeMachineEnrollmentPath = '/organization-admin/v1/revoke-machine-enrollment';
+export type RevokeMachineEnrollment = (props: {
+	readonly request: RevokeMachineEnrollmentRequest;
+	readonly accessToken: string;
+	readonly proof: string;
+	readonly signal?: AbortSignal;
+}) => Promise<FleetAdminAnswer<RevokeMachineEnrollmentResult>>;
+
 /** One send per call; the admin routes travel the private link like every other central call. */
-export function createFleetAdminLinkClient(transport: CentralTransport): FleetAdminLinkClient {
-	async function send(props: {
-		readonly operation: FleetAdminRequest['operation'];
+export function createFleetAdminLinkClient(
+	transport: CentralTransport,
+): FleetAdminLinkClient & { readonly revokeMachineEnrollment: RevokeMachineEnrollment } {
+	async function send<TResult>(props: {
+		readonly path: string;
+		readonly resultSchema: z.ZodType<TResult>;
 		readonly authorization: string;
 		readonly proof: string;
 		readonly body: string | Uint8Array<ArrayBuffer>;
 		readonly signal?: AbortSignal;
-	}): Promise<FleetAdminAnswer> {
+	}): Promise<FleetAdminAnswer<TResult>> {
 		let response: Response;
 		try {
 			response = await transport.fetch(
-				new Request(`http://central.invalid${fleetAdminRoutePaths[props.operation]}`, {
+				new Request(`http://central.invalid${props.path}`, {
 					method: 'POST',
 					headers: {
 						'content-type': 'application/json',
@@ -167,19 +190,37 @@ export function createFleetAdminLinkClient(transport: CentralTransport): FleetAd
 		} catch {
 			return { kind: 'unknown', reason: 'malformed-reply' };
 		}
-		const parsed = fleetAdminResultSchemas[props.operation].safeParse(payload);
+		const parsed = props.resultSchema.safeParse(payload);
 		if (!parsed.success) return { kind: 'unknown', reason: 'malformed-reply' };
 		return { kind: 'answered', result: parsed.data };
 	}
 	return {
 		sendFleetAdminRequest: async (props) =>
-			send({
-				operation: props.operation.operation,
+			send<FleetAdminResult>({
+				path: fleetAdminRoutePaths[props.operation.operation],
+				resultSchema: fleetAdminResultSchemas[props.operation.operation],
 				authorization: `DPoP ${props.accessToken}`,
 				proof: props.proof,
 				body: JSON.stringify(fleetAdminRequestBody(props.operation)),
 				...(props.signal === undefined ? {} : { signal: props.signal }),
 			}),
-		relayFleetAdminRequest: async (props) => send(props),
+		relayFleetAdminRequest: async (props) =>
+			send<FleetAdminResult>({
+				...props,
+				path: fleetAdminRoutePaths[props.operation],
+				resultSchema: fleetAdminResultSchemas[props.operation],
+			}),
+		revokeMachineEnrollment: async (props) =>
+			send({
+				path: revokeMachineEnrollmentPath,
+				resultSchema: revokeMachineEnrollmentResultSchema,
+				authorization: `DPoP ${props.accessToken}`,
+				proof: props.proof,
+				body: JSON.stringify({
+					organizationId: props.request.organizationId,
+					enrollmentId: props.request.enrollmentId,
+				}),
+				...(props.signal === undefined ? {} : { signal: props.signal }),
+			}),
 	};
 }

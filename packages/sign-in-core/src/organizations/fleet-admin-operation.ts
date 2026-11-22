@@ -46,6 +46,10 @@ export const fleetAdminRequestSchema = z.discriminatedUnion('operation', [
 		workspaceId: centralUuid7Schema,
 	}),
 	z.strictObject({
+		operation: z.literal('ListWorkspaces'),
+		organizationId: centralUuid7Schema,
+	}),
+	z.strictObject({
 		operation: z.literal('ReadChangeRecords'),
 		organizationId: centralUuid7Schema,
 		/** The last record ID of the previous page; null for the first. */
@@ -62,6 +66,7 @@ function utf8ByteLength(text: string): number {
 export const fleetAdminRoutePaths = {
 	CreateWorkspace: '/organization-admin/v1/create-workspace',
 	WorkspaceLookup: '/organization-admin/v1/workspace-lookup',
+	ListWorkspaces: '/organization-admin/v1/list-workspaces',
 	ReadChangeRecords: '/organization-admin/v1/change-records',
 } as const satisfies Record<FleetAdminRequest['operation'], string>;
 
@@ -77,6 +82,8 @@ export function fleetAdminRequestBody(operation: FleetAdminRequest): CanonicalJs
 			};
 		case 'WorkspaceLookup':
 			return { organizationId: operation.organizationId, workspaceId: operation.workspaceId };
+		case 'ListWorkspaces':
+			return { organizationId: operation.organizationId };
 		case 'ReadChangeRecords':
 			return {
 				organizationId: operation.organizationId,
@@ -102,11 +109,12 @@ export function fleetAdminIntent(operation: FleetAdminRequest): CanonicalJsonVal
 				params: { name: operation.name, description: operation.description },
 			};
 		case 'WorkspaceLookup':
+		case 'ListWorkspaces':
 			return {
 				v: 1,
 				operation: operation.operation,
 				organization,
-				target: operation.workspaceId,
+				target: operation.operation === 'WorkspaceLookup' ? operation.workspaceId : organization,
 				operationId: null,
 				params: {},
 			};

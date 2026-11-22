@@ -21,7 +21,7 @@ const relayPaths = {
 	CreateWorkspace: '/api/auth/organization-admin/v1/create-workspace',
 	WorkspaceLookup: '/api/auth/organization-admin/v1/workspace-lookup',
 	ReadChangeRecords: '/api/auth/organization-admin/v1/change-records',
-} as const satisfies Record<FleetAdminRequest['operation'], string>;
+} as const satisfies Partial<Record<FleetAdminRequest['operation'], string>>;
 
 /** A workspace as central's admin answers name it. */
 type FleetAdminWorkspace = Extract<FleetAdminResult, { readonly result: 'applied' }>['workspace'];
@@ -46,6 +46,7 @@ async function send(props: {
 	readonly operation: FleetAdminRequest;
 	readonly io: FleetCliIo;
 }): Promise<FleetAdminOutcome> {
+	if (props.operation.operation === 'ListWorkspaces') return { kind: 'unknown' };
 	// htu names central's admin endpoint, not this hop.
 	const proof = await signFleetAdminProof(props.io.crypto, {
 		key: props.session.key,
