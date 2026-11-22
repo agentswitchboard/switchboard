@@ -29,7 +29,7 @@ import {
 } from '#sign-in-test-support/test-fixtures/playwright-browser';
 
 useControlledSignInClock();
-const routerClientId = '019a3dce-2000-7000-8000-0000000000b1';
+const routerClientId = uuid7Schema.parse('019a3dce-2000-7000-8000-0000000000b1');
 const machineId = '019a3dce-2000-7000-8000-0000000000b2';
 const enrollmentId = '019a3dce-2000-7000-8000-0000000000b3';
 const workspaceId = '019a3dce-2000-7000-8000-0000000000b4';
@@ -134,8 +134,13 @@ it('the real host approves one machine ID, presents active workspaces and releas
 			}
 			if (pathname === '/internal/device-login-decisions') {
 				const approval = decideDeviceLoginSchema.parse(input);
+				const earlier = approveBodies.find((seen) => seen.requestId === approval.requestId);
 				approveBodies.push(approval);
-				if (approveBodies.length === 2)
+				if (
+					earlier !== undefined &&
+					JSON.stringify(earlier.allowedWorkspaces.toSorted()) !==
+						JSON.stringify(approval.allowedWorkspaces.toSorted())
+				)
 					return Response.json({ result: 'refused', reason: { kind: 'requestConflict' } });
 				return Response.json({
 					result: 'approved',
@@ -236,16 +241,25 @@ it('the real host approves one machine ID, presents active workspaces and releas
 			allowedWorkspaces: [workspaceId],
 		});
 
-		harness.centralAdmin.scriptNextAnswer('ListWorkspaces', () => ({
-			result: 'workspaces',
-			workspaces: [],
-		}));
+		const workspaceReads = harness.centralAdmin.arrivals.filter(
+			({ route }) => route === 'ListWorkspaces',
+		).length;
+		const repeated = await decide([workspaceId]);
+		expect(repeated.status).toBe(200);
+		expect(await repeated.json()).toEqual({
+			enrollmentId,
+			label: 'Proof Mac',
+			allowedWorkspaces: [workspaceId],
+		});
 		const conflict = await decide([]);
 		expect(conflict.status).toBe(409);
 		expect(await conflict.json()).toEqual({
 			error: 'access_denied',
 			reason: { kind: 'requestConflict' },
 		});
+		expect(
+			harness.centralAdmin.arrivals.filter(({ route }) => route === 'ListWorkspaces'),
+		).toHaveLength(workspaceReads);
 
 		const poll = (): Promise<Response> =>
 			harness.auth(
@@ -334,7 +348,7 @@ it('the real host approves one machine ID, presents active workspaces and releas
 		expect(secondStart.status).toBe(200);
 		const secondCode = deviceStartSchema.parse(await secondStart.json());
 		await confirmAndRetryDenyInBrowser({ harness, userCode: secondCode.user_code });
-		expect(approveBodies).toHaveLength(2);
+		expect(approveBodies).toHaveLength(3);
 		expect(
 			await harness.database
 				.select({ status: deviceCode.status })

@@ -34,24 +34,27 @@ export function machineDeviceDecisionEndpoints(
 			async (context): Promise<MachineDeviceApprovalResult> => {
 				const action = await requireDeviceDecision(context, login, 'approve');
 				const organizationId = action.record.organizationId;
-				const workspaces =
-					context.request === undefined
-						? { result: 'unavailable' as const }
-						: await login.listWorkspaces({ request: context.request, organizationId });
-				if (workspaces.result === 'unavailable')
-					throw new APIError('SERVICE_UNAVAILABLE', { error: 'temporarily_unavailable' });
-				if (workspaces.result === 'refused')
-					throw new APIError('FORBIDDEN', { error: 'access_denied' });
-				const activeIds = new Set(
-					workspaces.workspaces
-						.filter((row) => row.state === 'active')
-						.map((row) => row.workspaceId),
-				);
-				if (context.body.allowedWorkspaces.some((workspaceId) => !activeIds.has(workspaceId)))
-					throw new APIError('FORBIDDEN', {
-						error: 'access_denied',
-						reason: { kind: 'unknownWorkspace' },
-					});
+				// The workspace list constrains a new approval. Central owns a replay's stored snapshot.
+				if (action.record.status === 'pending') {
+					const workspaces =
+						context.request === undefined
+							? { result: 'unavailable' as const }
+							: await login.listWorkspaces({ request: context.request, organizationId });
+					if (workspaces.result === 'unavailable')
+						throw new APIError('SERVICE_UNAVAILABLE', { error: 'temporarily_unavailable' });
+					if (workspaces.result === 'refused')
+						throw new APIError('FORBIDDEN', { error: 'access_denied' });
+					const activeIds = new Set(
+						workspaces.workspaces
+							.filter((row) => row.state === 'active')
+							.map((row) => row.workspaceId),
+					);
+					if (context.body.allowedWorkspaces.some((workspaceId) => !activeIds.has(workspaceId)))
+						throw new APIError('FORBIDDEN', {
+							error: 'access_denied',
+							reason: { kind: 'unknownWorkspace' },
+						});
+				}
 				const request = decideDeviceLoginSchema.parse({
 					organizationId,
 					approver: action.approver,
