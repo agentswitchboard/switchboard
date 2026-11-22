@@ -1,4 +1,5 @@
 import { signInRequestPolicies } from '@agent-collaboration/sign-in-core';
+import type { Route } from 'playwright';
 import { expect, it } from 'vitest';
 
 import { useControlledSignInClock } from '#sign-in-test-support/test-fixtures/controlled-node-test-clock';
@@ -16,6 +17,7 @@ import { createSoftwarePasskeyAuthenticator } from '#sign-in-test-support/test-f
 useControlledSignInClock();
 
 const passkeyListPath = '/api/auth/passkey/list-user-passkeys';
+const matchesPasskeyList = (url: URL): boolean => url.pathname === passkeyListPath;
 
 async function setHostClock(
 	harness: NavigationBrowser['harness'],
@@ -66,13 +68,38 @@ async function observeListRecovery(browser: NavigationBrowser): Promise<void> {
 	const retry = alert.getByRole('button', { name: 'Retry', exact: true });
 
 	await setHostClock(harness, windowStart + windowMilliseconds);
-	const recovered = await proof.responseTo(passkeyListPath, () => retry.click());
-	expect(recovered.response.status).toBe(200);
-	const passkey = passkeyList
-		.getByRole('listitem')
-		.getByText('Controlled test passkey', { exact: true });
-	await passkey.waitFor();
-	expect(await alert.count()).toBe(0);
+	const releaseRetry = Promise.withResolvers<void>();
+	async function holdRetry(route: Route): Promise<void> {
+		await releaseRetry.promise;
+		await route.continue();
+	}
+	await proof.page.route(matchesPasskeyList, holdRetry);
+	try {
+		const recovered = await proof.responseTo(passkeyListPath, async (): Promise<void> => {
+			await retry.focus();
+			expect(await retry.evaluate((button) => button === document.activeElement)).toBe(true);
+			const requested = proof.page.waitForRequest((request) =>
+				matchesPasskeyList(new URL(request.url())),
+			);
+			await proof.page.keyboard.press('Enter');
+			await requested;
+			expect(await passkeyList.evaluate((region) => region === document.activeElement)).toBe(true);
+			const loading = passkeyList.getByRole('status').filter({ hasText: 'Loading passkeys…' });
+			await loading.waitFor({ state: 'attached' });
+			releaseRetry.resolve();
+		});
+		expect(recovered.response.status).toBe(200);
+		const passkey = passkeyList
+			.getByRole('listitem')
+			.getByText('Controlled test passkey', { exact: true });
+		await passkey.waitFor();
+		expect(await alert.count()).toBe(0);
+		expect(await passkeyList.getByRole('status').textContent()).toBe('');
+		expect(await passkeyList.evaluate((region) => region === document.activeElement)).toBe(true);
+	} finally {
+		releaseRetry.resolve();
+		await proof.page.unrouteAll({ behavior: 'wait' });
+	}
 }
 
 it.each(['node', 'cloudflare'] as const)(

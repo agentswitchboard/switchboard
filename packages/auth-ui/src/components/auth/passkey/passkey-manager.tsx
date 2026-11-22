@@ -32,7 +32,7 @@ import {
 import { useQueryClient } from '@tanstack/react-query';
 import { KeyRound } from 'lucide-react';
 import type * as React from 'react';
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 
 export interface PasskeyManagerProps {
 	/** Removes one passkey through the host's removal route. */
@@ -60,6 +60,7 @@ export function PasskeyManager({ removePasskey, labels }: PasskeyManagerProps): 
 	const passkeys = useListPasskeys(passkeyClient, { retry: false });
 	const addPasskey = useAddPasskey(passkeyClient);
 	const updatePasskey = useUpdatePasskey(passkeyClient);
+	const listRegionRef = useRef<HTMLDivElement>(null);
 	const [editing, setEditing] = useState<{ readonly id: string; readonly name: string } | null>(
 		null,
 	);
@@ -93,12 +94,16 @@ export function PasskeyManager({ removePasskey, labels }: PasskeyManagerProps): 
 
 	return (
 		<PasskeyManagementCard
+			listRegionRef={listRegionRef}
 			addAction={
 				<Button type="button" variant="outline" disabled={addPasskey.isPending} onClick={add}>
 					{labels.add}
 				</Button>
 			}
 		>
+			<span className="sr-only" role="status">
+				{(passkeys.isPending || passkeys.isFetching) && 'Loading passkeys…'}
+			</span>
 			{passkeys.isPending && <PasskeyListSkeleton />}
 			{passkeys.isError && (
 				<Alert variant="destructive">
@@ -110,6 +115,7 @@ export function PasskeyManager({ removePasskey, labels }: PasskeyManagerProps): 
 							size="sm"
 							disabled={passkeys.isFetching}
 							onClick={(): void => {
+								listRegionRef.current?.focus({ preventScroll: true });
 								void passkeys.refetch();
 							}}
 						>

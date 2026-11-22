@@ -10,12 +10,13 @@ import { Skeleton } from '@agent-collaboration/tool-access-ui/ui/skeleton';
 import type * as React from 'react';
 
 export function PasskeyListSkeleton(): React.ReactElement {
-	return <Skeleton className="h-12 w-full" />;
+	return <Skeleton aria-hidden="true" className="h-12 w-full" />;
 }
 
 export function PasskeyManagementCard(props: {
 	readonly addAction: React.ReactNode;
 	readonly children: React.ReactNode;
+	readonly listRegionRef?: React.Ref<HTMLDivElement>;
 }): React.ReactElement {
 	return (
 		<Card>
@@ -29,6 +30,7 @@ export function PasskeyManagementCard(props: {
 				<CardAction>{props.addAction}</CardAction>
 			</CardHeader>
 			<CardContent
+				ref={props.listRegionRef}
 				className="h-40 overflow-y-auto overscroll-contain sm:h-36"
 				role="region"
 				aria-label="Passkey list"
