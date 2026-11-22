@@ -183,22 +183,63 @@ export async function observeNavigationReadiness(browser: NavigationBrowser): Pr
 	await followReadyLinkToMe(browser);
 }
 
-export async function followReadyLinkToMe(browser: NavigationBrowser): Promise<void> {
-	const { proof } = browser;
-	await proof.page.getByRole('link', { name: 'Go to Me' }).click();
-	await awaitMePageSettled(browser);
+/** The responses the Me page's island must finish receiving before the page is at rest. */
+const mePageTerminalRequestPaths = [
+	'/api/auth/passkey/list-user-passkeys',
+	'/api/auth/get-session',
+] as const;
+
+async function rejectWhenAborted<TValue>(
+	wait: Promise<TValue>,
+	signal: AbortSignal,
+): Promise<TValue> {
+	void wait.catch(() => undefined);
+	signal.throwIfAborted();
+	const aborted = Promise.withResolvers<never>();
+	const abort = (): void => aborted.reject(signal.reason);
+	signal.addEventListener('abort', abort, { once: true });
+	try {
+		return await Promise.race([wait, aborted.promise]);
+	} finally {
+		signal.removeEventListener('abort', abort);
+	}
+}
+
+/** Arms before the click, and counts only responses the Me document itself requested. */
+function armMePageTerminalResponse(browser: NavigationBrowser, pathname: string): Promise<void> {
+	const { harness, proof, signal } = browser;
+	const received = proof.page.waitForResponse(
+		(candidate) =>
+			candidate.request().method() === 'GET' &&
+			new URL(candidate.url()).origin === new URL(harness.issuer).origin &&
+			new URL(candidate.url()).pathname === pathname &&
+			new URL(candidate.request().frame().url()).pathname === '/me',
+		{ timeout: 0 },
+	);
+	return rejectWhenAborted(
+		received.then(async (response): Promise<void> => {
+			// Headers arrive first; the request is over only once its body has been read.
+			const failure = await response.finished();
+			if (failure !== null) throw failure;
+		}),
+		signal,
+	);
 }
 
 /**
  * The Me heading is server-rendered, so it says nothing about the requests the page's island
- * issues after mounting. The empty passkey list is its terminal outcome, and the proof server
- * must then have finished answering, because closing the harness rejects any request still open.
+ * issues after mounting. The ready link's terminal outcome is those requests finishing; closing
+ * the harness rejects any request still open, so this wait must not return before they have.
  */
-export async function awaitMePageSettled(browser: NavigationBrowser): Promise<void> {
-	const { harness, proof } = browser;
+export async function followReadyLinkToMe(browser: NavigationBrowser): Promise<void> {
+	const { proof } = browser;
+	const terminal = Promise.all(
+		mePageTerminalRequestPaths.map((pathname) => armMePageTerminalResponse(browser, pathname)),
+	);
+	void terminal.catch(() => undefined);
+	await proof.page.getByRole('link', { name: 'Go to Me' }).click();
 	await proof.page.getByRole('heading', { name: 'Me', exact: true }).waitFor();
-	await proof.page.getByText('No passkeys yet.', { exact: true }).waitFor();
-	await harness.settleHttpRequests();
+	await terminal;
 }
 
 export async function observeNavigationCliContinuation(browser: NavigationBrowser): Promise<void> {

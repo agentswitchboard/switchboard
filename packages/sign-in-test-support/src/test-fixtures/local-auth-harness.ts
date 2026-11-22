@@ -208,8 +208,6 @@ export async function startLocalAuthHarness(
 		readonly fireCron: (cron: string) => Promise<void>;
 		/** Resolves once every after-response task the sign-in host deferred has finished. */
 		readonly settleDeferredWork: () => Promise<void>;
-		/** Resolves once every HTTP request the proof server has accepted has finished; close rejects any still pending. */
-		readonly settleHttpRequests: () => Promise<void>;
 		readonly cookie: () => string;
 		readonly useBrowser: (browserKey: string) => void;
 		readonly browserAddress: () => string;
@@ -990,7 +988,6 @@ export async function startLocalAuthHarness(
 			const response = await auth('/__auth-proof/deferred-work');
 			if (!response.ok) throw new Error('Deferred work did not settle');
 		},
-		settleHttpRequests: forwarderLifecycle.settleAcceptedRequests,
 		cookie: browser.cookie,
 		useBrowser: browserAddresses.useBrowser,
 		browserAddress: browserAddresses.current,
