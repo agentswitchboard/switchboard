@@ -2,11 +2,16 @@ import { fileURLToPath } from 'node:url';
 
 import { member, passkey, session, twoFactor, user } from '@agent-collaboration/sign-in-core';
 import { and, eq } from 'drizzle-orm';
+import type { Request } from 'playwright';
 import { expect } from 'vitest';
 import { z } from 'zod';
 
 import { controlledSignInClock } from '#sign-in-test-support/test-fixtures/controlled-sign-in-clock';
 import { readCurrentBrowserSession } from '#sign-in-test-support/test-fixtures/current-browser-session';
+import {
+	createMePageRequestTracker,
+	type MePageRequestOutcome,
+} from '#sign-in-test-support/test-fixtures/me-page-request-tracker';
 import { loginThroughNativeOwnerCli } from '#sign-in-test-support/test-fixtures/native-cli-proof';
 import {
 	organizationBrowserCookie,
@@ -183,7 +188,7 @@ export async function observeNavigationReadiness(browser: NavigationBrowser): Pr
 	await followReadyLinkToMe(browser);
 }
 
-/** The responses the Me page's island must finish receiving before the page is at rest. */
+/** The requests the Me page's island must see end before the page is at rest. */
 const mePageTerminalRequestPaths = [
 	'/api/auth/passkey/list-user-passkeys',
 	'/api/auth/get-session',
@@ -205,44 +210,41 @@ async function rejectWhenAborted<TValue>(
 	}
 }
 
-/** Arms before the click, and counts only responses the Me document itself requested. */
-function armMePageTerminalResponse(browser: NavigationBrowser, pathname: string): Promise<void> {
-	const { harness, proof, signal } = browser;
-	const received = proof.page.waitForResponse(
-		(candidate) =>
-			candidate.request().method() === 'GET' &&
-			new URL(candidate.url()).origin === new URL(harness.issuer).origin &&
-			new URL(candidate.url()).pathname === pathname &&
-			new URL(candidate.request().frame().url()).pathname === '/me',
-		{ timeout: 0 },
-	);
-	return rejectWhenAborted(
-		received.then(async (response): Promise<void> => {
-			// Headers arrive first; the request is over only once its body has been read.
-			const failure = await response.finished();
-			if (failure !== null) throw failure;
-		}),
-		signal,
-	);
-}
-
 /**
  * The Me heading is server-rendered, so it says nothing about the requests the page's island
- * issues after mounting. The ready link's terminal outcome is those requests finishing; closing
- * the harness rejects any request still open, so this wait must not return before they have.
+ * issues after mounting. The ready link's terminal outcome is those requests ending; closing the
+ * harness rejects any request still open, so this wait must not return before they have. Each
+ * request is bound to the document that issued it when it is issued, so a ready-page request that
+ * ends after Me has committed does not count.
  */
-export async function followReadyLinkToMe(browser: NavigationBrowser): Promise<void> {
-	const { proof } = browser;
-	const terminal = Promise.all(
-		mePageTerminalRequestPaths.map((pathname) => armMePageTerminalResponse(browser, pathname)),
-	);
-	void terminal.catch(() => undefined);
-	await proof.page.getByRole('link', { name: 'Go to Me' }).click();
-	await proof.page.getByRole('heading', { name: 'Me', exact: true }).waitFor();
-	// Not the rendered rows: N4 makes more than the 10 passkey requests a minute that request class
-	// admits, so a late visit's list is a 429 and its skeleton never clears. The request being over
-	// is the outcome this wait owns.
-	await terminal;
+export async function followReadyLinkToMe(
+	browser: NavigationBrowser,
+): Promise<ReadonlyMap<string, MePageRequestOutcome>> {
+	const { harness, proof, signal } = browser;
+	const tracker = createMePageRequestTracker({
+		origin: new URL(harness.issuer).origin,
+		paths: mePageTerminalRequestPaths,
+	});
+	const issued = (request: Request): void =>
+		tracker.observeIssued(request, {
+			method: request.method(),
+			url: request.url(),
+			documentPathname: new URL(request.frame().url()).pathname,
+		});
+	const finished = (request: Request): void => tracker.observeTerminal(request, 'finished');
+	proof.page.on('request', issued);
+	proof.page.on('requestfinished', finished);
+	try {
+		await proof.page.getByRole('link', { name: 'Go to Me' }).click();
+		await proof.page.getByRole('heading', { name: 'Me', exact: true }).waitFor();
+		// Not the rendered rows: N4 makes more than the 10 passkey requests a minute that request class
+		// admits, so a late visit's list is a 429 and its skeleton never clears. The request being over
+		// is the outcome this wait owns.
+		return await rejectWhenAborted(tracker.settled, signal);
+	} finally {
+		proof.page.off('request', issued);
+		proof.page.off('requestfinished', finished);
+	}
 }
 
 export async function observeNavigationCliContinuation(browser: NavigationBrowser): Promise<void> {
