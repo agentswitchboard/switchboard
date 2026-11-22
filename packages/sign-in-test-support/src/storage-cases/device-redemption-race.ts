@@ -4,7 +4,7 @@ import {
 	machineTokenDecisionSchema,
 	machineTokenResponseSchema,
 } from '@agent-collaboration/sign-in-core/better-auth';
-import { betterAuth } from 'better-auth';
+import { betterAuth, type BetterAuthOptions } from 'better-auth';
 import type { DBAdapter } from 'better-auth/adapters';
 import { eq } from 'drizzle-orm';
 
@@ -126,7 +126,7 @@ export async function raceNativeDeviceRedemption(context: StorageCaseContext): P
 		throw new Error('Missing the native Drizzle adapter factory');
 	const provider = betterAuth({
 		...base.options,
-		database(options): DBAdapter {
+		database(options: BetterAuthOptions): DBAdapter {
 			const stock = openAdapter(options);
 			return {
 				...stock,
