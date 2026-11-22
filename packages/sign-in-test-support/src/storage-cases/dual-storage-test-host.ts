@@ -40,15 +40,19 @@ export interface StorageTestHost {
 }
 export async function createStorageTestHost(
 	leg: StorageTestLeg,
-	mode: 'migrated' | 'unmigrated' | 'baseline' = 'migrated',
+	mode: 'migrated' | 'unmigrated' | 'baseline' | 'before-machine-login' = 'migrated',
 ): Promise<StorageTestHost> {
 	const repositoryRoot = fileURLToPath(new URL('../../../../', import.meta.url));
 	const proofRateLimitBindings = await loadProofRateLimitBindings(repositoryRoot);
 	const runtimeDirectory = await mkdtemp(path.join(tmpdir(), '2026-10-sign-in-storage-'));
 	const currentFolder = path.join(repositoryRoot, 'packages/sign-in-core/drizzle');
 	const migrationsFolder =
-		mode === 'baseline'
-			? await prepareBaselineMigrations({ currentFolder, runtimeDirectory })
+		mode === 'baseline' || mode === 'before-machine-login'
+			? await prepareBaselineMigrations({
+					currentFolder,
+					runtimeDirectory,
+					...(mode === 'before-machine-login' ? { through: '0004_organization_stamp_record' } : {}),
+				})
 			: currentFolder;
 	if (leg === 'better-sqlite3') {
 		const options = {

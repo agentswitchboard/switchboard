@@ -1,5 +1,6 @@
 import { expect, it } from 'vitest';
 
+import { expectedDeviceCodeAfterUpgrade } from '#sign-in-test-support/storage-cases/device-code-upgrade-case';
 import { createStorageTestHost } from '#sign-in-test-support/storage-cases/dual-storage-test-host';
 import {
 	schemaReadbackSchema,
@@ -192,3 +193,19 @@ it('Wrangler D1 migrations and the Drizzle SQLite migrator install the same appr
 	);
 	expect(snapshots[0]).toEqual(snapshots[1]);
 });
+
+it.each(['d1-workerd', 'better-sqlite3'] as const)(
+	'preserves a populated 0004 device code through migration 0005 on %s',
+	async (leg): Promise<void> => {
+		const host = await createStorageTestHost(leg, 'before-machine-login');
+		try {
+			expect(await host.runCommand({ kind: 'seed-device-code-0004' })).toEqual({ seeded: true });
+			await host.upgrade();
+			expect(await host.runCommand({ kind: 'read-device-code-0005' })).toEqual(
+				expectedDeviceCodeAfterUpgrade,
+			);
+		} finally {
+			await host.close();
+		}
+	},
+);
