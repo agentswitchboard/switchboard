@@ -36,6 +36,7 @@ const routerClientId = uuid7Schema.parse('019a3dce-2000-7000-8000-0000000000b1')
 const machineId = '019a3dce-2000-7000-8000-0000000000b2';
 const enrollmentId = '019a3dce-2000-7000-8000-0000000000b3';
 const workspaceId = '019a3dce-2000-7000-8000-0000000000b4';
+const archivedWorkspaceId = '019a3dce-2000-7000-8000-0000000000b0';
 const deviceStartSchema = z.strictObject({
 	device_code: z.string(),
 	user_code: z.string(),
@@ -171,6 +172,36 @@ it('the real host approves one machine ID, handles a Central replay conflict and
 			.parse(decodeJwt(await harness.ownerToken()));
 		const organizationId = ownerClaims.organization_id;
 		await harness.settleDeferredWork();
+		function offerDirectory(): void {
+			harness.centralAdmin.scriptNextAnswer('ListWorkspaces', (request) => {
+				expect(request).toMatchObject({ operation: 'ListWorkspaces', limit: 100 });
+				expect(request).not.toHaveProperty('after');
+				return {
+					result: 'workspaces',
+					workspaces: [
+						{
+							workspaceId: archivedWorkspaceId,
+							name: 'Archived workspace',
+							description: '',
+							state: 'archived',
+						},
+					],
+					next: archivedWorkspaceId,
+				};
+			});
+			harness.centralAdmin.scriptNextAnswer('ListWorkspaces', (request) => {
+				expect(request).toMatchObject({
+					operation: 'ListWorkspaces',
+					after: archivedWorkspaceId,
+					limit: 100,
+				});
+				return {
+					result: 'workspaces',
+					workspaces: [{ workspaceId, name: 'Active workspace', description: '', state: 'active' }],
+					next: null,
+				};
+			});
+		}
 		const deviceRequest = {
 			client_id: routerClientId,
 			machine_id: machineId,
@@ -190,11 +221,16 @@ it('the real host approves one machine ID, handles a Central replay conflict and
 		expect(started.status).toBe(200);
 		const code = deviceStartSchema.parse(await started.json());
 		const pathname = `/device?user_code=${encodeURIComponent(code.user_code)}`;
+		offerDirectory();
 		const page = await harness.auth(pathname);
 		expect(page.status).toBe(200);
 		const html = await page.text();
 		expect(html).toContain('Machines');
 		expect(html).toContain('data-device-page-state="review"');
+		expect(html).toContain(`id="workspace-${workspaceId}"`);
+		expect(html).toContain('Active workspace');
+		expect(html).not.toContain(archivedWorkspaceId);
+		expect(html).not.toContain('Archived workspace');
 		const [eligible] = await harness.database
 			.select()
 			.from(deviceCode)
@@ -236,33 +272,43 @@ it('the real host approves one machine ID, handles a Central replay conflict and
 				headers: { 'content-type': 'application/json', origin: harness.issuer },
 				body: JSON.stringify({ userCode: code.user_code, allowedWorkspaces }),
 			});
-		const approval = await decide([]);
+		offerDirectory();
+		const archived = await decide([archivedWorkspaceId]);
+		expect(archived.status).toBe(403);
+		expect(await archived.json()).toEqual({
+			error: 'access_denied',
+			reason: { kind: 'unknownWorkspace' },
+		});
+		expect(approveBodies).toEqual([]);
+
+		offerDirectory();
+		const approval = await decide([workspaceId]);
 		expect(approval.status).toBe(200);
 		expect(approval.headers.has('set-cookie')).toBe(false);
 		expect(approval.headers.has('authorization')).toBe(false);
 		expect(await approval.json()).toEqual({
 			enrollmentId,
 			label: 'Proof Mac',
-			allowedWorkspaces: [],
+			allowedWorkspaces: [workspaceId],
 		});
 		expect(approveBodies[0]).toMatchObject({
 			organizationId,
 			machineId,
-			allowedWorkspaces: [],
+			allowedWorkspaces: [workspaceId],
 		});
 
 		const workspaceReads = harness.centralAdmin.arrivals.filter(
 			({ route }) => route === 'ListWorkspaces',
 		).length;
-		expect(workspaceReads).toBe(2);
-		const repeated = await decide([]);
+		expect(workspaceReads).toBe(6);
+		const repeated = await decide([workspaceId]);
 		expect(repeated.status).toBe(200);
 		expect(await repeated.json()).toEqual({
 			enrollmentId,
 			label: 'Proof Mac',
-			allowedWorkspaces: [],
+			allowedWorkspaces: [workspaceId],
 		});
-		const conflict = await decide([workspaceId]);
+		const conflict = await decide([]);
 		expect(conflict.status).toBe(409);
 		expect(await conflict.json()).toEqual({
 			error: 'access_denied',
