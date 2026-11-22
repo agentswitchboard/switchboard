@@ -12,6 +12,8 @@ Switchboard is being rebuilt together with its central service. Every Router enr
 - No remembered old identity. For example, a machine is identified only by its machine ID; the former installation identity is refused.
 - No door that still accepts an old request form. A wire or route changes once, and the old form is refused.
 - The change-over itself is not designed or built until the maintainer asks for it.
+- Nothing built here is deployed to production before the change-over. Testing happens on a new staging installation. So don't weigh a design by what it would cost a Router or service that is already installed: its identities, stored data and request forms are left behind. Only the backup taken at the change-over is kept.
+- When stored data makes you want to preserve it, or to ask what happens to it across the change-over, the answer is already here: it is left behind.
 
 ## Standards
 
