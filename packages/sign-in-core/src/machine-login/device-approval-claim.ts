@@ -160,8 +160,10 @@ function settleClaim(
 	};
 }
 
-/** Central's definitive replies can retire only this attempt. Earlier unanswered
- * sends or crash-left outstanding attempts may still have committed. */
+/** Central checks stored approvals before permission, as proved by
+ * `stored_approval_resolves_after_approver_loses_permission` on Tokio and workerd.
+ * A definitive refusal retires only this attempt. An unanswered or outstanding
+ * attempt can still have committed. */
 function refusalCertifiesNoApproval(refusal: DeviceLoginRefusal): boolean {
 	switch (refusal.kind) {
 		case 'notPermitted':
