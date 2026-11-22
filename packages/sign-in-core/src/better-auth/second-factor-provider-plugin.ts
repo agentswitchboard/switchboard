@@ -2,6 +2,7 @@ import type { BetterAuthPlugin } from '@better-auth/core';
 import { APIError, createAuthEndpoint, createAuthMiddleware, isAPIError } from 'better-auth/api';
 import { z } from 'zod';
 
+import { isPasskeyRegistrationRequest } from '#sign-in-core/better-auth/passkey-registration-request';
 import {
 	requireFactorActor,
 	requireFactorChange,
@@ -43,6 +44,19 @@ const nativeRemovals = new Set([
 	'/two-factor/get-totp-uri',
 ]);
 const confirmationPaths = new Set(['/two-factor/verify-totp', '/two-factor/verify-backup-code']);
+const publicConfirmationUserSchema = z.object({
+	id: uuid7Schema,
+	name: z.string(),
+	email: z.email(),
+	emailVerified: z.boolean(),
+	image: z.string().nullish(),
+	createdAt: z.union([z.date(), z.iso.datetime()]),
+	updatedAt: z.union([z.date(), z.iso.datetime()]),
+});
+const nativeConfirmationSchema = z.object({
+	token: z.string().min(1),
+	user: publicConfirmationUserSchema,
+});
 
 export function createSecondFactorProviderPlugin(props: {
 	readonly store: Pick<SignInStore, 'factors' | 'factorChanges'>;
@@ -101,6 +115,14 @@ export function createSecondFactorProviderPlugin(props: {
 							const mutation = mutations[path];
 							requireMutationPermission(actor, mutation.change);
 							if (
+								path === '/passkey/verify-registration' &&
+								!isPasskeyRegistrationRequest(context.body)
+							)
+								throw new APIError('BAD_REQUEST', {
+									code: 'INVALID_REQUEST',
+									message: 'invalid-passkey-registration',
+								});
+							if (
 								path === '/two-factor/enable' &&
 								body.success &&
 								body.data.method !== undefined &&
@@ -134,7 +156,7 @@ export function createSecondFactorProviderPlugin(props: {
 					matcher: (context) =>
 						confirmationPaths.has(context.path ?? '') ||
 						mutationPathSchema.safeParse(context.path).success,
-					handler: createAuthMiddleware(async (context): Promise<void> => {
+					handler: createAuthMiddleware(async (context): Promise<unknown> => {
 						if (
 							pending.kind !== 'recorded' ||
 							context.context.returned === undefined ||
@@ -145,9 +167,7 @@ export function createSecondFactorProviderPlugin(props: {
 							return;
 						const pathname = context.path ?? '';
 						if (confirmationPaths.has(pathname)) {
-							const result = z
-								.object({ token: z.string().min(1), user: z.object({ id: uuid7Schema }) })
-								.safeParse(context.context.returned);
+							const result = nativeConfirmationSchema.safeParse(context.context.returned);
 							if (!result.success || result.data.user.id !== pending.actor.personId)
 								throw new APIError('SERVICE_UNAVAILABLE', {
 									message: 'second-factor-result-unconfirmed',
@@ -171,8 +191,11 @@ export function createSecondFactorProviderPlugin(props: {
 							);
 							if (stamped.kind !== 'stamped')
 								throw new APIError('UNAUTHORIZED', { message: 'session-not-live' });
+							requireStoredValue(await props.store.factorChanges.record(pending.change, 'outcome'));
+							return context.json({ user: result.data.user });
 						}
 						requireStoredValue(await props.store.factorChanges.record(pending.change, 'outcome'));
+						return undefined;
 					}),
 				},
 			],

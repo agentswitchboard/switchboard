@@ -10,6 +10,9 @@ import {
 	user,
 } from '@agent-collaboration/sign-in-core';
 import { organizationPersonTokenClaimsSchema } from '@agent-collaboration/sign-in-core/person-identity';
+import { encodeCBOR, type CBORType } from '@levischuck/tiny-cbor';
+import type { RegistrationResponseJSON } from '@simplewebauthn/server';
+import { decodeAttestationObject } from '@simplewebauthn/server/helpers';
 import { and, eq } from 'drizzle-orm';
 import { jwtVerify } from 'jose';
 import { renderSVG } from 'uqr';
@@ -23,11 +26,13 @@ import { tokenForCurrentOwnerSession } from '#sign-in-test-support/test-fixtures
 import { createObservedProofJwks } from '#sign-in-test-support/test-fixtures/jwks-fetch-observation';
 import { startLocalAuthHarness } from '#sign-in-test-support/test-fixtures/local-auth-harness';
 import { ensureLocalOwnerOrganization } from '#sign-in-test-support/test-fixtures/local-owner-organization';
+import { registerBrowserPasskey } from '#sign-in-test-support/test-fixtures/passkey-browser-ceremonies';
 import {
 	peoplePost,
 	signInPeopleBrowser,
 	signInConfirmedPeopleBrowser,
 } from '#sign-in-test-support/test-fixtures/people-browser-login';
+import { createSoftwarePasskeyAuthenticator } from '#sign-in-test-support/test-fixtures/software-passkey-authenticator';
 
 useControlledSignInClock();
 const ownerEmail = 'owner@example.invalid';
@@ -70,6 +75,23 @@ async function codeFingerprint(harness: Harness, personId: string): Promise<stri
 	return createHash('sha256').update(JSON.stringify(rows)).digest('hex');
 }
 
+async function readSessionCredential(harness: Harness, sessionId: string): Promise<string> {
+	const rows = await harness.database
+		.select({ token: session.token })
+		.from(session)
+		.where(eq(session.id, sessionId));
+	return z.object({ token: z.string().min(1) }).parse(rows[0]).token;
+}
+
+function containsSessionCredential(value: unknown, credentials: readonly string[]): boolean {
+	if (typeof value === 'string') return credentials.some((secret) => value.includes(secret));
+	if (typeof value !== 'object' || value === null) return false;
+	return Object.entries(value).some(
+		([key, field]) =>
+			containsSessionCredential(key, credentials) || containsSessionCredential(field, credentials),
+	);
+}
+
 it('people: first app verification rotates the native session and its new token carries the recorded method and time', async () => {
 	const harness = await startLocalAuthHarness();
 	try {
@@ -94,12 +116,20 @@ it('people: first app verification rotates the native session and its new token 
 			).status,
 		).toBe(403);
 		expect(await codeFingerprint(harness, personId)).toBe(codes);
-		expect((await harness.totpAuthenticator.confirmApp(ownerEmail, harness.auth)).status).toBe(200);
+		const priorCredential = await readSessionCredential(harness, before.id);
+		const confirmed = await harness.totpAuthenticator.confirmApp(ownerEmail, harness.auth);
+		expect(confirmed.status).toBe(200);
+		const confirmation: unknown = await confirmed.json();
 		const after = await readCurrentBrowserSession({
 			cookie: harness.cookie(),
 			database: harness.database,
 		});
 		expect(after.id).not.toBe(before.id);
+		const rotatedCredential = await readSessionCredential(harness, after.id);
+		expect(containsSessionCredential(confirmation, [priorCredential, rotatedCredential])).toBe(
+			false,
+		);
+		expect(confirmation).toMatchObject({ user: { id: personId } });
 		expect(
 			await harness.database
 				.select({ id: session.id })
@@ -148,6 +178,10 @@ it('people: later app confirmation stamps the injected clock on the same session
 		await setClock(harness, now);
 		const confirmed = await harness.totpAuthenticator.confirmApp(ownerEmail, harness.auth);
 		expect(confirmed.status).toBe(200);
+		const confirmation: unknown = await confirmed.json();
+		expect(
+			containsSessionCredential(confirmation, [await readSessionCredential(harness, first.id)]),
+		).toBe(false);
 		expect(
 			await readCurrentBrowserSession({ cookie: harness.cookie(), database: harness.database }),
 		).toMatchObject({ id: first.id, secondFactorAt: now, secondFactorMethod: 'app' });
@@ -187,7 +221,12 @@ it('people: recovery codes confirm once, refuse reuse without a new stamp, and n
 		const code = harness.totpAuthenticator.recoveryCode(ownerEmail);
 		const now = controlledSignInClock.now() + 1000;
 		await setClock(harness, now);
-		expect((await factorPost(harness, 'verify-backup-code', { code })).status).toBe(200);
+		const confirmed = await factorPost(harness, 'verify-backup-code', { code });
+		expect(confirmed.status).toBe(200);
+		const confirmation: unknown = await confirmed.json();
+		expect(
+			containsSessionCredential(confirmation, [await readSessionCredential(harness, first.id)]),
+		).toBe(false);
 		expect(
 			await readCurrentBrowserSession({ cookie: harness.cookie(), database: harness.database }),
 		).toMatchObject({ id: first.id, secondFactorAt: now, secondFactorMethod: 'recoveryCode' });
@@ -582,3 +621,131 @@ it('people: the native setup form returns the exact URI as server SVG and never 
 		await harness.close();
 	}
 });
+
+it('people: incomplete registration is refused before a factor change is recorded', async () => {
+	const harness = await startLocalAuthHarness();
+	try {
+		await signInConfirmedPeopleBrowser({ harness, email: ownerEmail });
+		const before = await harness.database.select({ id: signInAudit.id }).from(signInAudit);
+		const refused = await harness.auth('/api/auth/passkey/verify-registration', {
+			method: 'POST',
+			headers: { 'content-type': 'application/json' },
+			body: JSON.stringify({ response: {} }),
+		});
+		expect(refused.status).toBe(400);
+		expect(await refused.json()).toMatchObject({ code: 'INVALID_REQUEST' });
+		expect(await harness.database.select({ id: signInAudit.id }).from(signInAudit)).toEqual(before);
+	} finally {
+		await harness.close();
+	}
+});
+
+function decodeValidAttestation(valid: RegistrationResponseJSON): Map<string, CBORType> {
+	// The verifier's own decoder, so the case is cut from what it would read.
+	const decoded: unknown = decodeAttestationObject(
+		Uint8Array.from(Buffer.from(valid.response.attestationObject, 'base64url')),
+	);
+	if (!(decoded instanceof Map)) throw new Error('The valid attestation object is not a CBOR map');
+	return new Map<string, CBORType>(decoded as Map<string, CBORType>);
+}
+function withAttestationObject(
+	valid: RegistrationResponseJSON,
+	attestationObject: Uint8Array,
+): RegistrationResponseJSON {
+	return {
+		...valid,
+		response: {
+			...valid.response,
+			attestationObject: Buffer.from(attestationObject).toString('base64url'),
+		},
+	};
+}
+function withClientDataText(
+	valid: RegistrationResponseJSON,
+	text: string,
+): RegistrationResponseJSON {
+	return {
+		...valid,
+		response: { ...valid.response, clientDataJSON: Buffer.from(text).toString('base64url') },
+	};
+}
+
+// Every case varies exactly one thing from the valid ceremony the software
+// authenticator produces for the live challenge.
+const registrationCases: readonly {
+	readonly label: string;
+	readonly expectedStatus: 200 | 400;
+	readonly alter: (valid: RegistrationResponseJSON) => RegistrationResponseJSON;
+}[] = [
+	{ label: 'unmodified (control)', expectedStatus: 200, alter: (valid) => valid },
+	{
+		label: 'client data that decodes to text that is not JSON',
+		expectedStatus: 400,
+		alter: (valid) => withClientDataText(valid, 'not json at all'),
+	},
+	{
+		label: 'client data JSON whose type field has the wrong type',
+		expectedStatus: 400,
+		alter: (valid) =>
+			withClientDataText(
+				valid,
+				JSON.stringify({
+					...(JSON.parse(
+						Buffer.from(valid.response.clientDataJSON, 'base64url').toString(),
+					) as object),
+					type: 1,
+				}),
+			),
+	},
+	{
+		label: 'an attestation object that is not CBOR',
+		expectedStatus: 400,
+		alter: (valid) => withAttestationObject(valid, Buffer.from('not cbor at all')),
+	},
+	{
+		label: 'a CBOR attestation object with no authData',
+		expectedStatus: 400,
+		alter: (valid) => {
+			const attestation = decodeValidAttestation(valid);
+			attestation.delete('authData');
+			return withAttestationObject(valid, encodeCBOR(attestation));
+		},
+	},
+	{
+		label: 'authData shorter than the 37-byte header',
+		expectedStatus: 400,
+		alter: (valid) => {
+			const attestation = decodeValidAttestation(valid);
+			const authData = attestation.get('authData');
+			if (!(authData instanceof Uint8Array)) throw new Error('The valid authData is not bytes');
+			attestation.set('authData', authData.slice(0, 36));
+			return withAttestationObject(valid, encodeCBOR(attestation));
+		},
+	},
+];
+
+it.each(registrationCases)(
+	'people: a live-challenge registration with $label gives $expectedStatus and, when refused, no factor change and no server error',
+	async ({ expectedStatus, alter }) => {
+		const harness = await startLocalAuthHarness();
+		try {
+			await signInConfirmedPeopleBrowser({ harness, email: ownerEmail });
+			const authenticator = await createSoftwarePasskeyAuthenticator();
+			const before = await harness.database.select({ id: signInAudit.id }).from(signInAudit);
+			const response = await registerBrowserPasskey({
+				harness,
+				authenticator,
+				alterResponse: alter,
+			});
+			expect(response.status).toBe(expectedStatus);
+			if (expectedStatus === 400) {
+				expect(await response.json()).toMatchObject({ code: 'INVALID_REQUEST' });
+				expect(await harness.database.select({ id: signInAudit.id }).from(signInAudit)).toEqual(
+					before,
+				);
+			}
+		} finally {
+			await harness.close();
+		}
+	},
+);

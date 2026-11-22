@@ -105,6 +105,35 @@ it('people: native invite, accept, cancel and remove write matching records with
 		});
 		const accepted = await peoplePost(harness, 'accept-invitation', { invitationId });
 		expect(accepted.status).toBe(200);
+		const acceptance: unknown = await accepted.json();
+		const [storedInvitation] = await harness.database
+			.select()
+			.from(invitation)
+			.where(eq(invitation.id, invitationId));
+		const [storedMembership] = await harness.database
+			.select()
+			.from(member)
+			.where(and(eq(member.userId, memberId), eq(member.organizationId, organizationId)));
+		if (storedInvitation === undefined || storedMembership === undefined)
+			throw new Error('Accepted invitation or membership missing');
+		expect(acceptance).toEqual({
+			invitation: {
+				id: invitationId,
+				organizationId,
+				email: 'member@example.invalid',
+				role: 'member',
+				status: 'accepted',
+				createdAt: storedInvitation.createdAt.toISOString(),
+				expiresAt: storedInvitation.expiresAt.toISOString(),
+			},
+			member: {
+				id: storedMembership.id,
+				userId: memberId,
+				organizationId,
+				role: 'member',
+				createdAt: storedMembership.createdAt.toISOString(),
+			},
+		});
 		expect(
 			await harness.database
 				.select({ role: member.role })
