@@ -1,0 +1,26 @@
+import type { RequestFamilyContext } from './request-family';
+
+/** Placeholder identities for planning and offline generation; no host sees these values. */
+export const syntheticRequestFamilyContext: RequestFamilyContext = {
+	issuer: 'https://issuer.example.invalid',
+	personId: 'person',
+	organizationId: 'organization',
+	memberId: 'member',
+	invitationId: 'invitation',
+	passkeyId: 'passkey',
+	challengeId: 'challenge',
+	passkeyRegistrationResponse: { id: 'registration-credential' },
+	passkeyAuthenticationResponse: { id: 'authentication-credential' },
+	totpCode: '840293',
+	backupCode: 'synthetic-recovery-code',
+	captchaToken: 'synthetic-captcha-token',
+	callbackQuery: { code: 'provider-code', state: 'provider-state' },
+	oauthClientId: 'client',
+	oauthClientSecret: 'secret',
+	oauthCode: 'code',
+	oauthToken: 'token',
+	oauthCodeVerifier: 'verifier',
+	oauthCodeChallenge: 'challenge',
+	oauthRedirectUri: 'http://127.0.0.1:49152/callback',
+	oauthResource: 'https://resource.example.invalid',
+};

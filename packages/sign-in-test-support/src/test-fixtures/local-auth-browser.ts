@@ -22,8 +22,9 @@ export function createLocalAuthBrowser(props: {
 		cookies: () => [...jar.values()],
 		clear: () => jar.clear(),
 		async auth(pathname: string, init: RequestInit = {}): Promise<Response> {
+			// An empty jar sends no Cookie header at all (an empty one is still a cookie to the relay).
 			const headers = {
-				cookie: [...jar.values()].join('; '),
+				...(jar.size === 0 ? {} : { cookie: [...jar.values()].join('; ') }),
 				origin: props.issuer,
 				'sec-fetch-site': 'same-origin',
 				...Object.fromEntries(new Headers(init.headers)),
