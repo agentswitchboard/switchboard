@@ -117,14 +117,13 @@ function assertApprovedOrganizationSchema(snapshot: SchemaReadback): void {
 		'scope',
 		'resources',
 		'oauthClientId',
-		'machineInstallationId',
-		'machinePeerId',
+		'machineId',
 		'machineLabel',
 		'organizationId',
 		'enrollmentId',
 	]);
 	expect(device.foreignKeys).toEqual([]);
-	for (const name of ['machineInstallationId', 'machinePeerId', 'machineLabel', 'organizationId'])
+	for (const name of ['machineId', 'machineLabel', 'organizationId'])
 		expect(device.columns.find((column) => column.name === name)?.notNull).toBe(1);
 	for (const name of ['enrollmentId', 'userId'])
 		expect(device.columns.find((column) => column.name === name)?.notNull).toBe(0);
