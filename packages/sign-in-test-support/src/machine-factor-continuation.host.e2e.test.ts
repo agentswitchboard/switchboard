@@ -31,8 +31,8 @@ it('returns a fresh owner to the checked device continuation after native factor
 	const submit = (pathname: string, body: Readonly<Record<string, string>>): Promise<Response> =>
 		harness.auth(pathname, {
 			method: 'POST',
-			headers: { accept: 'text/html', 'content-type': 'application/x-www-form-urlencoded' },
-			body: new URLSearchParams(body),
+			headers: { accept: 'text/html', 'content-type': 'application/json' },
+			body: JSON.stringify(body),
 		});
 	try {
 		harness.centralProvisioning.replyWith('provisioned');

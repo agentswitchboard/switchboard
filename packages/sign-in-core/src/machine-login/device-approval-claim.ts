@@ -34,13 +34,14 @@ export function settleDeviceApprovalClaim(props: {
 }): DeviceApprovalClaimTransition {
 	const { claim, attempt, completion } = props;
 	if (!claim.attempts.includes(attempt)) return { kind: 'unchanged' };
-	if (completion.kind === 'answered' && completion.decision.result === 'approved')
-		return { kind: 'approve', enrollmentId: completion.decision.enrollmentId };
+	const decision = completion.kind === 'answered' ? completion.decision : null;
+	if (decision?.result === 'approved')
+		return { kind: 'approve', enrollmentId: decision.enrollmentId };
 	const attempts = claim.attempts.filter((active) => active !== attempt);
 	const mayHaveCommitted =
 		claim.mayHaveCommitted ||
 		completion.kind === 'unanswered' ||
-		(completion.kind === 'answered' && !refusalCertifiesNoApproval(completion.decision.reason));
+		(decision !== null && !refusalCertifiesNoApproval(decision.reason));
 	return attempts.length === 0 && !mayHaveCommitted
 		? { kind: 'release' }
 		: { kind: 'retain', claim: { attempts, mayHaveCommitted } };
