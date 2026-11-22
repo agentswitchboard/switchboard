@@ -160,6 +160,7 @@ export function storedCredentials(snapshot: RequestStorageSnapshot): readonly st
 	const columns = new Set([
 		'token',
 		'accessToken',
+		'deviceCode',
 		'refreshToken',
 		'idToken',
 		'clientSecret',

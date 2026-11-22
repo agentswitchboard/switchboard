@@ -1,3 +1,4 @@
+import { fuzzMachineOptions } from '#sign-in-test-support/fuzz/machine-login-fixture';
 import {
 	resetRequestHarness,
 	type RequestHarness,
@@ -38,7 +39,7 @@ export function createSharedRequestHarness(): SharedRequestHarness {
 	return {
 		async acquire(): Promise<RequestHarness> {
 			if (current === undefined) {
-				current = await startLocalAuthHarness();
+				current = await startLocalAuthHarness(fuzzMachineOptions);
 				// A central that confirms organization setup, as the permanent provisioning tests use
 				// (controlled-central-provisioning.ts), so no answer is 503 "setting up".
 				current.centralProvisioning.replyWith('provisioned');

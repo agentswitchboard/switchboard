@@ -92,6 +92,7 @@ it('covers every pathname branch and prefix in the actual outer handlers', () =>
 			scannedFiles: [
 				'packages/sign-in-core/src/response-release/sign-in-request-handler.ts',
 				'packages/sign-in-core/src/better-auth/sign-in-http-handler.ts',
+				'packages/sign-in-core/src/response-release/machine-device-response.ts',
 			].map((name) => program.getSourceFile(name)?.fileName ?? name),
 		});
 		expect(unclassifiedHandlerRoutes(discovered, classifiedPaths)).toEqual({
@@ -433,6 +434,28 @@ describe('B1 closure 2: the static method and path inventory is the coverage aut
 			'/api/a',
 		);
 		expect(served.map((route) => route.method)).toEqual(['GET', 'DELETE']);
+	});
+
+	it('reads a dispatch guard bound to an immutable local', (): void => {
+		const served = staticServed(
+			`export function respond(request: Request, url: URL): Response | null {
+				const readyPage = request.method === 'GET' && ['/api/a'].includes(url.pathname);
+				if (readyPage) return new Response('page');
+				return null;
+			}`,
+			'/api/a',
+		);
+		expect(served).toEqual([{ method: 'GET', path: '/api/a' }]);
+		expect(() =>
+			staticServed(
+				`export function respond(request: Request, url: URL): Response | null {
+					const readyPage = request.method.toUpperCase() === 'GET' && ['/api/a'].includes(url.pathname);
+					if (readyPage) return new Response('page');
+					return null;
+				}`,
+				'/api/a',
+			),
+		).toThrow(/Unsupported route predicate form/u);
 	});
 
 	it('fails closed on an opaque method guard even when other branches gave evidence', (): void => {

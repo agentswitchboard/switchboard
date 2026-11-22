@@ -149,6 +149,9 @@ export async function runRequestGroup(props: {
 		});
 		assertGenericRefusalBody(answer, {
 			htmlRefusalDocumented: classification.htmlRefusals?.includes(answer.status) === true,
+			...(classification.deviceDecisionRefusal === undefined
+				? {}
+				: { deviceDecisionRefusal: classification.deviceDecisionRefusal }),
 		});
 		assertRequestDisclosure({
 			fixture,
@@ -165,6 +168,7 @@ export async function runRequestGroup(props: {
 				before,
 				after,
 				request: generated,
+				answer,
 				// Central's actual replies during this request: the only acknowledgement evidence.
 				central: {
 					acknowledgements: readCentralAcknowledgements(

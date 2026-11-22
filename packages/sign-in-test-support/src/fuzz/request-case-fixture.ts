@@ -4,6 +4,11 @@ import { invitation, organization, passkey, verification } from '@agent-collabor
 import { eq } from 'drizzle-orm';
 import { z } from 'zod';
 
+import {
+	fuzzMachineLogin,
+	fuzzMachineOptions,
+	prepareMachineCode,
+} from '#sign-in-test-support/fuzz/machine-login-fixture';
 import type { RequestFamilyContext } from '#sign-in-test-support/fuzz/request-families/index';
 import {
 	readRequestStorageRowCounts,
@@ -70,7 +75,7 @@ export async function createRequestCaseFixture(props: {
 	readonly path: string;
 	readonly existingHarness?: Harness;
 }): Promise<RequestCaseFixture> {
-	const ownedHarness = props.existingHarness ?? (await startLocalAuthHarness());
+	const ownedHarness = props.existingHarness ?? (await startLocalAuthHarness(fuzzMachineOptions));
 	const caseId = controlledSignInIds.nextId();
 	let browserKey = `${caseId}:setup`;
 	const harness: Harness = {
@@ -183,6 +188,11 @@ export async function createRequestCaseFixture(props: {
 			oauthCodeChallenge,
 			oauthRedirectUri: harness.target.ownerCliRedirectUri,
 			oauthResource: harness.target.managementAudience,
+			machineRouterClientId: fuzzMachineLogin.routerClientId,
+			machineId: controlledSignInIds.nextId(),
+			machineEnrollmentId: controlledSignInIds.nextId(),
+			machineUserCode: 'ABCDEFGH',
+			machineDeviceCode: 'unissued-fixture-device-code',
 			passkeyRegistrationResponse: {},
 			passkeyAuthenticationResponse: {},
 			totpCode: await harness.totpAuthenticator.currentCode(callerEmail),
@@ -194,7 +204,10 @@ export async function createRequestCaseFixture(props: {
 			}),
 			callbackQuery: {},
 		};
+		context = await prepareMachineCode({ path: props.path, harness, ownerCookie, context });
 		const issuedCredentials: string[] = [context.backupCode];
+		if (context.machineDeviceCode !== 'unissued-fixture-device-code')
+			issuedCredentials.push(context.machineDeviceCode);
 		if (props.path.startsWith('/api/auth/passkey/') && props.caller !== 'signed-out') {
 			const authenticator = await createSoftwarePasskeyAuthenticator();
 			const registered = await registerBrowserPasskey({

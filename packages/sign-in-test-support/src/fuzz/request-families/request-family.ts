@@ -26,6 +26,11 @@ export interface RequestFamilyContext {
 	readonly oauthCodeChallenge: string;
 	readonly oauthRedirectUri: string;
 	readonly oauthResource: string;
+	readonly machineRouterClientId: string;
+	readonly machineId: string;
+	readonly machineEnrollmentId: string;
+	readonly machineUserCode: string;
+	readonly machineDeviceCode: string;
 }
 
 /** One variant family, kept structural: how the request is encoded, which field is changed, and how. */
@@ -39,9 +44,11 @@ export interface VariantStep {
 	readonly encoding: string;
 	readonly field: string | null;
 	readonly mutation: FieldMutation;
+	readonly flow?: 'machine-device' | 'machine-refresh';
 }
 export function variantKey(step: VariantStep): string {
-	return `${step.encoding}|${step.field ?? '-'}|${step.mutation}`;
+	const variant = `${step.encoding}|${step.field ?? '-'}|${step.mutation}`;
+	return step.flow === undefined ? variant : `${variant}|${step.flow}`;
 }
 
 export interface GeneratedRequest {
@@ -99,7 +106,7 @@ function transportStep(encoding: string): VariantStep {
 	return { encoding, field: null, mutation: 'valid' };
 }
 
-function chooseStep(
+export function chooseStep(
 	testCase: Drawer,
 	steps: readonly VariantStep[],
 	given: VariantStep | undefined,
@@ -230,6 +237,9 @@ export function formFamily(
 	path: string,
 	validFields: (context: RequestFamilyContext) => Readonly<Record<string, string>>,
 	allowJson: boolean,
+	headersForContext: (
+		context: RequestFamilyContext,
+	) => Readonly<Record<string, string>> = () => ({}),
 ): RequestFamily {
 	return {
 		route: { method: 'POST', path },
@@ -256,6 +266,7 @@ export function formFamily(
 								: isJson
 									? 'application/json'
 									: 'application/x-www-form-urlencoded',
+						...headersForContext(context),
 					},
 					body:
 						step.encoding === 'malformed' ? '{' : isJson ? JSON.stringify(fields) : form.toString(),

@@ -7,6 +7,7 @@ import type {
 	RequestFamilyContext,
 } from '#sign-in-test-support/fuzz/request-families/index';
 import {
+	rowsAdded,
 	storedCredentials,
 	type RequestStorageSnapshot,
 } from '#sign-in-test-support/fuzz/request-storage-snapshot';
@@ -71,6 +72,8 @@ function credentialFields(value: unknown, path = ''): readonly string[] {
 		'idToken',
 		'client_secret',
 		'clientSecret',
+		'device_code',
+		'deviceCode',
 		'token',
 		'password',
 		'privateKey',
@@ -81,6 +84,35 @@ function credentialFields(value: unknown, path = ''): readonly string[] {
 			credentialFields(child, `${path}/${key}`),
 		),
 	);
+}
+
+const deviceCodeRelease = z.strictObject({
+	device_code: z.string().min(1),
+	user_code: z.string().min(1),
+	verification_uri: z.url(),
+	verification_uri_complete: z.url(),
+	expires_in: z.number().int().positive(),
+	interval: z.number().int().positive(),
+});
+
+function deviceIssuanceWithoutCredential(
+	body: unknown,
+	before: RequestStorageSnapshot,
+	after: RequestStorageSnapshot,
+): string {
+	const parsed = deviceCodeRelease.safeParse(body);
+	if (!parsed.success) throw new Error('S2 credential-disclosure: invalid device issuance body');
+	const { device_code, ...verification } = parsed.data;
+	const added = rowsAdded({ before: before.deviceCode ?? [], after: after.deviceCode ?? [] });
+	if (
+		added.length !== 1 ||
+		added[0]?.deviceCode !== device_code ||
+		added[0]?.userCode !== verification.user_code ||
+		added[0]?.status !== 'pending' ||
+		before.deviceCode?.some((row) => row.deviceCode === device_code)
+	)
+		throw new Error('S2 credential-disclosure: device code is outside the new issuance');
+	return JSON.stringify(verification);
 }
 
 /** The decoded value of the session token cookie in a Cookie header, or null. */
@@ -218,12 +250,17 @@ export function assertRequestDisclosure(props: {
 	const refusal =
 		answer.status >= 400 || (answer.headers.get('location')?.includes('error=') ?? false);
 	const tokenSuccess = path === '/api/auth/oauth2/token' && answer.status === 200;
+	const deviceCodeSuccess = path === '/api/auth/device/code' && answer.status === 200;
 	const credentials = [
 		...storedCredentials(before),
 		...storedCredentials(after),
 		...fixture.issuedCredentials,
 	];
-	forbid(answer.text, credentials, 'S2 credential-disclosure: body contains a stored credential');
+	forbid(
+		deviceCodeSuccess ? deviceIssuanceWithoutCredential(answer.body, before, after) : answer.text,
+		credentials,
+		'S2 credential-disclosure: body contains a stored credential',
+	);
 	for (const [name, value] of answer.headers) {
 		if (name !== 'set-cookie')
 			forbid(value, credentials, 'S2 credential-disclosure: header contains a stored credential');
@@ -236,7 +273,7 @@ export function assertRequestDisclosure(props: {
 			throw new Error('S2 credential-disclosure: credential field in refusal');
 	} else {
 		const fields = credentialFields(answer.body);
-		const allowed = tokenSuccess ? ['/access_token'] : [];
+		const allowed = tokenSuccess ? ['/access_token'] : deviceCodeSuccess ? ['/device_code'] : [];
 		if (fields.some((field) => !allowed.includes(field)))
 			throw new Error('S2 credential-disclosure: output outside route entitlement');
 	}
@@ -392,9 +429,41 @@ const genericRefusalKeys = new Set([
 	'status',
 ]);
 
+const deviceDecisionError = z.strictObject({
+	error: z.literal('access_denied'),
+	reason: z.discriminatedUnion('kind', [
+		z.strictObject({ kind: z.literal('notPermitted') }),
+		z.strictObject({ kind: z.literal('secondFactorRequired'), withinSeconds: z.literal(900) }),
+		z.strictObject({ kind: z.literal('unknownWorkspace') }),
+		z.strictObject({ kind: z.literal('machineInAnotherOrganization') }),
+		z.strictObject({ kind: z.literal('requestConflict') }),
+	]),
+});
+
+function isDocumentedDeviceDecisionError(
+	answer: Pick<ObservedRequestAnswer, 'status' | 'body'>,
+	action: 'approve' | 'deny',
+): boolean {
+	const parsed = deviceDecisionError.safeParse(answer.body);
+	if (!parsed.success) return false;
+	const reason = parsed.data.reason.kind;
+	if (answer.status === 409) return action === 'approve' && reason === 'requestConflict';
+	return (
+		answer.status === 403 &&
+		(reason === 'notPermitted' ||
+			(action === 'approve' &&
+				(reason === 'secondFactorRequired' ||
+					reason === 'unknownWorkspace' ||
+					reason === 'machineInAnotherOrganization')))
+	);
+}
+
 export function assertGenericRefusalBody(
 	answer: Pick<ObservedRequestAnswer, 'status' | 'body' | 'bodyKind' | 'headers'>,
-	options: { readonly htmlRefusalDocumented?: boolean } = {},
+	options: {
+		readonly htmlRefusalDocumented?: boolean;
+		readonly deviceDecisionRefusal?: 'approve' | 'deny';
+	} = {},
 ): void {
 	if (answer.status < 400 || answer.bodyKind === 'empty') return;
 	// A nonempty body that is not JSON is a page, not a generic error: only a route that documents
@@ -407,6 +476,11 @@ export function assertGenericRefusalBody(
 			return;
 		throw new Error('S2 documented-answer: a nonempty refusal body is not a generic error object');
 	}
+	if (
+		options.deviceDecisionRefusal !== undefined &&
+		isDocumentedDeviceDecisionError(answer, options.deviceDecisionRefusal)
+	)
+		return;
 	const record = z.record(z.string(), z.unknown()).safeParse(answer.body);
 	if (!record.success)
 		throw new Error('S2 documented-answer: a refusal body is not a generic error object');

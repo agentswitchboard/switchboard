@@ -17,6 +17,7 @@ export type PermittedRefusalEffect =
 	| 'login-link-intent'
 	| 'expired-session-cleanup'
 	| 'oauth-code-consumption'
+	| 'pending-device-poll'
 	| 'provider-verification-consumption'
 	| 'cookie-delete';
 
@@ -84,6 +85,12 @@ export interface RouteClassification extends RouteIdentity {
 	readonly documentedErrorBodies?: Readonly<Record<number, DocumentedErrorBody>>;
 	/** Statuses whose refusal may be an HTML page (a documented page refusal), not a generic JSON error. */
 	readonly htmlRefusals?: readonly number[];
+	readonly deviceDecisionRefusal?: 'approve' | 'deny';
 	/** Where a caller may get fewer answers than the route-wide list, its own list. */
 	readonly documentedAnswersByCaller?: Readonly<Partial<Record<RouteCaller, readonly number[]>>>;
 }
+
+export type ReachableRouteGroup = Omit<RouteClassification, 'path' | 'method'> & {
+	readonly method: 'GET' | 'POST';
+	readonly paths: readonly string[];
+};

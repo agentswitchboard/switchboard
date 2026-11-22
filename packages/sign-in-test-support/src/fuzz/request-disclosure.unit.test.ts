@@ -590,3 +590,34 @@ describe('S2 closure: the documented refusals are bound to the actual input and 
 		expect(() => assertGenericRefusalBody(empty)).not.toThrow();
 	});
 });
+
+it('allows only the structured machine refusal the route and status document', async (): Promise<void> => {
+	const notPermitted = await observeRequestAnswer(
+		Response.json({ error: 'access_denied', reason: { kind: 'notPermitted' } }, { status: 403 }),
+	);
+	expect(() =>
+		assertGenericRefusalBody(notPermitted, { deviceDecisionRefusal: 'deny' }),
+	).not.toThrow();
+	expect(() => assertGenericRefusalBody(notPermitted)).toThrow('beyond a generic error');
+	const unknownWorkspace = await observeRequestAnswer(
+		Response.json(
+			{ error: 'access_denied', reason: { kind: 'unknownWorkspace' } },
+			{ status: 403 },
+		),
+	);
+	expect(() =>
+		assertGenericRefusalBody(unknownWorkspace, { deviceDecisionRefusal: 'approve' }),
+	).not.toThrow();
+	expect(() =>
+		assertGenericRefusalBody(unknownWorkspace, { deviceDecisionRefusal: 'deny' }),
+	).toThrow('beyond a generic error');
+	const unexpected = await observeRequestAnswer(
+		Response.json(
+			{ error: 'access_denied', reason: { kind: 'notPermitted', token: 'fixture-token' } },
+			{ status: 403 },
+		),
+	);
+	expect(() => assertGenericRefusalBody(unexpected, { deviceDecisionRefusal: 'approve' })).toThrow(
+		'beyond a generic error',
+	);
+});

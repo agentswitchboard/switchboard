@@ -2,6 +2,7 @@ import { z } from 'zod';
 
 import type { CentralAcknowledgement } from '#sign-in-test-support/fuzz/central-acknowledgements';
 import type { RequestCaseFixture } from '#sign-in-test-support/fuzz/request-case-fixture';
+import type { ObservedRequestAnswer } from '#sign-in-test-support/fuzz/request-disclosure';
 import type { GeneratedRequest } from '#sign-in-test-support/fuzz/request-families/index';
 import type { RequestFamilyContext } from '#sign-in-test-support/fuzz/request-families/index';
 import {
@@ -29,6 +30,59 @@ function withoutFields(row: StoredRow, fields: readonly string[]): string {
 	return rowBytes(Object.fromEntries(Object.entries(row).filter(([key]) => !fields.includes(key))));
 }
 
+const devicePollInput = z.strictObject({
+	grant_type: z.literal('urn:ietf:params:oauth:grant-type:device_code'),
+	client_id: z.string(),
+	device_code: z.string(),
+});
+const pendingDevicePollAnswer = z.strictObject({ error: z.literal('authorization_pending') });
+
+function pendingDevicePollRequest(request: GeneratedRequest): unknown {
+	const rawBody = request.init.body;
+	if (request.pathname !== '/api/auth/oauth2/token' || typeof rawBody !== 'string')
+		return undefined;
+	const contentType = new Headers(request.init.headers).get('content-type');
+	if (contentType === 'application/json') {
+		try {
+			return JSON.parse(rawBody);
+		} catch {
+			return undefined;
+		}
+	}
+	if (contentType !== 'application/x-www-form-urlencoded') return undefined;
+	const fields = Array.from(new URLSearchParams(rawBody));
+	const values = Object.fromEntries(fields);
+	return fields.length === Object.keys(values).length ? values : undefined;
+}
+
+function isPendingDevicePoll(props: {
+	readonly request: GeneratedRequest | undefined;
+	readonly answer: Pick<ObservedRequestAnswer, 'status' | 'body'> | undefined;
+	readonly old: StoredRow;
+	readonly next: StoredRow;
+	readonly now: number;
+}): boolean {
+	const { request, answer, old, next, now } = props;
+	if (
+		request === undefined ||
+		answer?.status !== 400 ||
+		!pendingDevicePollAnswer.safeParse(answer.body).success
+	)
+		return false;
+	const input = devicePollInput.safeParse(pendingDevicePollRequest(request));
+	return (
+		input.success &&
+		old.status === 'pending' &&
+		old.clientId === input.data.client_id &&
+		old.deviceCode === input.data.device_code &&
+		typeof old.expiresAt === 'number' &&
+		old.expiresAt > now &&
+		old.lastPolledAt === null &&
+		next.lastPolledAt === now &&
+		withoutFields(old, ['lastPolledAt']) === withoutFields(next, ['lastPolledAt'])
+	);
+}
+
 /** A permission describes one row transition, never a whole table that may change freely. */
 export function assertRequestRefusalEffects(props: {
 	readonly classification: RouteClassification;
@@ -39,6 +93,7 @@ export function assertRequestRefusalEffects(props: {
 	readonly before: RequestStorageSnapshot;
 	readonly after: RequestStorageSnapshot;
 	readonly request?: GeneratedRequest;
+	readonly answer?: Pick<ObservedRequestAnswer, 'status' | 'body'>;
 	readonly now?: number;
 	/**
 	 * Central's actual acknowledgements during this request (a 200 reply paired with its push): the
@@ -75,6 +130,21 @@ export function assertRequestRefusalEffects(props: {
 		const removals = rowsAdded({ before: current, after: original });
 		if (additions.length === 0 && removals.length === 0) continue;
 		const permissions = classification.permittedRefusalEffects;
+		if (
+			table === 'deviceCode' &&
+			permissions.includes('pending-device-poll') &&
+			additions.length === 1 &&
+			removals.length === 1
+		) {
+			const old = removals[0];
+			const next = additions[0];
+			if (
+				old !== undefined &&
+				next !== undefined &&
+				isPendingDevicePoll({ old, next, now, request: props.request, answer: props.answer })
+			)
+				continue;
+		}
 		if (
 			table === 'session' &&
 			permissions.includes('clear-current-choice') &&

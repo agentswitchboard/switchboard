@@ -1,6 +1,7 @@
 import ts from 'typescript';
 
 import {
+	methodPathPairsOfDeclaration,
 	resolveDeclaration,
 	tablePathsOfDeclaration,
 	unsupportedRouteForm,
@@ -12,6 +13,7 @@ type Value = string | boolean;
 interface Environment {
 	readonly pathname: string;
 	readonly method: string;
+	readonly machineLoginEnabled?: boolean;
 }
 
 /** Walk every node of a predicate body and refuse any form the evaluator below cannot run. */
@@ -85,13 +87,18 @@ export function assertPredicateIsEvaluable(
 			}
 			if (ts.isIdentifier(callee)) {
 				const target = resolveDeclaration(callee, checker);
-				if (
-					target !== undefined &&
-					ts.isFunctionDeclaration(target) &&
-					tablePathsOfDeclaration(target, checker) !== undefined &&
-					current.arguments.length === 1
-				)
-					return;
+				if (target !== undefined && ts.isFunctionDeclaration(target)) {
+					if (
+						current.arguments.length === 1 &&
+						tablePathsOfDeclaration(target, checker) !== undefined
+					)
+						return;
+					if (
+						current.arguments.length === 2 &&
+						methodPathPairsOfDeclaration(target, checker) !== undefined
+					)
+						return current.arguments.forEach(expression);
+				}
 			}
 			return unsupportedRouteForm(
 				current,
@@ -140,6 +147,9 @@ export function evaluatePredicateStatically(
 		[names[0] ?? 'pathname', environment.pathname],
 		[names[1] ?? 'method', environment.method],
 	]);
+	const configurationFlag = names[2];
+	if (configurationFlag === 'machineLoginEnabled')
+		bindings.set(configurationFlag, environment.machineLoginEnabled ?? false);
 	function evaluate(node: ts.Expression): Value {
 		const current = unwrapExpression(node);
 		if (ts.isStringLiteral(current) || ts.isNoSubstitutionTemplateLiteral(current))
@@ -185,8 +195,17 @@ export function evaluatePredicateStatically(
 				const target = resolveDeclaration(callee, checker);
 				const argument = current.arguments[0];
 				if (target !== undefined && ts.isFunctionDeclaration(target) && argument !== undefined) {
-					const table = tablePathsOfDeclaration(target, checker);
-					if (table !== undefined) return table.includes(String(evaluate(argument)));
+					const methodArgument = current.arguments[1];
+					if (methodArgument !== undefined) {
+						const pairs = methodPathPairsOfDeclaration(target, checker);
+						const path = evaluate(argument);
+						const method = evaluate(methodArgument);
+						if (pairs !== undefined)
+							return pairs.some((pair) => pair.path === path && pair.method === method);
+					} else {
+						const table = tablePathsOfDeclaration(target, checker);
+						if (table !== undefined) return table.includes(String(evaluate(argument)));
+					}
 				}
 			}
 		}

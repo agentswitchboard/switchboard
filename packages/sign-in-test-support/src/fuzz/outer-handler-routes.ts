@@ -13,7 +13,13 @@ import { staticMethodsForPath } from '#sign-in-test-support/fuzz/static-route-di
 const outerHandlerFiles = [
 	'packages/sign-in-core/src/response-release/sign-in-request-handler.ts',
 	'packages/sign-in-core/src/better-auth/sign-in-http-handler.ts',
+	'packages/sign-in-core/src/response-release/machine-device-response.ts',
 ] as const;
+
+/** The host route inventory uses the same enabled machine configuration as the request campaign. */
+function isFuzzHostRoute(pathname: string, method: string): boolean {
+	return isPublicSignInRoute(pathname, method, true);
+}
 
 /** Discover the literal paths and prefixes of both outer handlers, through the compiler (run from the workspace root). */
 export function discoverOuterHandlerRoutes(): readonly DiscoveredHandlerRoutes[] {
@@ -44,7 +50,7 @@ export function actualOuterRoutes(
 ): readonly OuterRouteIdentity[] {
 	return reachableOuterRoutes(
 		[...discoverOuterHandlerRoutes().flatMap((routes) => routes.paths), ...classifiedPaths],
-		isPublicSignInRoute,
+		isFuzzHostRoute,
 	);
 }
 
@@ -82,7 +88,7 @@ export async function servedOuterRoutes(props: {
 }): Promise<readonly OuterRouteIdentity[]> {
 	const admitted = reachableOuterRoutes(
 		[...discoverOuterHandlerRoutes().flatMap((routes) => routes.paths), ...props.classifiedPaths],
-		props.isPublicRoute ?? isPublicSignInRoute,
+		props.isPublicRoute ?? isFuzzHostRoute,
 	);
 	const ask = (route: OuterRouteIdentity): Promise<string> =>
 		props.answer(route, outerProbeInit(route.method, props.issuerOrigin));

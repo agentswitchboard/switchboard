@@ -4,6 +4,7 @@ import {
 	readCentralAcknowledgements,
 	type CentralAcknowledgement,
 } from '#sign-in-test-support/fuzz/central-acknowledgements';
+import type { GeneratedRequest } from '#sign-in-test-support/fuzz/request-families/index';
 import { assertRequestRefusalEffects } from '#sign-in-test-support/fuzz/request-refusal-effects';
 import type { RequestStorageSnapshot } from '#sign-in-test-support/fuzz/request-storage-snapshot';
 import type { RouteClassification } from '#sign-in-test-support/fuzz/route-classification';
@@ -42,6 +43,71 @@ const before: RequestStorageSnapshot = {
 function check(after: RequestStorageSnapshot): void {
 	assertRequestRefusalEffects({ classification, fixture, before, after });
 }
+
+it('allows only the first poll timestamp for the matching pending device and client', (): void => {
+	const now = 1_000;
+	const pollRoute: RouteClassification = {
+		...classification,
+		path: '/api/auth/oauth2/token',
+		permittedRefusalEffects: ['pending-device-poll'],
+	};
+	const pending = {
+		id: 'device',
+		deviceCode: 'code',
+		clientId: 'client',
+		status: 'pending',
+		lastPolledAt: null,
+		expiresAt: now + 1,
+	};
+	const fields = {
+		grant_type: 'urn:ietf:params:oauth:grant-type:device_code',
+		client_id: 'client',
+		device_code: 'code',
+	};
+	const request: GeneratedRequest = {
+		pathname: pollRoute.path,
+		init: {
+			method: 'POST',
+			headers: { 'content-type': 'application/x-www-form-urlencoded' },
+			body: new URLSearchParams(fields).toString(),
+		},
+		label: 'form:valid',
+		variant: { encoding: 'form', field: null, mutation: 'valid', flow: 'machine-device' },
+		expectation: 'success-or-refusal',
+	};
+	const input = {
+		classification: pollRoute,
+		fixture,
+		request,
+		now,
+		before: { deviceCode: [pending] },
+		after: { deviceCode: [{ ...pending, lastPolledAt: now }] },
+		answer: { status: 400, body: { error: 'authorization_pending' } },
+	};
+	expect(() => assertRequestRefusalEffects(input)).not.toThrow();
+	expect(() =>
+		assertRequestRefusalEffects({
+			...input,
+			answer: { status: 400, body: { error: 'invalid_grant' } },
+		}),
+	).toThrow('deviceCode');
+	expect(() =>
+		assertRequestRefusalEffects({
+			...input,
+			after: { deviceCode: [{ ...pending, lastPolledAt: now, status: 'approved' }] },
+		}),
+	).toThrow('deviceCode');
+	const wrongClient = {
+		...request,
+		init: {
+			...request.init,
+			body: new URLSearchParams({ ...fields, client_id: 'other-client' }).toString(),
+		},
+	};
+	expect(() => assertRequestRefusalEffects({ ...input, request: wrongClient })).toThrow(
+		'deviceCode',
+	);
+});
 
 it('allows only consumption of the exact passkey challenge', (): void => {
 	expect(() => check({ ...before, verification: [unrelated] })).not.toThrow();
