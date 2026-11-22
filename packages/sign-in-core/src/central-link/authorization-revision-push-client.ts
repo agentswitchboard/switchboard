@@ -1,6 +1,11 @@
 import { z } from 'zod';
 
 import type { CentralTransport } from '#sign-in-core/central-link/central-transport';
+import type {
+	AuthorizationRevision,
+	AuthorizationRevisionAcknowledgement,
+} from '#sign-in-core/central-link/generated/central-sign-in.gen';
+import type { AssertWireType, WireTypesEqual } from '#sign-in-core/central-link/wire-type-equality';
 import type { CentralLinkUncertainty } from '#sign-in-core/organizations/organization-provisioning';
 
 // Producer fixtures: contract-fixtures/central-authorization-revisions/.
@@ -25,14 +30,25 @@ export const authorizationRevisionPushSchema = z.discriminatedUnion('kind', [
 	organizationRevisionPushSchema,
 	personRevisionPushSchema,
 ]);
-export type AuthorizationRevisionPush = z.infer<typeof authorizationRevisionPushSchema>;
+export type AuthorizationRevisionPush = AuthorizationRevision;
 export const authorizationRevisionAcknowledgementSchema = z.strictObject({
 	acknowledgedRevision: revisionSchema,
 });
+export type AuthorizationRevisionWireTypes = [
+	AssertWireType<
+		WireTypesEqual<z.output<typeof authorizationRevisionPushSchema>, AuthorizationRevision>
+	>,
+	AssertWireType<
+		WireTypesEqual<
+			z.output<typeof authorizationRevisionAcknowledgementSchema>,
+			AuthorizationRevisionAcknowledgement
+		>
+	>,
+];
 
 /** Central's answer: its retained floor after commit, a definite refusal, or nothing certain. */
 export type AuthorizationRevisionPushAnswer =
-	| { readonly kind: 'acknowledged'; readonly acknowledgedRevision: number }
+	| ({ readonly kind: 'acknowledged' } & Readonly<AuthorizationRevisionAcknowledgement>)
 	| {
 			readonly kind: 'refused';
 			readonly reason: 'conflict' | 'organization-floor-missing' | 'organization-mismatch';
@@ -66,7 +82,9 @@ export function createAuthorizationRevisionPushClient(
 					new Request(pushRoute, {
 						method: 'POST',
 						headers: { 'content-type': 'application/json' },
-						body: JSON.stringify(authorizationRevisionPushSchema.parse(push)),
+						body: JSON.stringify(
+							authorizationRevisionPushSchema.parse(push) satisfies AuthorizationRevision,
+						),
 						...(options?.signal === undefined ? {} : { signal: options.signal }),
 					}),
 				);
