@@ -137,7 +137,9 @@ describe('B5 closure: printed evidence replays the failure and says what it omit
 		};
 		const property = async (testCase: Pick<hegel.TestCase, 'draw'>): Promise<void> => {
 			const generated = family.generate(testCase, syntheticRequestFamilyContext, step);
-			const body: unknown = JSON.parse(String(generated.init.body));
+			const wire = generated.init.body;
+			if (typeof wire !== 'string') throw new Error('the boundary step plans a text body');
+			const body: unknown = JSON.parse(wire);
 			const length = String(
 				typeof body === 'object' && body !== null && 'callbackURL' in body ? body.callbackURL : '',
 			).length;
