@@ -13,6 +13,7 @@ import type {
 } from '#sign-in-core/central-link/generated/central-sign-in.gen';
 import { organizationChangeFixtures } from '#sign-in-core/central-link/generated/organization-change-fixtures';
 import type { AssertWireType, WireTypesEqual } from '#sign-in-core/central-link/wire-type-equality';
+import type { Uuid7 } from '#sign-in-core/contracts/sign-in-platform';
 import {
 	fleetAdminRequestBody,
 	fleetAdminRoutePaths,
@@ -27,7 +28,9 @@ import type { CentralLinkUncertainty } from '#sign-in-core/organizations/organiz
 const centralRecordIdSchema = z
 	.string()
 	.regex(/^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u);
-const workspaceSchema = z.strictObject({
+// A brand marks the value only after the same lowercase UUIDv7 validator succeeds.
+const signInRecordIdSchema = centralRecordIdSchema.brand<'Uuid7'>();
+const workspaceWireSchema = z.strictObject({
 	workspaceId: centralRecordIdSchema,
 	name: fleetAdminWorkspaceNameSchema,
 	description: z
@@ -81,7 +84,7 @@ const organizationChangeOriginSchema = z.discriminatedUnion('kind', [
 	}),
 ]);
 const changeRecordFields = z.strictObject({
-	id: z.uuidv7().refine((id) => id === id.toLowerCase()),
+	id: centralRecordIdSchema,
 	requestId: z
 		.string()
 		.min(1)
@@ -89,15 +92,29 @@ const changeRecordFields = z.strictObject({
 	origin: organizationChangeOriginSchema,
 	createdAtMillis: z.number().int(),
 });
+const targetedChangeWireSchema = changeRecordFields.extend({
+	kind: targetedChangeKindSchema,
+	targetId: z.string().min(1),
+});
+const machineAllowanceWireSchema = changeRecordFields.extend({
+	kind: z.literal('machineAllowanceChanged'),
+	machineId: centralRecordIdSchema,
+	workspaceId: centralRecordIdSchema,
+	state: machineAllowanceStateSchema,
+});
+const changeRecordWireSchema = z.discriminatedUnion('kind', [
+	targetedChangeWireSchema,
+	machineAllowanceWireSchema,
+]);
 const changeRecordSchema = z.discriminatedUnion('kind', [
-	changeRecordFields.extend({ kind: targetedChangeKindSchema, targetId: z.string().min(1) }),
-	changeRecordFields.extend({
-		kind: z.literal('machineAllowanceChanged'),
-		machineId: centralRecordIdSchema,
-		workspaceId: centralRecordIdSchema,
-		state: machineAllowanceStateSchema,
+	targetedChangeWireSchema.extend({ id: signInRecordIdSchema }),
+	machineAllowanceWireSchema.extend({
+		id: signInRecordIdSchema,
+		machineId: signInRecordIdSchema,
+		workspaceId: signInRecordIdSchema,
 	}),
 ]);
+const workspaceSchema = workspaceWireSchema.extend({ workspaceId: signInRecordIdSchema });
 export const fleetAdminResultSchemas = {
 	CreateWorkspace: z.union([
 		z.strictObject({ result: z.literal('applied'), workspace: workspaceSchema }),
@@ -120,9 +137,25 @@ type AdminReplyFor<Results extends SignInAdminWireResult['result']> = Extract<
 	SignInAdminWireResult,
 	{ result: Results }
 >;
-export type FleetAdminResult = AdminReplyFor<'applied' | 'found' | 'records' | 'refused'>;
+export type FleetAdminResult = z.output<
+	(typeof fleetAdminResultSchemas)[keyof typeof fleetAdminResultSchemas]
+>;
+type SignInWorkspaceId = z.output<typeof workspaceSchema>['workspaceId'];
+type SignInAllowanceChange = Extract<
+	z.output<typeof changeRecordSchema>,
+	{ kind: 'machineAllowanceChanged' }
+>;
+type PlainWorkspaceIdMatches = WireTypesEqual<SignInWorkspaceId, string>;
+// @ts-expect-error A validated workspace ID cannot leave the decoder as an unbranded string.
+export type RejectUnbrandedWorkspaceId = AssertWireType<PlainWorkspaceIdMatches>;
+export type FleetAdminIdTypes = [
+	AssertWireType<WireTypesEqual<SignInWorkspaceId, Uuid7>>,
+	AssertWireType<WireTypesEqual<z.output<typeof changeRecordSchema>['id'], Uuid7>>,
+	AssertWireType<WireTypesEqual<SignInAllowanceChange['machineId'], Uuid7>>,
+	AssertWireType<WireTypesEqual<SignInAllowanceChange['workspaceId'], Uuid7>>,
+];
 export type FleetAdminWireSchemaTypes = [
-	AssertWireType<WireTypesEqual<z.output<typeof workspaceSchema>, WorkspaceView_Serialize>>,
+	AssertWireType<WireTypesEqual<z.output<typeof workspaceWireSchema>, WorkspaceView_Serialize>>,
 	AssertWireType<
 		WireTypesEqual<z.output<typeof fleetAdminRefusalReasonSchema>, FleetAdminRefusalReason>
 	>,
@@ -133,27 +166,27 @@ export type FleetAdminWireSchemaTypes = [
 		WireTypesEqual<z.output<typeof machineAllowanceStateSchema>, MachineAllowanceState>
 	>,
 	AssertWireType<
-		WireTypesEqual<z.output<typeof changeRecordSchema>['kind'], OrganizationChangeKind>
+		WireTypesEqual<z.output<typeof changeRecordWireSchema>['kind'], OrganizationChangeKind>
 	>,
 	AssertWireType<
 		WireTypesEqual<z.output<typeof organizationChangeOriginSchema>, OrganizationChangeOrigin>
 	>,
-	AssertWireType<WireTypesEqual<z.output<typeof changeRecordSchema>, OrganizationChangeRecord>>,
+	AssertWireType<WireTypesEqual<z.output<typeof changeRecordWireSchema>, OrganizationChangeRecord>>,
 	AssertWireType<
 		WireTypesEqual<
-			z.output<(typeof fleetAdminResultSchemas)['CreateWorkspace']>,
+			z.input<(typeof fleetAdminResultSchemas)['CreateWorkspace']>,
 			AdminReplyFor<'applied' | 'refused'>
 		>
 	>,
 	AssertWireType<
 		WireTypesEqual<
-			z.output<(typeof fleetAdminResultSchemas)['WorkspaceLookup']>,
+			z.input<(typeof fleetAdminResultSchemas)['WorkspaceLookup']>,
 			AdminReplyFor<'found' | 'refused'>
 		>
 	>,
 	AssertWireType<
 		WireTypesEqual<
-			z.output<(typeof fleetAdminResultSchemas)['ReadChangeRecords']>,
+			z.input<(typeof fleetAdminResultSchemas)['ReadChangeRecords']>,
 			AdminReplyFor<'records' | 'refused'>
 		>
 	>,

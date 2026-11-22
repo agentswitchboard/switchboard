@@ -2,9 +2,9 @@ import { createHash, randomBytes } from 'node:crypto';
 
 import {
 	fleetAdminProofKeyThumbprint,
+	personFleetTokenBindingSchema,
 	signFleetAdminProof,
 	type FleetAdminProofKey,
-	type PersonFleetTokenClaims,
 	type SignInCrypto,
 } from '@agent-collaboration/sign-in-core';
 import { z } from 'zod';
@@ -43,12 +43,9 @@ const tokenResponseSchema = z.object({
 	token_type: z.literal('DPoP'),
 	refresh_token: z.string().min(1),
 });
-const issuedClaimsSchema = z.looseObject({
-	aud: z.string(),
+const issuedClaimsSchema = personFleetTokenBindingSchema.extend({
 	client_id: z.string(),
-	token_profile: z.literal('person-fleet'),
-	cnf: z.looseObject({ jkt: z.string() }),
-}) satisfies z.ZodType<Pick<PersonFleetTokenClaims, 'aud' | 'token_profile' | 'cnf'>>;
+});
 
 function decodePayload(token: string): unknown {
 	const encoded = token.split('.')[1];
