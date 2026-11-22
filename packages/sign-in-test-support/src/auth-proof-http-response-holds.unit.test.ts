@@ -78,3 +78,39 @@ it('keeps an armed JWKS hold out of unrelated HTTP responses', async () => {
 	expect(Buffer.concat(observed.chunks)).toEqual(body);
 	expect(() => controls.armNextJwksResponse()).toThrow('already armed');
 });
+
+it('rejects hold entry and disarms the hold when its signal aborts before any response arrives', async () => {
+	const controls = createAuthProofHttpResponseHolds();
+	const cancellation = new AbortController();
+	const hold = controls.armNextGetResponse('/api/auth/other', cancellation.signal);
+	const reason = new Error('scenario ended');
+	cancellation.abort(reason);
+	await expect(hold.entered).rejects.toBe(reason);
+	const observed = observedResponse();
+	const body = Buffer.from('unheld');
+	await controls.send({
+		pathname: '/api/auth/other',
+		method: 'GET',
+		response: observed.response,
+		body,
+	});
+	expect(Buffer.concat(observed.chunks)).toEqual(body);
+	expect(() => controls.armNextGetResponse('/api/auth/other')).not.toThrow();
+});
+
+it('lets an entered hold finish as closed when its signal aborts', async () => {
+	const controls = createAuthProofHttpResponseHolds();
+	const cancellation = new AbortController();
+	const hold = controls.armNextGetResponse('/api/auth/other', cancellation.signal);
+	const observed = observedResponse();
+	const sent = controls.send({
+		pathname: '/api/auth/other',
+		method: 'GET',
+		response: observed.response,
+		body: Buffer.from('held'),
+	});
+	await hold.entered;
+	cancellation.abort(new Error('scenario ended'));
+	await sent;
+	expect(await hold.settled).toBe('closed');
+});

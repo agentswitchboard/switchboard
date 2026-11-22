@@ -16,7 +16,11 @@ export interface AuthProofHttpResponseHold {
 /** Holds real response bytes on the existing HTTP listener, after receipt recording. */
 export function createAuthProofHttpResponseHolds(): {
 	readonly armNextJwksResponse: () => AuthProofHttpResponseHold;
-	readonly armNextGetResponse: (pathname: string) => AuthProofHttpResponseHold;
+	/** An aborted signal rejects `entered`, disarms an unentered hold and releases an entered one. */
+	readonly armNextGetResponse: (
+		pathname: string,
+		signal?: AbortSignal,
+	) => AuthProofHttpResponseHold;
 	readonly send: (props: {
 		readonly pathname: string;
 		readonly method: string;
@@ -36,7 +40,7 @@ export function createAuthProofHttpResponseHolds(): {
 		armNextJwksResponse(): AuthProofHttpResponseHold {
 			return this.armNextGetResponse('/api/auth/jwks');
 		},
-		armNextGetResponse(pathname): AuthProofHttpResponseHold {
+		armNextGetResponse(pathname, signal): AuthProofHttpResponseHold {
 			if (armed !== undefined) throw new Error('HTTP response hold already armed');
 			const hold = {
 				pathname,
@@ -45,6 +49,14 @@ export function createAuthProofHttpResponseHolds(): {
 				outcome: Promise.withResolvers<'closed' | 'released'>(),
 			};
 			armed = hold;
+			void hold.entered.promise.catch(() => undefined);
+			function abort(): void {
+				if (armed === hold) armed = undefined;
+				hold.entered.reject(signal?.reason);
+				hold.outcome.resolve('closed');
+			}
+			if (signal?.aborted === true) abort();
+			else signal?.addEventListener('abort', abort, { once: true });
 			return {
 				entered: hold.entered.promise,
 				settled: hold.finished.promise,
