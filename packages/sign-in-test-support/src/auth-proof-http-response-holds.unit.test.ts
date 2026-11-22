@@ -7,15 +7,18 @@ import { createAuthProofHttpResponseHolds } from '#sign-in-test-support/test-fix
 function observedResponse(): {
 	readonly events: EventEmitter;
 	readonly chunks: Uint8Array[];
+	readonly destroyed: { count: number };
 	readonly response: Parameters<
 		ReturnType<typeof createAuthProofHttpResponseHolds>['send']
 	>[0]['response'];
 } {
 	const events = new EventEmitter();
 	const chunks: Uint8Array[] = [];
+	const destroyed = { count: 0 };
 	return {
 		events,
 		chunks,
+		destroyed,
 		response: {
 			destroyed: false,
 			once: (event, listener) => events.once(event, listener),
@@ -23,6 +26,9 @@ function observedResponse(): {
 			flushHeaders: () => {},
 			write: (chunk) => chunks.push(chunk),
 			end: (chunk) => chunks.push(chunk),
+			destroy: () => {
+				destroyed.count += 1;
+			},
 		},
 	};
 }
@@ -134,4 +140,23 @@ it('holds only the response whose request carries the armed token', async () => 
 	});
 	expect(Buffer.concat(unmarked.chunks)).toEqual(body);
 	expect(() => controls.armNextGetResponse('/api/auth/other')).toThrow('already armed');
+});
+
+it('drops the connection after the first byte when the hold is failed', async () => {
+	const controls = createAuthProofHttpResponseHolds();
+	const hold = controls.armNextGetResponse('/api/auth/other');
+	const observed = observedResponse();
+	const sent = controls.send({
+		pathname: '/api/auth/other',
+		method: 'GET',
+		holdToken: null,
+		response: observed.response,
+		body: Buffer.from('held body'),
+	});
+	await hold.entered;
+	hold.fail();
+	await sent;
+	expect(await hold.settled).toBe('failed');
+	expect(Buffer.concat(observed.chunks).toString()).toBe('h');
+	expect(observed.destroyed.count).toBe(1);
 });

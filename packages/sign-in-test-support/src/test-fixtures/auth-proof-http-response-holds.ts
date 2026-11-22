@@ -5,15 +5,20 @@ interface ProofHttpResponse {
 	readonly flushHeaders: () => void;
 	readonly write: (chunk: Uint8Array) => unknown;
 	readonly end: (chunk: Uint8Array) => unknown;
+	readonly destroy: () => unknown;
 }
 
 /** A browser scenario marks the one request it wants held with this header; the relay strips it. */
 export const authProofHoldTokenHeader = 'x-auth-proof-hold';
 
+type HoldOutcome = 'closed' | 'released' | 'failed';
+
 export interface AuthProofHttpResponseHold {
 	readonly entered: Promise<void>;
-	readonly settled: Promise<'closed' | 'released'>;
+	readonly settled: Promise<HoldOutcome>;
 	readonly release: () => void;
+	/** Drops the connection after the headers and first byte, as a network failure mid-response. */
+	readonly fail: () => void;
 }
 
 /** Holds real response bytes on the existing HTTP listener, after receipt recording. */
@@ -42,8 +47,8 @@ export function createAuthProofHttpResponseHolds(): {
 				readonly pathname: string;
 				readonly holdToken: string | undefined;
 				readonly entered: PromiseWithResolvers<void>;
-				readonly finished: PromiseWithResolvers<'closed' | 'released'>;
-				readonly outcome: PromiseWithResolvers<'closed' | 'released'>;
+				readonly finished: PromiseWithResolvers<HoldOutcome>;
+				readonly outcome: PromiseWithResolvers<HoldOutcome>;
 		  }
 		| undefined;
 	return {
@@ -56,8 +61,8 @@ export function createAuthProofHttpResponseHolds(): {
 				pathname,
 				holdToken,
 				entered: Promise.withResolvers<void>(),
-				finished: Promise.withResolvers<'closed' | 'released'>(),
-				outcome: Promise.withResolvers<'closed' | 'released'>(),
+				finished: Promise.withResolvers<HoldOutcome>(),
+				outcome: Promise.withResolvers<HoldOutcome>(),
 			};
 			armed = hold;
 			void hold.entered.promise.catch(() => undefined);
@@ -72,6 +77,7 @@ export function createAuthProofHttpResponseHolds(): {
 				entered: hold.entered.promise,
 				settled: hold.finished.promise,
 				release: () => hold.outcome.resolve('released'),
+				fail: () => hold.outcome.resolve('failed'),
 			};
 		},
 		async send({ pathname, method, holdToken, response, body }): Promise<void> {
@@ -94,6 +100,7 @@ export function createAuthProofHttpResponseHolds(): {
 			try {
 				const outcome = await hold.outcome.promise;
 				if (outcome === 'released' && !response.destroyed) response.end(body.subarray(1));
+				if (outcome === 'failed') response.destroy();
 				hold.finished.resolve(outcome);
 			} finally {
 				response.off('close', closed);

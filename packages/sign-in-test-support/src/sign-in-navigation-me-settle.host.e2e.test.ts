@@ -5,7 +5,10 @@ import { useControlledSignInClock } from '#sign-in-test-support/test-fixtures/co
 import { holdMePasskeyListDuring } from '#sign-in-test-support/test-fixtures/me-passkey-list-hold';
 import { runProofBrowserScenario } from '#sign-in-test-support/test-fixtures/playwright-browser';
 import { withNavigationBrowser } from '#sign-in-test-support/test-fixtures/sign-in-navigation-browser';
-import { observeNavigationReadiness } from '#sign-in-test-support/test-fixtures/sign-in-navigation-setup';
+import {
+	followReadyLinkToMe,
+	observeNavigationReadiness,
+} from '#sign-in-test-support/test-fixtures/sign-in-navigation-setup';
 
 useControlledSignInClock();
 
@@ -65,5 +68,34 @@ it.each(hosts)(
 				}),
 			),
 		).rejects.toMatchObject({ state: { kind: 'pendingAtClose' } });
+	},
+);
+
+it.each(hosts)(
+	'sign-in navigation Me wait ends as failed, and does not hang, when the held passkey list fails after its headers on %s',
+	async (host): Promise<void> => {
+		await runProofBrowserScenario((signal) =>
+			withNavigationBrowser({
+				host,
+				signal,
+				exercise: (browser) =>
+					holdMePasskeyListDuring(browser, {
+						afterReadyPageVisits: 1,
+						journey: async (events): Promise<void> => {
+							await browser.proof.navigate(`${browser.harness.issuer}/owner-ready`);
+							const outcomes = await followReadyLinkToMe(browser);
+							events.push(`flow-returned:${outcomes.get('/api/auth/passkey/list-user-passkeys')}`);
+						},
+						exercise: async (held): Promise<void> => {
+							await held.sessionSettled;
+							expect(held.events).toEqual(['held']);
+							held.events.push('failed');
+							held.fail();
+							await held.flow;
+							expect(held.events).toEqual(['held', 'failed', 'flow-returned:failed']);
+						},
+					}),
+			}),
+		);
 	},
 );

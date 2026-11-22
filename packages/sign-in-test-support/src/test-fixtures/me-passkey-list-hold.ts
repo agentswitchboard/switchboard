@@ -12,6 +12,8 @@ export interface HeldMePasskeyList {
 	/** The held Me page's session request is over, so only its list is still open. */
 	readonly sessionSettled: Promise<void>;
 	readonly release: () => void;
+	/** Ends the held response as a network failure after its headers. */
+	readonly fail: () => void;
 }
 
 /**
@@ -93,6 +95,7 @@ export async function holdMePasskeyListDuring(
 			flow,
 			sessionSettled: sessionSettled.promise,
 			release: hold.release,
+			fail: hold.fail,
 		});
 	} finally {
 		proof.page.off('framenavigated', countReadyPageArrival);

@@ -233,17 +233,20 @@ export async function followReadyLinkToMe(
 		});
 	const finished = (request: Request): void => tracker.observeTerminal(request, 'finished');
 	proof.page.on('request', issued);
+	const failed = (request: Request): void => tracker.observeTerminal(request, 'failed');
 	proof.page.on('requestfinished', finished);
+	proof.page.on('requestfailed', failed);
 	try {
 		await proof.page.getByRole('link', { name: 'Go to Me' }).click();
 		await proof.page.getByRole('heading', { name: 'Me', exact: true }).waitFor();
 		// Not the rendered rows: N4 makes more than the 10 passkey requests a minute that request class
-		// admits, so a late visit's list is a 429 and its skeleton never clears. The request being over
-		// is the outcome this wait owns.
+		// admits, so a late visit's list is a 429 and its skeleton never clears. The request being over,
+		// finished or failed after its headers, is the outcome this wait owns.
 		return await rejectWhenAborted(tracker.settled, signal);
 	} finally {
 		proof.page.off('request', issued);
 		proof.page.off('requestfinished', finished);
+		proof.page.off('requestfailed', failed);
 	}
 }
 
