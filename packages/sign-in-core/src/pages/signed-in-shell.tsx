@@ -5,6 +5,7 @@ import {
 	Sidebar,
 	SidebarContent,
 	SidebarGroup,
+	SidebarGroupLabel,
 	SidebarInset,
 	SidebarMenu,
 	SidebarMenuButton,
@@ -12,7 +13,7 @@ import {
 	SidebarProvider,
 	SidebarTrigger,
 } from '@agent-collaboration/tool-access-ui/ui/sidebar';
-import { ChevronDown, UserRound, UsersRound } from 'lucide-react';
+import { ChevronDown, Laptop, UserRound, UsersRound } from 'lucide-react';
 import type * as React from 'react';
 
 import {
@@ -61,11 +62,30 @@ export function SignedInShell(props: {
 								</SidebarMenu>
 							</nav>
 						</SidebarGroup>
+						{props.state.showMachines === true && (
+							<SidebarGroup>
+								<SidebarGroupLabel>Machines</SidebarGroupLabel>
+								<SidebarMenu>
+									<SidebarMenuItem>
+										<SidebarMenuButton
+											render={<a href="/device" />}
+											aria-current={page === '/device' ? 'page' : undefined}
+											isActive={page === '/device'}
+										>
+											<Laptop aria-hidden="true" />
+											<span>Approve a login</span>
+										</SidebarMenuButton>
+									</SidebarMenuItem>
+								</SidebarMenu>
+							</SidebarGroup>
+						)}
 					</SidebarContent>
 				</Sidebar>
 				<SidebarInset className="min-w-0">
 					<div className="mx-auto flex w-full max-w-5xl flex-col gap-4 px-4 py-6 sm:px-6">
-						<h1 className="text-xl font-semibold">{page === '/me' ? 'Me' : 'People'}</h1>
+						<h1 className="text-xl font-semibold">
+							{page === '/device' ? 'Approve a machine login' : page === '/me' ? 'Me' : 'People'}
+						</h1>
 						{props.children}
 					</div>
 				</SidebarInset>

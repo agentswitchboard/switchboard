@@ -34,6 +34,7 @@ import type { OrganizationId } from '#sign-in-core/storage/models/sign-in-store'
 export interface OwnerPageProps {
 	readonly ready: boolean;
 	readonly continueLocation?: string;
+	readonly deviceUserCode?: string;
 	readonly configuration: SignInConfiguration;
 	readonly resume: string | null;
 	readonly createOrganization?: boolean;

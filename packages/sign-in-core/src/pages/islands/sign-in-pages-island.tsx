@@ -30,6 +30,7 @@ import type {
 	OrganizationPeopleListRequest,
 	OrganizationPersonLookupRequest,
 } from '#sign-in-core/contracts/organization-membership';
+import { DeviceApproval } from '#sign-in-core/pages/islands/device-approval';
 import {
 	OrganizationPeople,
 	type OrganizationPeopleTransport,
@@ -41,7 +42,11 @@ import {
 	signInIslandStateSchema,
 	type SignInIslandState,
 } from '#sign-in-core/pages/islands/sign-in-island-state';
-import { SignedInNavigation } from '#sign-in-core/pages/islands/signed-in-navigation';
+import {
+	OrganizationSwitcher,
+	SignedInNavigation,
+} from '#sign-in-core/pages/islands/signed-in-navigation';
+import { SignedInShell } from '#sign-in-core/pages/signed-in-shell';
 
 const authClient = createAuthClient({
 	plugins: [twoFactorClient(), passkeyClient()],
@@ -185,6 +190,19 @@ function SignInPageContent({ state }: { readonly state: SignInIslandState }): Re
 				/>
 			);
 		}
+		case 'device-approval':
+			return (
+				<SignedInShell
+					state={state.navigation}
+					switcher={<OrganizationSwitcher navigation={state.navigation} />}
+				>
+					<DeviceApproval
+						state={state.device}
+						interactive
+						onSessionEnded={(path) => location.assign(path)}
+					/>
+				</SignedInShell>
+			);
 		case 'recovery-codes':
 			return (
 				<Card>
@@ -275,7 +293,10 @@ export function mountSignInIslands(page: Document): void {
 			JSON.parse(root.dataset['islandState'] ?? 'null'),
 		);
 		if (!parsedState.success) continue;
-		if (parsedState.data.kind === 'signed-in-navigation') {
+		if (
+			parsedState.data.kind === 'signed-in-navigation' ||
+			parsedState.data.kind === 'device-approval'
+		) {
 			const portal = page.createElement('div');
 			portal.hidden = true;
 			root.append(portal);

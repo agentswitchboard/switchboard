@@ -25,7 +25,7 @@ import {
 import { MeSecurity, SignOutCard } from '#sign-in-core/pages/me-security';
 import { SignedInShell, organizationSwitcherButton } from '#sign-in-core/pages/signed-in-shell';
 
-function OrganizationSwitcher({
+export function OrganizationSwitcher({
 	navigation,
 }: {
 	readonly navigation: SignedInNavigationState;

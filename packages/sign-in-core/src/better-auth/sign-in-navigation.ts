@@ -88,6 +88,7 @@ export async function respondToSignedInNavigation(props: {
 	readonly provider: SignInProvider;
 	readonly store: SignInStore;
 	readonly platform: SignInPlatform;
+	readonly machineLoginEnabled?: boolean;
 }): Promise<Response> {
 	if (props.headers.has('authorization'))
 		return Response.json(
@@ -123,6 +124,10 @@ export async function respondToSignedInNavigation(props: {
 			choices: account.choices,
 			destinations,
 			showOrganizationAdmin: activeOrganization.role === 'owner',
+			...(props.machineLoginEnabled === true &&
+			organizationChoiceAllows(activeOrganization.role, 'machine:enroll')
+				? { showMachines: true }
+				: {}),
 		},
 	});
 }
