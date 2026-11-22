@@ -7,6 +7,7 @@ import {
 	boundShrinking,
 	caseIdentityNote,
 	fuzzCasesOverride,
+	fuzzSeed,
 	fuzzSettingsExact,
 	scriptedTestCase,
 	type FailureReplay,
@@ -76,6 +77,7 @@ export async function runRequestGroup(props: {
 	const { harness, family, caller, classification } = props;
 	let caseNumber = 0;
 	let planKeys: readonly string[] | undefined;
+	const expectedPlanKeys = planKeysOf(family);
 	const runCase = async (
 		testCase: Pick<hegel.TestCase, 'draw'>,
 		note: (text: string) => void,
@@ -89,6 +91,11 @@ export async function runRequestGroup(props: {
 				route: routeKey(family.route),
 				caller,
 				caseNumber,
+				seed: fuzzSeed,
+				offset: identity.offset,
+				mode: identity.stepIndex === undefined ? 'random' : 'scheduled',
+				variant:
+					identity.stepIndex === undefined ? null : (expectedPlanKeys[identity.stepIndex] ?? null),
 			}) + '\n',
 		);
 		const fixture = await createRequestCaseFixture({
@@ -101,9 +108,7 @@ export async function runRequestGroup(props: {
 		planKeys ??= keys;
 		expect(keys, 'S2 live field inventory changed between cases').toEqual(planKeys);
 		// The unit proofs (request-budget.unit.test.ts) use the synthetic context: it must carry the live field inventory.
-		expect(keys, 'S2 live field inventory differs from the proved one').toEqual(
-			family.variantSteps(syntheticRequestFamilyContext).map(variantKey),
-		);
+		expect(keys, 'S2 live field inventory differs from the proved one').toEqual(expectedPlanKeys);
 		const generated = family.generate(
 			testCase,
 			fixture.context,
@@ -203,7 +208,7 @@ export async function runRequestGroup(props: {
 			throw new Error(
 				`The printed case is for ${replay.route} as ${replay.caller}, not ${routeKey(family.route)} as ${caller}`,
 			);
-		const stepIndex = planKeysOf(family).indexOf(replay.variant);
+		const stepIndex = expectedPlanKeys.indexOf(replay.variant);
 		if (stepIndex < 0) throw new Error(`The printed variant ${replay.variant} is not planned`);
 		const scripted = scriptedTestCase(replay.evidence);
 		let variantDraw = replay.mode === 'random';
@@ -248,7 +253,7 @@ export async function runRequestGroup(props: {
 		await runCases({
 			stepIndex: undefined,
 			cases: props.randomCasesOnly,
-			seedOffset: planKeysOf(family).length,
+			seedOffset: expectedPlanKeys.length,
 		});
 		return { executedCases: caseNumber };
 	}
