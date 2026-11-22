@@ -45,6 +45,7 @@ const request: GeneratedRequest = {
 	pathname: '/api/auth/get-session',
 	init: { method: 'GET' },
 	label: 'valid',
+	variant: { encoding: 'json', field: null, mutation: 'valid' },
 	expectation: 'success-or-refusal',
 };
 function answer(body: unknown, status = 403, headers = new Headers()): ObservedRequestAnswer {
@@ -124,6 +125,7 @@ it('accepts only the entitled token input and matching declared claims', async (
 		pathname: '/api/auth/oauth2/token',
 		init: { method: 'POST', body: form.toString() },
 		label: 'valid',
+		variant: { encoding: 'json', field: null, mutation: 'valid' },
 		expectation: 'success-or-refusal',
 	};
 	const response = answer({ access_token: token }, 200);
@@ -271,6 +273,7 @@ const acceptRequest = (id = invitationId): GeneratedRequest => ({
 	pathname: acceptPath,
 	init: { method: 'POST', body: JSON.stringify({ invitationId: id }) },
 	label: 'valid',
+	variant: { encoding: 'json', field: null, mutation: 'valid' },
 	expectation: 'success-or-refusal',
 });
 const pendingBefore: RequestStorageSnapshot = {

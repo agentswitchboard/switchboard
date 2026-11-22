@@ -52,7 +52,12 @@ import { requestFamily as twoFactorRemoveAppFamily } from './two-factor-remove-a
 import { requestFamily as twoFactorVerifyBackupCodeFamily } from './two-factor-verify-backup-code';
 import { requestFamily as twoFactorVerifyTotpFamily } from './two-factor-verify-totp';
 
-export type { GeneratedRequest, RequestFamily, RequestFamilyContext } from './request-family';
+export type {
+	GeneratedRequest,
+	RequestFamily,
+	RequestFamilyContext,
+	VariantStep,
+} from './request-family';
 
 export const requestFamilies = [
 	signInFamily,

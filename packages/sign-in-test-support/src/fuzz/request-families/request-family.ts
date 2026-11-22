@@ -25,10 +25,28 @@ export interface RequestFamilyContext {
 	readonly oauthResource: string;
 }
 
+/** One variant family, kept structural: how the request is encoded, which field is changed, and how. */
+export type FieldMutation =
+	| 'valid'
+	| 'near-valid'
+	| 'boundary'
+	| 'wrong-type'
+	| 'unsupported-grant';
+export interface VariantStep {
+	readonly encoding: string;
+	readonly field: string | null;
+	readonly mutation: FieldMutation;
+}
+export function variantKey(step: VariantStep): string {
+	return `${step.encoding}|${step.field ?? '-'}|${step.mutation}`;
+}
+
 export interface GeneratedRequest {
 	readonly pathname: string;
 	readonly init: RequestInit;
 	readonly label: string;
+	/** The variant family this request is, as data: the coverage proof reads this, not the label. */
+	readonly variant: VariantStep;
 	readonly expectation: 'success-or-refusal';
 }
 
@@ -36,16 +54,19 @@ export interface RequestFamily {
 	readonly route: { readonly method: 'GET' | 'POST'; readonly path: string };
 	readonly callers: readonly ('signed-out' | 'member' | 'owner')[];
 	/**
-	 * With a `caseIndex` below `coverageCases`, the case visits that variant family on purpose
-	 * (the coverage pass); otherwise every choice is drawn.
+	 * Every variant family of this route for this context: the valid request, each mutation of each
+	 * named field under its encoding, and each transport fault. The context supplies the field inventory.
+	 */
+	readonly variantSteps: (context: RequestFamilyContext) => readonly VariantStep[];
+	/**
+	 * Build one request. A given `step` is that variant family exactly (the coverage pass); without
+	 * one, the step is drawn from `variantSteps`, so the variant is a function of the draw alone.
 	 */
 	readonly generate: (
 		testCase: TestCase,
 		context: RequestFamilyContext,
-		caseIndex?: number,
+		step?: VariantStep,
 	) => GeneratedRequest;
-	/** One case per variant family: the valid request, each mutation of each field, each transport fault. */
-	readonly coverageCases: (context: RequestFamilyContext) => number;
 }
 
 type Fields = Readonly<Record<string, unknown>>;
@@ -53,75 +74,73 @@ type FieldsForContext = (context: RequestFamilyContext) => Fields;
 
 const callers = ['signed-out', 'member', 'owner'] as const;
 
-type FieldVariant = 'valid' | 'near-valid' | 'boundary' | 'wrong-type';
-interface FieldStep {
-	readonly variant: FieldVariant;
-	readonly key?: string;
-}
-const mutatedVariants = ['near-valid', 'boundary', 'wrong-type'] as const;
+const mutations = ['near-valid', 'boundary', 'wrong-type'] as const;
 
 /** The valid body, then each mutation of each named field (of the body itself when it has none). */
-function fieldSteps(valid: Fields): readonly FieldStep[] {
+function fieldSteps(valid: Fields, encoding: string): readonly VariantStep[] {
 	const keys = Object.keys(valid);
 	return [
-		{ variant: 'valid' },
+		{ encoding, field: null, mutation: 'valid' },
 		...(keys.length === 0
-			? mutatedVariants.map((variant) => ({ variant }))
-			: keys.flatMap((key) => mutatedVariants.map((variant) => ({ variant, key })))),
+			? mutations.map((mutation) => ({ encoding, field: null, mutation }))
+			: keys.flatMap((field) => mutations.map((mutation) => ({ encoding, field, mutation })))),
 	];
 }
 
-/** A scheduled case draws one unused number so Hegel keeps exploring: a case that draws nothing
- * looks like a fully explored space and ends the run after one case. */
-function scheduledStep<Step>(
-	testCase: TestCase,
-	steps: readonly Step[],
-	caseIndex: number | undefined,
-): Step | undefined {
-	const step = caseIndex === undefined ? undefined : steps[caseIndex];
-	if (step !== undefined)
-		testCase.draw(generators.integers({ minValue: 0, maxValue: 2_147_483_647 }));
-	return step;
+function stepLabel(step: VariantStep): string {
+	if (step.encoding === 'wrong-content-type') return step.encoding;
+	return step.field === null ? step.mutation : `${step.mutation}:${step.field}`;
 }
 
-function drawFields(
+function transportStep(encoding: string): VariantStep {
+	return { encoding, field: null, mutation: 'valid' };
+}
+
+function chooseStep(
+	testCase: TestCase,
+	steps: readonly VariantStep[],
+	given: VariantStep | undefined,
+): VariantStep {
+	if (given === undefined) return testCase.draw(generators.sampledFrom([...steps]));
+	if (!steps.some((step) => variantKey(step) === variantKey(given)))
+		throw new Error(`Variant ${variantKey(given)} is not a variant family of this route`);
+	return given;
+}
+
+function mutateFields(
 	testCase: TestCase,
 	valid: Fields,
-	step?: FieldStep,
+	step: VariantStep,
 ): { fields: Fields; label: string } {
-	const variant =
-		step?.variant ??
-		testCase.draw(
-			generators.sampledFrom(['valid', 'near-valid', 'boundary', 'wrong-type'] as const),
-		);
-	const keys = Object.keys(valid);
-	if (variant === 'valid') return { fields: valid, label: variant };
-	if (keys.length === 0)
-		return { fields: { unexpected: variant === 'wrong-type' ? null : '' }, label: variant };
-	const key = step?.key ?? testCase.draw(generators.sampledFrom(keys));
-	const originalValue = valid[key];
+	if (step.mutation === 'valid') return { fields: valid, label: 'valid' };
+	if (step.field === null)
+		return {
+			fields: { unexpected: step.mutation === 'wrong-type' ? [] : '' },
+			label: step.mutation,
+		};
+	const originalValue = valid[step.field];
 	const value =
-		variant === 'wrong-type'
+		step.mutation === 'wrong-type'
 			? null
 			: typeof originalValue === 'number'
-				? variant === 'near-valid'
+				? step.mutation === 'near-valid'
 					? -1
 					: testCase.draw(generators.sampledFrom([0, 1, 100, 101, 2_147_483_647]))
 				: typeof originalValue === 'boolean'
-					? variant === 'near-valid'
+					? step.mutation === 'near-valid'
 						? 'false'
 						: !originalValue
-					: variant === 'near-valid'
+					: step.mutation === 'near-valid'
 						? 'invalid'
 						: 'x'.repeat(testCase.draw(generators.integers({ minValue: 0, maxValue: 4096 })));
-	return { fields: { ...valid, [key]: value }, label: `${variant}:${key}` };
+	return { fields: { ...valid, [step.field]: value }, label: `${step.mutation}:${step.field}` };
 }
 
-function jsonSteps(valid: Fields): readonly { encoding: string; step: FieldStep }[] {
+function jsonSteps(valid: Fields): readonly VariantStep[] {
 	return [
-		...fieldSteps(valid).map((step) => ({ encoding: 'json', step })),
-		{ encoding: 'malformed', step: { variant: 'valid' } },
-		{ encoding: 'wrong-content-type', step: { variant: 'valid' } },
+		...fieldSteps(valid, 'json'),
+		transportStep('malformed'),
+		transportStep('wrong-content-type'),
 	];
 }
 
@@ -135,32 +154,25 @@ export function jsonFamily(
 	return {
 		route: { method: 'POST', path },
 		callers,
-		coverageCases: (context): number => jsonSteps(validFields(context)).length,
-		generate(
-			testCase: TestCase,
-			context: RequestFamilyContext,
-			caseIndex?: number,
-		): GeneratedRequest {
+		variantSteps: (context): readonly VariantStep[] => jsonSteps(validFields(context)),
+		generate(testCase, context, given): GeneratedRequest {
 			const valid = validFields(context);
-			const scheduled = scheduledStep(testCase, jsonSteps(valid), caseIndex);
-			const encoding =
-				scheduled?.encoding ??
-				testCase.draw(
-					generators.sampledFrom(['json', 'json', 'malformed', 'wrong-content-type'] as const),
-				);
-			const { fields, label } = drawFields(testCase, valid, scheduled?.step);
+			const step = chooseStep(testCase, jsonSteps(valid), given);
+			const { fields, label } = mutateFields(testCase, valid, step);
 			return {
 				pathname: path,
 				init: {
 					method: 'POST',
 					headers: {
-						'content-type': encoding === 'wrong-content-type' ? 'text/plain' : 'application/json',
+						'content-type':
+							step.encoding === 'wrong-content-type' ? 'text/plain' : 'application/json',
 						origin: new URL(context.issuer).origin,
 						...headersForContext(context),
 					},
-					body: encoding === 'malformed' ? '{' : JSON.stringify(fields),
+					body: step.encoding === 'malformed' ? '{' : JSON.stringify(fields),
 				},
-				label: `${encoding}:${label}`,
+				label: `${step.encoding}:${label}`,
+				variant: step,
 				expectation: 'success-or-refusal',
 			};
 		},
@@ -171,18 +183,11 @@ export function queryFamily(path: string, validFields: FieldsForContext): Reques
 	return {
 		route: { method: 'GET', path },
 		callers,
-		coverageCases: (context): number => fieldSteps(validFields(context)).length,
-		generate(
-			testCase: TestCase,
-			context: RequestFamilyContext,
-			caseIndex?: number,
-		): GeneratedRequest {
+		variantSteps: (context): readonly VariantStep[] => fieldSteps(validFields(context), 'query'),
+		generate(testCase, context, given): GeneratedRequest {
 			const valid = validFields(context);
-			const { fields, label } = drawFields(
-				testCase,
-				valid,
-				scheduledStep(testCase, fieldSteps(valid), caseIndex),
-			);
+			const step = chooseStep(testCase, fieldSteps(valid, 'query'), given);
+			const { fields, label } = mutateFields(testCase, valid, step);
 			const query = new URLSearchParams();
 			for (const [key, value] of Object.entries(fields)) {
 				if (value === null || value === undefined) continue;
@@ -196,25 +201,18 @@ export function queryFamily(path: string, validFields: FieldsForContext): Reques
 				pathname: suffix ? `${path}?${suffix}` : path,
 				init: { method: 'GET' },
 				label,
+				variant: step,
 				expectation: 'success-or-refusal',
 			};
 		},
 	};
 }
 
-function formSteps(
-	valid: Fields,
-	allowJson: boolean,
-): readonly { encoding: string; step: FieldStep }[] {
+function formSteps(valid: Fields, allowJson: boolean): readonly VariantStep[] {
 	return [
-		...fieldSteps(valid).map((step) => ({ encoding: 'form', step })),
-		...(allowJson
-			? [
-					{ encoding: 'json', step: { variant: 'valid' as const } },
-					{ encoding: 'malformed', step: { variant: 'valid' as const } },
-				]
-			: []),
-		{ encoding: 'wrong-content-type', step: { variant: 'valid' as const } },
+		...fieldSteps(valid, 'form'),
+		...(allowJson ? [transportStep('json'), transportStep('malformed')] : []),
+		transportStep('wrong-content-type'),
 	];
 }
 
@@ -226,45 +224,34 @@ export function formFamily(
 	return {
 		route: { method: 'POST', path },
 		callers,
-		coverageCases: (context): number => formSteps(validFields(context), allowJson).length,
-		generate(
-			testCase: TestCase,
-			context: RequestFamilyContext,
-			caseIndex?: number,
-		): GeneratedRequest {
+		variantSteps: (context): readonly VariantStep[] => formSteps(validFields(context), allowJson),
+		generate(testCase, context, given): GeneratedRequest {
 			const valid = validFields(context);
-			const scheduled = scheduledStep(testCase, formSteps(valid, allowJson), caseIndex);
-			const encoding =
-				scheduled?.encoding ??
-				testCase.draw(
-					generators.sampledFrom(
-						allowJson
-							? ['form', 'json', 'malformed', 'wrong-content-type']
-							: ['form', 'wrong-content-type'],
-					),
-				);
-			const { fields, label } = drawFields(testCase, valid, scheduled?.step);
+			const step = chooseStep(testCase, formSteps(valid, allowJson), given);
+			const { fields, label } = mutateFields(testCase, valid, step);
 			const form = new URLSearchParams();
 			for (const [key, value] of Object.entries(fields)) {
 				if (typeof value === 'string') form.set(key, value);
 				else if (value !== null && value !== undefined) form.set(key, JSON.stringify(value) ?? '');
 			}
-			const isJson = encoding === 'json' || encoding === 'malformed';
+			const isJson = step.encoding === 'json' || step.encoding === 'malformed';
 			return {
 				pathname: path,
 				init: {
 					method: 'POST',
 					headers: {
 						'content-type':
-							encoding === 'wrong-content-type'
+							step.encoding === 'wrong-content-type'
 								? 'text/plain'
 								: isJson
 									? 'application/json'
 									: 'application/x-www-form-urlencoded',
 					},
-					body: encoding === 'malformed' ? '{' : isJson ? JSON.stringify(fields) : form.toString(),
+					body:
+						step.encoding === 'malformed' ? '{' : isJson ? JSON.stringify(fields) : form.toString(),
 				},
-				label: `${encoding}:${label}`,
+				label: `${step.encoding}:${label}`,
+				variant: step,
 				expectation: 'success-or-refusal',
 			};
 		},
@@ -272,16 +259,13 @@ export function formFamily(
 }
 
 const tokenFieldKeys = ['client_id', 'code', 'code_verifier', 'redirect_uri', 'resource'] as const;
-const tokenSteps: readonly {
-	readonly variant: 'valid' | 'near-valid' | 'boundary' | 'unsupported' | 'wrong-content-type';
-	readonly key?: string;
-}[] = [
-	{ variant: 'valid' },
-	{ variant: 'unsupported' },
-	{ variant: 'wrong-content-type' },
-	...tokenFieldKeys.flatMap((key) => [
-		{ variant: 'near-valid' as const, key },
-		{ variant: 'boundary' as const, key },
+const tokenSteps: readonly VariantStep[] = [
+	{ encoding: 'form', field: null, mutation: 'valid' },
+	{ encoding: 'form', field: 'grant_type', mutation: 'unsupported-grant' },
+	transportStep('wrong-content-type'),
+	...tokenFieldKeys.flatMap((field) => [
+		{ encoding: 'form', field, mutation: 'near-valid' as const },
+		{ encoding: 'form', field, mutation: 'boundary' as const },
 	]),
 ];
 
@@ -289,24 +273,9 @@ export function tokenFamily(path: string): RequestFamily {
 	return {
 		route: { method: 'POST', path },
 		callers,
-		coverageCases: (): number => tokenSteps.length,
-		generate(
-			testCase: TestCase,
-			context: RequestFamilyContext,
-			caseIndex?: number,
-		): GeneratedRequest {
-			const scheduled = scheduledStep(testCase, tokenSteps, caseIndex);
-			const variant =
-				scheduled?.variant ??
-				testCase.draw(
-					generators.sampledFrom([
-						'valid',
-						'near-valid',
-						'boundary',
-						'unsupported',
-						'wrong-content-type',
-					] as const),
-				);
+		variantSteps: (): readonly VariantStep[] => tokenSteps,
+		generate(testCase, context, given): GeneratedRequest {
+			const step = chooseStep(testCase, tokenSteps, given);
 			const fields: Record<string, string> = {
 				grant_type: 'authorization_code',
 				client_id: context.oauthClientId,
@@ -315,46 +284,50 @@ export function tokenFamily(path: string): RequestFamily {
 				redirect_uri: context.oauthRedirectUri,
 				resource: context.oauthResource,
 			};
-			if (variant === 'unsupported') fields.grant_type = 'client_credentials';
-			if (variant === 'near-valid' || variant === 'boundary') {
-				const key = scheduled?.key ?? testCase.draw(generators.sampledFrom([...tokenFieldKeys]));
-				fields[key] = variant === 'boundary' ? '' : 'invalid';
-			}
+			if (step.mutation === 'unsupported-grant') fields.grant_type = 'client_credentials';
+			if ((step.mutation === 'near-valid' || step.mutation === 'boundary') && step.field !== null)
+				fields[step.field] = step.mutation === 'boundary' ? '' : 'invalid';
 			return {
 				pathname: path,
 				init: {
 					method: 'POST',
 					headers: {
 						'content-type':
-							variant === 'wrong-content-type' ? 'text/plain' : 'application/x-www-form-urlencoded',
+							step.encoding === 'wrong-content-type'
+								? 'text/plain'
+								: 'application/x-www-form-urlencoded',
 					},
 					body: new URLSearchParams(fields).toString(),
 				},
-				label: variant,
+				label: stepLabel(step),
+				variant: step,
 				expectation: 'success-or-refusal',
 			};
 		},
 	};
 }
 
-const introspectionVariants = ['valid', 'near-valid', 'boundary', 'wrong-content-type'] as const;
+const introspectionSteps: readonly VariantStep[] = [
+	{ encoding: 'form', field: null, mutation: 'valid' },
+	{ encoding: 'form', field: 'token', mutation: 'near-valid' },
+	{ encoding: 'form', field: 'token', mutation: 'boundary' },
+	transportStep('wrong-content-type'),
+];
 
 export function introspectionFamily(path: string): RequestFamily {
 	return {
 		route: { method: 'POST', path },
 		callers,
-		coverageCases: (): number => introspectionVariants.length,
-		generate(
-			testCase: TestCase,
-			context: RequestFamilyContext,
-			caseIndex?: number,
-		): GeneratedRequest {
-			const variant =
-				scheduledStep(testCase, introspectionVariants, caseIndex) ??
-				testCase.draw(generators.sampledFrom([...introspectionVariants]));
+		variantSteps: (): readonly VariantStep[] => introspectionSteps,
+		generate(testCase, context, given): GeneratedRequest {
+			const step = chooseStep(testCase, introspectionSteps, given);
 			const fields = new URLSearchParams({
 				token:
-					variant === 'boundary' ? '' : variant === 'near-valid' ? 'invalid' : context.oauthToken,
+					step.mutation === 'boundary'
+						? ''
+						: step.mutation === 'near-valid'
+							? 'invalid'
+							: context.oauthToken,
 				client_id: context.oauthClientId,
 			});
 			return {
@@ -363,12 +336,15 @@ export function introspectionFamily(path: string): RequestFamily {
 					method: 'POST',
 					headers: {
 						'content-type':
-							variant === 'wrong-content-type' ? 'text/plain' : 'application/x-www-form-urlencoded',
+							step.encoding === 'wrong-content-type'
+								? 'text/plain'
+								: 'application/x-www-form-urlencoded',
 						authorization: `Basic ${btoa(`${context.oauthClientId}:${context.oauthClientSecret}`)}`,
 					},
 					body: fields.toString(),
 				},
-				label: variant,
+				label: stepLabel(step),
+				variant: step,
 				expectation: 'success-or-refusal',
 			};
 		},

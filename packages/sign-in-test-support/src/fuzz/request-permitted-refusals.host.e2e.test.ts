@@ -22,6 +22,7 @@ it('S2 permitted refusal consumes the matching passkey challenge before rejectin
 		const request: GeneratedRequest = {
 			pathname: path,
 			label: 'valid-challenge-invalid-assertion',
+			variant: { encoding: 'json', field: null, mutation: 'valid' },
 			expectation: 'success-or-refusal',
 			init: {
 				method: 'POST',
@@ -84,6 +85,7 @@ it('S2 permitted refused read deletes its expired session and advances every ret
 		const request: GeneratedRequest = {
 			pathname: path,
 			label: 'expired-session-read',
+			variant: { encoding: 'json', field: null, mutation: 'valid' },
 			expectation: 'success-or-refusal',
 			init: {
 				method: 'POST',
