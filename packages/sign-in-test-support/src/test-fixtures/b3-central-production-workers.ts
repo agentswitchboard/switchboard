@@ -3,6 +3,7 @@ import { join } from 'node:path';
 
 import { Response as WorkerResponse, type WorkerOptions } from 'miniflare';
 
+import { assertB3CentralWorkerProofArtifacts } from '#sign-in-test-support/test-fixtures/b3-central-proof-pin';
 import {
 	textBindings,
 	type WorkerdCentralRuntime,
@@ -43,6 +44,7 @@ export async function centralProductionWorkers(props: {
 		jwksBody,
 		trust: { issuer, audience, adminAudience, machineAudience, publicOrigin, serviceId },
 	} = props;
+	await assertB3CentralWorkerProofArtifacts(checkout);
 	const storageName = 'central-production-storage';
 	const privateName = 'central-production-link';
 	const jwksUrl = `${issuer}/api/auth/jwks`;

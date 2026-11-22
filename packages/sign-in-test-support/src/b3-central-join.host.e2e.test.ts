@@ -22,6 +22,7 @@ import { expect, it } from 'vitest';
 import { z } from 'zod';
 
 import { centralProductionWorkers } from '#sign-in-test-support/test-fixtures/b3-central-production-workers';
+import { assertB3CentralNativeProofArtifact } from '#sign-in-test-support/test-fixtures/b3-central-proof-pin';
 import { startLocalAuthHarness } from '#sign-in-test-support/test-fixtures/local-auth-harness';
 
 const centralExecutable = process.env.B3_CENTRAL_SERVE;
@@ -307,6 +308,7 @@ it.runIf(centralExecutable !== undefined && process.env.SIGN_IN_TEST_HOST !== 'c
 	'joins the real Central Tokio link directly and revokes the enrollment through its private admin socket',
 	async (): Promise<void> => {
 		if (centralExecutable === undefined) throw new Error('Expected the pinned Central executable');
+		await assertB3CentralNativeProofArtifact(centralExecutable);
 		const root = await mkdtemp('/tmp/b3-central-join-');
 		const { privateKey, publicKey } = await generateKeyPair('EdDSA');
 		const publicJwk = { ...(await exportJWK(publicKey)), kid: keyId, alg: 'EdDSA' };
@@ -471,11 +473,15 @@ it.runIf(centralWorkerSource !== undefined && process.env.SIGN_IN_TEST_HOST === 
 		});
 		let socket: WorkerWebSocket | null = null;
 		try {
-			const privateWorker = await harness.miniflare.getWorker('central-production-link');
 			const signInWorker = await harness.miniflare.getWorker('sign-in');
+			const { CENTRAL } = await harness.miniflare.getBindings<{
+				readonly CENTRAL: typeof signInWorker;
+			}>('sign-in');
+			if (typeof CENTRAL?.fetch !== 'function')
+				throw new Error('Missing the actual CENTRAL binding');
 			const privateLink: CentralTransport = {
 				async fetch(request: Request): Promise<Response> {
-					const response = await privateWorker.fetch(request.url, {
+					const response = await CENTRAL.fetch(request.url, {
 						method: request.method,
 						headers: Object.fromEntries(request.headers),
 						body: await request.arrayBuffer(),
