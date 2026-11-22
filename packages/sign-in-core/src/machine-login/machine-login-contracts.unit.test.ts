@@ -2,6 +2,7 @@ import { expect, it } from 'vitest';
 
 import {
 	decideDeviceLoginSchema,
+	deviceLoginDecisionSchema,
 	machinePrincipalSchema,
 	machineTokenDecisionSchema,
 	presentedMachineSchema,
@@ -88,6 +89,14 @@ it('keeps revocation actor and second-factor time out of the request body', (): 
 	}
 });
 
+it('admits the exact device approval and its provisional conflict reply', (): void => {
+	const approved = { result: 'approved', enrollmentId, label: 'Proof Mac', allowedWorkspaces: [] };
+	const conflict = { result: 'refused', reason: { kind: 'requestConflict' } };
+	expect(deviceLoginDecisionSchema.parse(approved)).toEqual(approved);
+	expect(deviceLoginDecisionSchema.parse(conflict)).toEqual(conflict);
+	expect(deviceLoginDecisionSchema.safeParse({ ...approved, note: 'extra' }).success).toBe(false);
+});
+
 it('admits the serialized machine grant with an omitted or populated superseded client', (): void => {
 	const grant = {
 		result: 'grant',
@@ -103,6 +112,7 @@ it('admits the serialized machine grant with an omitted or populated superseded 
 		superseded,
 	});
 	expect(machineTokenDecisionSchema.safeParse({ ...grant, superseded: null }).success).toBe(false);
+	expect(machineTokenDecisionSchema.safeParse({ ...grant, note: 'extra' }).success).toBe(false);
 });
 
 it('admits the closed revocation outcome vocabulary', (): void => {

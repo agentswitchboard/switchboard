@@ -88,15 +88,27 @@ const deviceLoginDecisionWireSchema = z.discriminatedUnion('result', [
 	deviceLoginApprovedWireSchema,
 	z.strictObject({ result: z.literal('refused'), reason: deviceLoginWireRefusalSchema }),
 ]);
+const provisionalDeviceLoginConflictReplySchema = z.strictObject({
+	result: z.literal('refused'),
+	reason: provisionalDeviceLoginConflict,
+});
 export const machineDeviceApprovalResultSchema = machineApprovalWireFactsSchema.extend({
 	enrollmentId: uuid7Schema,
 	allowedWorkspaces: decideDeviceLoginSchema.shape.allowedWorkspaces,
 });
 export type MachineDeviceApprovalResult = z.infer<typeof machineDeviceApprovalResultSchema>;
-export const deviceLoginDecisionSchema = z.discriminatedUnion('result', [
-	machineDeviceApprovalResultSchema.extend({ result: z.literal('approved') }),
-	z.strictObject({ result: z.literal('refused'), reason: deviceLoginRefusalSchema }),
-]);
+export const deviceLoginDecisionSchema = z
+	.union([deviceLoginDecisionWireSchema, provisionalDeviceLoginConflictReplySchema])
+	.transform((decision) => {
+		if (decision.result === 'refused') return decision;
+		return {
+			...decision,
+			enrollmentId: uuid7Schema.parse(decision.enrollmentId),
+			allowedWorkspaces: decision.allowedWorkspaces.map((workspaceId) =>
+				uuid7Schema.parse(workspaceId),
+			),
+		};
+	});
 export type DeviceLoginDecision = z.infer<typeof deviceLoginDecisionSchema>;
 export const decideMachineTokenSchema = z.strictObject({
 	organizationId: uuid7Schema,
@@ -108,10 +120,6 @@ export type DecideMachineToken = z.infer<typeof decideMachineTokenSchema>;
 const endedMachineClientWireSchema = z.strictObject({
 	enrollmentId: z.uuidv7(),
 	clientId: z.uuidv7(),
-});
-const endedMachineClientSchema = endedMachineClientWireSchema.extend({
-	enrollmentId: uuid7Schema,
-	clientId: uuid7Schema,
 });
 const machineTokenRefusalSchema = z.discriminatedUnion('kind', [
 	z.strictObject({ kind: z.literal('enrollmentNotActive') }),
@@ -135,21 +143,25 @@ const machineTokenGrantWireSchema = z.strictObject({
 	grantExpiresAt: unixSecondsSchema,
 	superseded: endedMachineClientWireSchema.optional(),
 });
-const machineTokenDecisionWireSchema = z
+export const machineTokenDecisionSchema = z
 	.discriminatedUnion('result', [machineTokenGrantWireSchema, machineTokenRefusedSchema])
 	.transform((decision) => {
 		if (decision.result === 'refuse') return decision;
-		const { superseded, ...grant } = decision;
-		return { ...grant, ...(superseded === undefined ? {} : { superseded }) };
+		const { superseded } = decision;
+		return {
+			...decision,
+			machineId: machineIdSchema.parse(decision.machineId),
+			enrollmentId: uuid7Schema.parse(decision.enrollmentId),
+			...(superseded === undefined
+				? {}
+				: {
+						superseded: {
+							enrollmentId: uuid7Schema.parse(superseded.enrollmentId),
+							clientId: uuid7Schema.parse(superseded.clientId),
+						},
+					}),
+		};
 	});
-export const machineTokenDecisionSchema = z.discriminatedUnion('result', [
-	machineTokenGrantWireSchema.extend({
-		...presentedMachineSchema.shape,
-		enrollmentId: uuid7Schema,
-		superseded: endedMachineClientSchema.optional(),
-	}),
-	machineTokenRefusedSchema,
-]);
 export type MachineTokenDecision = z.infer<typeof machineTokenDecisionSchema>;
 
 /** JWT extension claims keep their existing snake_case spelling. */
@@ -200,6 +212,30 @@ export const revokeMachineEnrollmentResultSchema = z.discriminatedUnion('result'
 ]);
 export type RevokeMachineEnrollmentResult = z.infer<typeof revokeMachineEnrollmentResultSchema>;
 
+// Compare the inputs of the actual transport decoders. The transforms only apply ID brands.
+type DeviceLoginDecoderInput = z.input<typeof deviceLoginDecisionSchema>;
+type ExpectedDeviceLoginDecoderInput =
+	| DeviceLoginWireDecision
+	| z.input<typeof provisionalDeviceLoginConflictReplySchema>;
+
+// Zod's optional field also admits undefined in a JS object. JSON can only omit it.
+type MachineTokenWireShape<Reply> = Reply extends { result: 'grant' }
+	? { [Key in keyof Reply]: Key extends 'superseded' ? Exclude<Reply[Key], undefined> : Reply[Key] }
+	: Reply;
+type MachineTokenDecoderInput = z.input<typeof machineTokenDecisionSchema>;
+
+type WithExtraOptionalField<Reply, Result> = Reply extends { result: Result }
+	? Reply & { note?: string }
+	: Reply;
+type ExtraApprovalFieldMatches = WireTypesEqual<
+	WithExtraOptionalField<DeviceLoginDecoderInput, 'approved'>,
+	ExpectedDeviceLoginDecoderInput
+>;
+type ExtraGrantFieldMatches = WireTypesEqual<
+	MachineTokenWireShape<WithExtraOptionalField<MachineTokenDecoderInput, 'grant'>>,
+	MachineTokenDecision_Serialize
+>;
+
 export type MachineDecisionWireTypes = [
 	AssertWireType<
 		WireTypesEqual<z.input<typeof decideDeviceLoginSchema>, DecideDeviceLogin_Deserialize>
@@ -210,15 +246,17 @@ export type MachineDecisionWireTypes = [
 	AssertWireType<
 		WireTypesEqual<z.output<typeof deviceLoginWireRefusalSchema>, DeviceLoginRouteRefusal>
 	>,
-	AssertWireType<
-		WireTypesEqual<z.output<typeof deviceLoginDecisionWireSchema>, DeviceLoginWireDecision>
-	>,
+	AssertWireType<WireTypesEqual<DeviceLoginDecoderInput, ExpectedDeviceLoginDecoderInput>>,
+	// @ts-expect-error The approval decoder must not admit an extra optional reply field.
+	AssertWireType<ExtraApprovalFieldMatches>,
 	AssertWireType<
 		WireTypesEqual<z.output<typeof machineTokenRefusalSchema>, MachineTokenRouteRefusal>
 	>,
 	AssertWireType<
-		WireTypesEqual<z.output<typeof machineTokenDecisionWireSchema>, MachineTokenDecision_Serialize>
+		WireTypesEqual<MachineTokenWireShape<MachineTokenDecoderInput>, MachineTokenDecision_Serialize>
 	>,
+	// @ts-expect-error The grant decoder must not admit an extra optional reply field.
+	AssertWireType<ExtraGrantFieldMatches>,
 	AssertWireType<
 		WireTypesEqual<
 			z.input<typeof revokeMachineEnrollmentRequestSchema>,
