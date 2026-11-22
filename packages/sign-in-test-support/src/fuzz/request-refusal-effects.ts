@@ -119,6 +119,10 @@ export function assertRequestRefusalEffects(props: {
 						(acknowledgement) =>
 							acknowledgement.organizationId === row.organization_id &&
 							acknowledgement.personId === row.person_id &&
+							// The push named this pair's row and carried its state: an acknowledgement for
+							// another subject or state is not an acknowledgement of this pair.
+							acknowledgement.subjectId === row.id &&
+							acknowledgement.state === row.state &&
 							acknowledgement.revision === Number(row.revision) + 1 &&
 							acknowledgement.acknowledgedRevision >= acknowledgement.revision &&
 							acknowledgement.acknowledgedRevision === Number(row.revision) + 1,

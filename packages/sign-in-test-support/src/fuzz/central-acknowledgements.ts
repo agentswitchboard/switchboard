@@ -10,6 +10,10 @@ export interface CentralAcknowledgement {
 	readonly kind: 'person';
 	readonly organizationId: string;
 	readonly personId: string;
+	/** The pair row the push named (the product's personFence.id): its ACK write is guarded by it. */
+	readonly subjectId: string;
+	/** The pair state the push carried. */
+	readonly state: 'active' | 'inactive';
 	/** The revision the push carried. */
 	readonly revision: number;
 	/** The floor Central's reply returned for it. */
@@ -45,6 +49,8 @@ export function readCentralAcknowledgements(
 				kind: 'person',
 				organizationId: push.data.organizationId,
 				personId: push.data.personId,
+				subjectId: push.data.subjectId,
+				state: push.data.state,
 				revision: push.data.revision,
 				acknowledgedRevision: reply.data.acknowledgedRevision,
 			},

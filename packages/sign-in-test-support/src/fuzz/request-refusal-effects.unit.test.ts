@@ -13,6 +13,8 @@ type EffectsFixture = Parameters<typeof assertRequestRefusalEffects>[0]['fixture
 const personId = '019a3dce-2000-7000-8000-000000000001';
 const pushOrganizationId = '019a3dce-2000-7000-8000-0000000000aa';
 const pushPersonId = personId;
+/** The pair row id: the push's subjectId (product personFence.id). */
+const ownSubjectId = '019a3dce-2000-7000-8000-0000000000c1';
 const sessionId = '019a3dce-2000-7000-8000-000000000002';
 const challengeId = '019a3dce-2000-7000-8000-000000000003';
 const passkeyId = '019a3dce-2000-7000-8000-000000000004';
@@ -83,7 +85,8 @@ it('permits an expired-session read only to advance (and drain-acknowledge) the 
 		person: string,
 		extra: Record<string, unknown> = {},
 	): StoredRowForTest => ({
-		id,
+		id: id === 'own' ? ownSubjectId : id,
+		state: 'active',
 		person_id: person,
 		organization_id: pushOrganizationId,
 		revision: 1,
@@ -117,7 +120,7 @@ it('permits an expired-session read only to advance (and drain-acknowledge) the 
 			kind: 'person',
 			organizationId: pushOrganizationId,
 			personId: pushPersonId,
-			subjectId: pushPersonId,
+			subjectId: ownSubjectId,
 			revision,
 			state: 'active',
 			...overrides,
@@ -194,6 +197,9 @@ it('permits an expired-session read only to advance (and drain-acknowledge) the 
 		centralFor(exchange(2, {}, { kind: 'answered', status: 200, body: 'not json' })),
 		centralFor(exchange(3)),
 		centralFor(exchange(2, { personId: otherPersonId, subjectId: otherPersonId })),
+		// A 200 to the same pair and revision for a different subject row, or in a different state.
+		centralFor(exchange(2, { subjectId: '019a3dce-2000-7000-8000-0000000000c2' })),
+		centralFor(exchange(2, { state: 'inactive' })),
 		centralFor(exchange(2, { organizationId: '019a3dce-2000-7000-8000-0000000000bb' })),
 	])
 		expect(() =>
@@ -223,7 +229,8 @@ it('S1 closure: a push Central received and a stored acknowledgement are not an 
 	const expiredAt = 1_000;
 	const now = expiredAt + 1;
 	const own = {
-		id: 'own',
+		id: ownSubjectId,
+		state: 'active',
 		person_id: personId,
 		organization_id: pushOrganizationId,
 		revision: 1,
@@ -255,7 +262,7 @@ it('S1 closure: a push Central received and a stored acknowledgement are not an 
 			kind: 'person',
 			organizationId: pushOrganizationId,
 			personId,
-			subjectId: personId,
+			subjectId: ownSubjectId,
 			revision: 2,
 			state: 'active',
 		}),
