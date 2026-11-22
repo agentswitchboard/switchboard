@@ -12,6 +12,7 @@ import {
 import type { SignInDatabase } from '@agent-collaboration/sign-in-core';
 import type {
 	SignInHttpConfiguration,
+	MachineLoginConfiguration,
 	createSignInManagementBinding,
 	SocialLoginProvider,
 } from '@agent-collaboration/sign-in-core/better-auth';
@@ -138,6 +139,8 @@ export type WorkerEnvironmentBinding = NonNullable<WorkerOptions['config']['env'
  */
 export interface WorkerdCentralRuntime {
 	readonly centralBinding: WorkerEnvironmentBinding;
+	readonly privateWorker?: WorkerOptions;
+	readonly storageWorker?: WorkerOptions;
 }
 
 export async function startLocalAuthHarness(
@@ -158,6 +161,9 @@ export async function startLocalAuthHarness(
 		 * CENTRAL to the hop it names.
 		 */
 		readonly workerdCentral?: (issuer: string) => Promise<WorkerdCentralRuntime>;
+		readonly machineLinkStorageWorker?: WorkerOptions;
+		readonly machineLogin?: MachineLoginConfiguration;
+		readonly machineDecisions?: (request: Request) => Promise<Response>;
 		/**
 		 * Test-only (V2, Node host only): record every crypto, clock, ID and central call of the
 		 * in-process Node sign-in host. Refused on Cloudflare, whose host runs in workerd.
@@ -242,7 +248,7 @@ export async function startLocalAuthHarness(
 	const signInHost = z
 		.enum(['cloudflare', 'node'])
 		.parse(options.host ?? process.env.SIGN_IN_TEST_HOST ?? 'cloudflare');
-	const centralProvisioning = createControlledCentralProvisioning();
+	const centralProvisioning = createControlledCentralProvisioning(options.machineDecisions);
 	let centralUnix: CentralLinkEndpoint | null = null;
 	let nodeHost: NodeAuthProofHost | undefined;
 	const nodeHttpReceipts: NodeInvocationReceipt[] = [];
@@ -465,6 +471,7 @@ export async function startLocalAuthHarness(
 		ownerCliClientId: 'owner-cli-local',
 		ownerCliRedirectUri: 'http://127.0.0.1/callback',
 		accessTokenSeconds: 300,
+		...(options.machineLogin === undefined ? {} : { machineLogin: options.machineLogin }),
 		managementHumanCheck: 'remembered-login',
 		turnstile: {
 			kind: 'local',
@@ -489,6 +496,8 @@ export async function startLocalAuthHarness(
 			throw error;
 		},
 	);
+	const machineLinkStorageWorker =
+		workerdCentral?.storageWorker ?? options.machineLinkStorageWorker;
 	if (signInHost === 'node') {
 		try {
 			centralUnix =
@@ -637,6 +646,14 @@ export async function startLocalAuthHarness(
 											});
 										},
 									},
+									...(machineLinkStorageWorker === undefined
+										? {}
+										: {
+												CENTRAL_LINK: {
+													type: 'worker',
+													workerName: machineLinkStorageWorker.config.name,
+												},
+											}),
 									...proofRateLimitBindings,
 									...textBindings({
 										SIGN_IN_CONFIGURATION: JSON.stringify(configuration),
@@ -654,6 +671,8 @@ export async function startLocalAuthHarness(
 							},
 							dev: { outboundService: { type: 'fetcher', handler: outbound.fetch } },
 						},
+						...(machineLinkStorageWorker === undefined ? [] : [machineLinkStorageWorker]),
+						...(workerdCentral?.privateWorker === undefined ? [] : [workerdCentral.privateWorker]),
 						...['gateway-one', 'gateway-two'].map((name): WorkerOptions => ({
 							config: {
 								type: 'worker',
