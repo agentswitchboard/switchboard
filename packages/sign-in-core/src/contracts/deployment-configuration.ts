@@ -2,6 +2,7 @@ import { normalizeToolPortalOrigin } from '@agent-collaboration/tool-access/cont
 import { z } from 'zod';
 
 import { organizationStatementLifetimeSeconds } from '#sign-in-core/contracts/organization-statement';
+import { machineLoginConfigurationSchema } from '#sign-in-core/machine-login/machine-login-contracts';
 
 const loopbackHostnames = new Set(['localhost', '127.0.0.1', '[::1]']);
 function isLoopbackHostname(hostname: string): boolean {
@@ -74,12 +75,14 @@ export const signInConfigurationSchema = z
 			);
 		}, 'Owner CLI redirects must use an HTTP loopback address'),
 		accessTokenSeconds: z.number().int().positive().max(300).default(300),
+		machineLogin: machineLoginConfigurationSchema.optional(),
 		turnstile: turnstileConfigurationSchema,
 		managementHumanCheck: z
 			.enum(['remembered-login', 'fresh-verified-uv', 'exact-operation-binding'])
 			.default('remembered-login'),
 	})
 	.superRefine((configuration, context): void => {
+		const machineLogin = configuration.machineLogin;
 		const localIssuer = isLoopbackHostname(new URL(configuration.issuer).hostname);
 		if ((configuration.turnstile.kind === 'local') !== localIssuer)
 			context.addIssue({
@@ -93,12 +96,13 @@ export const signInConfigurationSchema = z
 				configuration.managementAudience,
 				configuration.centralIdentityAudience,
 				configuration.centralAdminAudience,
-			]).size !== 3
+				...(machineLogin === undefined ? [] : [machineLogin.machineAudience]),
+			]).size !== (machineLogin === undefined ? 3 : 4)
 		)
 			context.addIssue({
 				code: 'custom',
 				path: ['centralAdminAudience'],
-				message: 'The management, stamp and admin audiences must be distinct',
+				message: 'The management, stamp, admin and configured machine audiences must be distinct',
 			});
 		// Each system client has its own profile; one ID cannot hold two.
 		if (
@@ -106,12 +110,14 @@ export const signInConfigurationSchema = z
 				configuration.ownerCliClientId,
 				configuration.adminPageClientId,
 				configuration.ownerFleetCliClientId,
-			]).size !== 3
+				...(machineLogin === undefined ? [] : [machineLogin.routerClientId]),
+			]).size !== (machineLogin === undefined ? 3 : 4)
 		)
 			context.addIssue({
 				code: 'custom',
 				path: ['adminPageClientId'],
-				message: 'The management CLI, admin page and fleet CLI need distinct client IDs',
+				message:
+					'The management CLI, admin page, fleet CLI and configured device client need distinct IDs',
 			});
 	});
 export type SignInConfiguration = z.infer<typeof signInConfigurationSchema>;

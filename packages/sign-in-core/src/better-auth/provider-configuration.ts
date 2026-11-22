@@ -1,5 +1,6 @@
 import type { PersonProof } from '@agent-collaboration/tool-access/contracts';
-import { oauthProvider } from '@better-auth/oauth-provider';
+import type { BetterAuthPlugin } from '@better-auth/core';
+import { getOAuthProviderApi, oauthProvider } from '@better-auth/oauth-provider';
 import { passkey } from '@better-auth/passkey';
 import { betterAuth, type Auth, type BetterAuthOptions } from 'better-auth';
 import { APIError, createAuthMiddleware, getSessionFromCtx } from 'better-auth/api';
@@ -10,6 +11,8 @@ import { twoFactor } from 'better-auth/plugins/two-factor';
 import { agentRegistrationMetadataSchema } from '#sign-in-core/agent-clients/agent-registration';
 import { workspaceResourceHasIssuancePolicy } from '#sign-in-core/agent-clients/workspace-resource';
 import { authorizationFencedAdapter } from '#sign-in-core/better-auth/authorization-fenced-adapter';
+import { createMachineLoginPlugin } from '#sign-in-core/better-auth/machine-login-plugin';
+import { refuseMachineRevocation } from '#sign-in-core/better-auth/machine-revocation-hook';
 import { signInJwtOptions } from '#sign-in-core/better-auth/native-jwt-options';
 import { createOrganizationMembershipReadPlugin } from '#sign-in-core/better-auth/organization-membership-read-plugin';
 import { createOrganizationProviderPlugin } from '#sign-in-core/better-auth/organization-provider-options';
@@ -36,6 +39,7 @@ import {
 	createTurnstileProviderOptions,
 	type TurnstileSecret,
 } from '#sign-in-core/better-auth/turnstile-captcha';
+import type { ListWorkspaces } from '#sign-in-core/central-link/list-workspaces';
 import type { SignInConfiguration } from '#sign-in-core/contracts/deployment-configuration';
 import type { OrganizationStatementSigningRequest } from '#sign-in-core/contracts/organization-statement';
 import {
@@ -44,6 +48,11 @@ import {
 } from '#sign-in-core/contracts/sign-in-client-address';
 import { uuid7Schema, type SignInPlatform } from '#sign-in-core/contracts/sign-in-platform';
 import { socialLoginProviderSchema } from '#sign-in-core/contracts/social-login-provider';
+import {
+	parseMachineEnrollmentMetadata,
+	unavailableMachineLoginDecisions,
+	type MachineLoginDecisions,
+} from '#sign-in-core/machine-login/machine-login-contracts';
 import {
 	classifySignInRequest,
 	signInRequestPolicies,
@@ -60,6 +69,8 @@ export type ProviderAuthority =
 
 export interface SignInProviderProps {
 	readonly openDatabase: SignInDatabaseFactory;
+	readonly machineLoginDecisions?: MachineLoginDecisions;
+	readonly listWorkspaces?: ListWorkspaces;
 	readonly store: SignInStore;
 	readonly platform: SignInPlatform;
 	readonly configuration: SignInConfiguration;
@@ -89,6 +100,7 @@ type SignInProviderOptions = BetterAuthOptions & {
 		ReturnType<typeof createOrganizationStatementPlugin>,
 		ReturnType<typeof createShellSessionPlugin>,
 		ReturnType<typeof createSignInSignOutPlugin>,
+		BetterAuthPlugin,
 	];
 };
 export type SignInProvider = Auth<SignInProviderOptions>;
@@ -98,6 +110,7 @@ export function createSignInProvider(props: SignInProviderProps): SignInProvider
 	const persons = personSessionPorts(props.store.persons);
 	const agents = agentRegistrationPorts(props.store);
 	const workspaces = workspaceResourcePorts(props.store);
+	const machineLogin = props.configuration.machineLogin;
 	const turnstile = createTurnstileProviderOptions({
 		configuration: props.configuration,
 		secret: props.turnstileSecret,
@@ -237,6 +250,13 @@ export function createSignInProvider(props: SignInProviderProps): SignInProvider
 				): Promise<void | {
 					readonly context: { readonly context: { readonly session: LiveOwnerSession | null } };
 				}> => {
+					if (machineLogin !== undefined && context.path === '/oauth2/revoke')
+						await refuseMachineRevocation({
+							context,
+							provider: getOAuthProviderApi(context, provider.options.plugins[3].options),
+							routerClientId: machineLogin.routerClientId,
+							openDatabase: props.openDatabase,
+						});
 					if (isOrganizationMembershipReadPath(context.path)) {
 						return organizationReadSessionBeforeHook(context);
 					}
@@ -365,12 +385,18 @@ export function createSignInProvider(props: SignInProviderProps): SignInProvider
 				extensions: [
 					{
 						claims: {
-							accessToken: async (input): Promise<Record<string, unknown>> =>
-								personAccessTokenClaims(input, {
+							accessToken: async (input): Promise<Record<string, unknown>> => {
+								if (
+									machineLogin !== undefined &&
+									parseMachineEnrollmentMetadata(input.metadata) !== null
+								)
+									return {};
+								return personAccessTokenClaims(input, {
 									configuration: props.configuration,
 									store: props.store,
 									clock: props.platform.clock,
-								}),
+								});
+							},
 						},
 					},
 				],
@@ -386,6 +412,16 @@ export function createSignInProvider(props: SignInProviderProps): SignInProvider
 				accessTokenExpiresIn: props.configuration.accessTokenSeconds,
 				m2mAccessTokenExpiresIn: props.configuration.accessTokenSeconds,
 				resources: [
+					...(machineLogin === undefined
+						? []
+						: [
+								{
+									identifier: machineLogin.machineAudience,
+									accessTokenTtl: 3600,
+									refreshTokenTtl: 2_592_000,
+									allowedScopes: ['offline_access'],
+								},
+							]),
 					{
 						identifier: props.configuration.managementAudience,
 						accessTokenTtl: props.configuration.accessTokenSeconds,
@@ -409,6 +445,8 @@ export function createSignInProvider(props: SignInProviderProps): SignInProvider
 					metadata,
 					resources,
 				}): Promise<Record<string, unknown>> {
+					if (machineLogin !== undefined && parseMachineEnrollmentMetadata(metadata) !== null)
+						return {};
 					if (user !== undefined && user !== null) {
 						const requestedWorkspaces = await Promise.all(
 							(resources ?? []).map((identifier: string) => workspaces.read(identifier)),
@@ -446,6 +484,15 @@ export function createSignInProvider(props: SignInProviderProps): SignInProvider
 						organization_id: current.metadata.organizationId,
 						workspace_id: resource.metadata.workspaceId,
 					};
+				},
+				customTokenResponseFields: ({ metadata }): Record<string, unknown> => {
+					const enrollment = parseMachineEnrollmentMetadata(metadata);
+					return enrollment === null || machineLogin === undefined
+						? {}
+						: {
+								machine_client_id: enrollment.enrollmentId,
+								fleet_central: machineLogin.fleetCentral,
+							};
 				},
 			}),
 			passkey({
@@ -501,6 +548,18 @@ export function createSignInProvider(props: SignInProviderProps): SignInProvider
 				issuer: props.configuration.issuer,
 				sessions: props.store.persons,
 			}),
+			machineLogin === undefined
+				? { id: 'machine-login-unconfigured' }
+				: createMachineLoginPlugin({
+						configuration: machineLogin,
+						decisions: props.machineLoginDecisions ?? unavailableMachineLoginDecisions,
+						listWorkspaces: props.listWorkspaces ?? (async () => ({ result: 'unavailable' })),
+						openDatabase: props.openDatabase,
+						store: props.store,
+						platform: props.platform,
+						requestState: props.requestState,
+						providerOptions: () => provider.options.plugins[3].options,
+					}),
 		],
 	};
 	const provider = betterAuth(options);

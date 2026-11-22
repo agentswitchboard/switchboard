@@ -81,8 +81,18 @@ export function classifySignInRequest(pathname: string): SignInRequestClass {
 		pathname === '/api/auth/two-factor/verify-backup-code'
 	)
 		return 'second-factor-code';
-	if (pathname === '/api/auth/device/verify') return 'device-code-entry';
-	if (pathname === '/api/auth/device/approve' || pathname === '/api/auth/device/deny')
+	if (
+		pathname === '/device' ||
+		pathname === '/api/auth/device' ||
+		pathname === '/api/auth/device/verify'
+	)
+		return 'device-code-entry';
+	if (
+		pathname === '/api/auth/device/approve' ||
+		pathname === '/api/auth/device/deny' ||
+		pathname === '/api/auth/machine-login/approve' ||
+		pathname === '/api/auth/machine-login/deny'
+	)
 		return 'device-decision';
 	if (pathname === '/api/auth/device/code') return 'device-code-request';
 	if (pathname === '/api/auth/oauth2/token') return 'oauth-token';

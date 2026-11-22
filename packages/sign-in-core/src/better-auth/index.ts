@@ -10,3 +10,12 @@ export * from '#sign-in-core/better-auth/organization-statement-signing';
 export * from '#sign-in-core/better-auth/organization-fleet-call-guard';
 export * from '#sign-in-core/better-auth/authorization-fenced-adapter';
 export * from '#sign-in-core/better-auth/fleet-permission-policy';
+export {
+	decideDeviceLoginSchema,
+	decideMachineTokenSchema,
+	deviceLoginDecisionSchema,
+	machineTokenClaimsSchema,
+	machineTokenDecisionSchema,
+	machineTokenResponseSchema,
+	type MachineLoginConfiguration,
+} from '#sign-in-core/machine-login/machine-login-contracts';
