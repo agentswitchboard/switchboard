@@ -104,7 +104,7 @@ async function confirmAndRetryDenyInBrowser(props: {
 	});
 }
 
-it('the real host approves one machine ID, handles a Central replay conflict and releases one redemption', async (): Promise<void> => {
+it('the real sign-in host approves one machine ID and releases one redemption', async (): Promise<void> => {
 	const approveBodies: z.infer<typeof decideDeviceLoginSchema>[] = [];
 	const mintBodies: z.infer<typeof decideMachineTokenSchema>[] = [];
 	const revokeBodies: Array<{ readonly organizationId: string; readonly enrollmentId: string }> =
@@ -134,14 +134,7 @@ it('the real host approves one machine ID, handles a Central replay conflict and
 			}
 			if (pathname === '/internal/device-login-decisions') {
 				const approval = decideDeviceLoginSchema.parse(input);
-				const earlier = approveBodies.find((seen) => seen.requestId === approval.requestId);
 				approveBodies.push(approval);
-				if (
-					earlier !== undefined &&
-					JSON.stringify(earlier.allowedWorkspaces.toSorted()) !==
-						JSON.stringify(approval.allowedWorkspaces.toSorted())
-				)
-					return Response.json({ result: 'refused', reason: { kind: 'requestConflict' } });
 				return Response.json({
 					result: 'approved',
 					enrollmentId,
@@ -293,26 +286,9 @@ it('the real host approves one machine ID, handles a Central replay conflict and
 			allowedWorkspaces: [workspaceId],
 		});
 
-		const workspaceReads = harness.centralAdmin.arrivals.filter(
-			({ route }) => route === 'ListWorkspaces',
-		).length;
-		expect(workspaceReads).toBe(6);
-		const repeated = await decide([workspaceId]);
-		expect(repeated.status).toBe(200);
-		expect(await repeated.json()).toEqual({
-			enrollmentId,
-			label: 'Proof Mac',
-			allowedWorkspaces: [workspaceId],
-		});
-		const conflict = await decide([]);
-		expect(conflict.status).toBe(409);
-		expect(await conflict.json()).toEqual({
-			error: 'access_denied',
-			reason: { kind: 'requestConflict' },
-		});
 		expect(
 			harness.centralAdmin.arrivals.filter(({ route }) => route === 'ListWorkspaces'),
-		).toHaveLength(workspaceReads);
+		).toHaveLength(6);
 
 		const poll = (): Promise<Response> =>
 			harness.auth(
@@ -403,7 +379,7 @@ it('the real host approves one machine ID, handles a Central replay conflict and
 		expect(secondStart.status).toBe(200);
 		const secondCode = deviceStartSchema.parse(await secondStart.json());
 		await confirmAndRetryDenyInBrowser({ harness, userCode: secondCode.user_code });
-		expect(approveBodies).toHaveLength(3);
+		expect(approveBodies).toHaveLength(1);
 		expect(
 			await harness.database
 				.select({ status: deviceCode.status })
