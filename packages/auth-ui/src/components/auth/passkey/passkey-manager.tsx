@@ -4,7 +4,7 @@
 /** Switchboard's passkey management: list, add, rename and remove. Composes
  * Better Auth UI's passkey hooks; removal is supplied by the host because the
  * sign-in service offers its own audited removal route. */
-import { Alert } from '@agent-collaboration/tool-access-ui/ui/alert';
+import { Alert, AlertAction, AlertDescription } from '@agent-collaboration/tool-access-ui/ui/alert';
 import { Button } from '@agent-collaboration/tool-access-ui/ui/button';
 import { EmptyDescription } from '@agent-collaboration/tool-access-ui/ui/empty';
 import { Field, FieldError, FieldLabel } from '@agent-collaboration/tool-access-ui/ui/field';
@@ -56,7 +56,8 @@ export function PasskeyManager({ removePasskey, labels }: PasskeyManagerProps): 
 	// The provider is given a client built with passkeyClient(); a typed contract.
 	const { authClient: passkeyClient } = useAuth<PasskeyAuthClient>();
 	const queryClient = useQueryClient();
-	const passkeys = useListPasskeys(passkeyClient);
+	// Auth query backoff keeps the initial list pending until automatic retries finish.
+	const passkeys = useListPasskeys(passkeyClient, { retry: false });
 	const addPasskey = useAddPasskey(passkeyClient);
 	const updatePasskey = useUpdatePasskey(passkeyClient);
 	const [editing, setEditing] = useState<{ readonly id: string; readonly name: string } | null>(
@@ -99,7 +100,24 @@ export function PasskeyManager({ removePasskey, labels }: PasskeyManagerProps): 
 			}
 		>
 			{passkeys.isPending && <PasskeyListSkeleton />}
-			{passkeys.isError && <Alert variant="destructive">Passkeys are unavailable.</Alert>}
+			{passkeys.isError && (
+				<Alert variant="destructive">
+					<AlertDescription>Passkeys are unavailable.</AlertDescription>
+					<AlertAction>
+						<Button
+							type="button"
+							variant="outline"
+							size="sm"
+							disabled={passkeys.isFetching}
+							onClick={(): void => {
+								void passkeys.refetch();
+							}}
+						>
+							Retry
+						</Button>
+					</AlertAction>
+				</Alert>
+			)}
 			{passkeys.isSuccess && (passkeys.data ?? []).length === 0 && (
 				<EmptyDescription>{labels.empty}</EmptyDescription>
 			)}
