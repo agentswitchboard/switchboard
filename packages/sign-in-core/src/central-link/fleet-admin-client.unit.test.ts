@@ -8,11 +8,7 @@ import {
 	fleetAdminResultSchemas,
 } from '#sign-in-core/central-link/fleet-admin-client';
 import { organizationChangeFixtures } from '#sign-in-core/central-link/generated/organization-change-fixtures';
-import {
-	fleetAdminRequestBody,
-	fleetAdminRoutePaths,
-	type FleetAdminRequest,
-} from '#sign-in-core/organizations/fleet-admin-operation';
+import type { FleetAdminRequest } from '#sign-in-core/organizations/fleet-admin-operation';
 
 const organizationId = '019a3dce-2000-7000-8000-000000000001';
 const create: FleetAdminRequest = {
@@ -164,9 +160,35 @@ it.each(
 	}
 });
 
-it.each(Object.values(operations))(
-	'$operation is sent to its own route with its closed body',
-	async (operation): Promise<void> => {
+it.each([
+	{
+		operation: operations.CreateWorkspace,
+		path: '/organization-admin/v1/create-workspace',
+		body: `{"organizationId":"${organizationId}","operationId":"${create.operationId}","name":"research","description":""}`,
+	},
+	{
+		operation: operations.WorkspaceLookup,
+		path: '/organization-admin/v1/workspace-lookup',
+		body: `{"organizationId":"${organizationId}","workspaceId":"${workspace.workspaceId}"}`,
+	},
+	{
+		operation: operations.ReadChangeRecords,
+		path: '/organization-admin/v1/change-records',
+		body: `{"organizationId":"${organizationId}","after":null,"limit":10}`,
+	},
+	{
+		operation: {
+			operation: 'ReadChangeRecords',
+			organizationId,
+			after: create.operationId,
+			limit: 10,
+		} satisfies FleetAdminRequest,
+		path: '/organization-admin/v1/change-records',
+		body: `{"organizationId":"${organizationId}","after":"${create.operationId}","limit":10}`,
+	},
+])(
+	'sends $path with the literal expected bytes $body',
+	async ({ operation, path, body }): Promise<void> => {
 		const transport = scripted(async () => new Response(null, { status: 503 }));
 		await createFleetAdminLinkClient(transport).sendFleetAdminRequest({
 			operation,
@@ -175,8 +197,8 @@ it.each(Object.values(operations))(
 		});
 		const request = transport.sent[0];
 		if (request === undefined) throw new Error('No admin request sent');
-		expect(new URL(request.url).pathname).toBe(fleetAdminRoutePaths[operation.operation]);
-		expect(await request.json()).toEqual(fleetAdminRequestBody(operation));
+		expect(new URL(request.url).pathname).toBe(path);
+		expect(await request.text()).toBe(body);
 	},
 );
 
