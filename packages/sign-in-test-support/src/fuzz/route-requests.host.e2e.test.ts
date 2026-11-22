@@ -1,6 +1,7 @@
 import * as hegel from '@hegeldev/hegel';
 import { afterAll, expect, it } from 'vitest';
 
+import { readCentralAcknowledgements } from '#sign-in-test-support/fuzz/central-acknowledgements';
 import {
 	boundShrinking,
 	fuzzCasesOverride,
@@ -95,6 +96,7 @@ for (const family of requestFamilies) {
 								`S5 seed=${fuzzSeed}+${props.seedOffset}; route=${routeKey(family.route)}; caller=${caller}; variant=${variantKey(generated.variant)}`,
 							);
 							const before = await readRequestStorageSnapshot(fixture.harness.database);
+							const exchangesBefore = fixture.harness.centralProvisioning.exchanges.length;
 							const response = await fixture.harness.auth(generated.pathname, {
 								...generated.init,
 								headers: {
@@ -135,6 +137,12 @@ for (const family of requestFamilies) {
 									before,
 									after,
 									request: generated,
+									// Central's actual replies during this request: the only acknowledgement evidence.
+									central: {
+										acknowledgements: readCentralAcknowledgements(
+											fixture.harness.centralProvisioning.exchanges.slice(exchangesBefore),
+										),
+									},
 								});
 							process.stdout.write(
 								JSON.stringify({

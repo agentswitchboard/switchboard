@@ -1,5 +1,6 @@
 import { z } from 'zod';
 
+import type { CentralAcknowledgement } from '#sign-in-test-support/fuzz/central-acknowledgements';
 import type { RequestCaseFixture } from '#sign-in-test-support/fuzz/request-case-fixture';
 import type { GeneratedRequest } from '#sign-in-test-support/fuzz/request-families/index';
 import type { RequestFamilyContext } from '#sign-in-test-support/fuzz/request-families/index';
@@ -39,16 +40,11 @@ export function assertRequestRefusalEffects(props: {
 	readonly after: RequestStorageSnapshot;
 	readonly request?: GeneratedRequest;
 	readonly now?: number;
-	/** What Central's stand-in received and how it answers pushes: the only evidence of an acknowledgement. */
-	readonly central?: {
-		readonly pushes: readonly {
-			readonly kind: string;
-			readonly organizationId: string;
-			readonly personId?: string;
-			readonly revision: number;
-		}[];
-		readonly pushReply: string;
-	};
+	/**
+	 * Central's actual acknowledgements during this request (a 200 reply paired with its push): the
+	 * only evidence an acknowledgement was returned. Receipt of a push, or a reply mode, is not.
+	 */
+	readonly central?: { readonly acknowledgements: readonly CentralAcknowledgement[] };
 }): void {
 	const { classification, fixture, before, after } = props;
 	const now = props.now ?? controlledSignInClock.now();
@@ -116,17 +112,17 @@ export function assertRequestRefusalEffects(props: {
 						next_attempt_at: now,
 						updated_at: now,
 					});
-				// An acknowledgement is allowed only where Central's stand-in received that pair's new
-				// revision and answers pushes with an acknowledgement.
+				// An acknowledgement is allowed only where Central actually replied 200 to that pair's new
+				// revision push, with a floor equal to the stored acknowledged revision.
 				const acknowledgedByCentral = (row: Record<string, unknown>): boolean =>
-					props.central?.pushReply === 'acknowledge' &&
-					props.central.pushes.some(
-						(push) =>
-							push.kind === 'person' &&
-							push.organizationId === row.organization_id &&
-							push.personId === row.person_id &&
-							push.revision === Number(row.revision) + 1,
-					);
+					props.central?.acknowledgements.some(
+						(acknowledgement) =>
+							acknowledgement.organizationId === row.organization_id &&
+							acknowledgement.personId === row.person_id &&
+							acknowledgement.revision === Number(row.revision) + 1 &&
+							acknowledgement.acknowledgedRevision >= acknowledgement.revision &&
+							acknowledgement.acknowledgedRevision === Number(row.revision) + 1,
+					) === true;
 				const drained = (row: Record<string, unknown>): Record<string, unknown> =>
 					Object.assign(advanced(row), {
 						acknowledged_revision: Number(row.revision) + 1,

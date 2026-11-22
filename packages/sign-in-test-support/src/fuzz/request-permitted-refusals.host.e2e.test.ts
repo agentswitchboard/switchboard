@@ -1,5 +1,6 @@
 import { expect, it } from 'vitest';
 
+import { readCentralAcknowledgements } from '#sign-in-test-support/fuzz/central-acknowledgements';
 import { createRequestCaseFixture } from '#sign-in-test-support/fuzz/request-case-fixture';
 import {
 	assertRequestDisclosure,
@@ -93,6 +94,7 @@ it('S2 permitted refused read deletes its expired session and advances every ret
 				body: '{}',
 			},
 		};
+		const exchangesBefore = fixture.harness.centralProvisioning.exchanges.length;
 		const answer = await observeRequestAnswer(await fixture.harness.auth(path, request.init));
 		const after = await readRequestStorageSnapshot(fixture.harness.database);
 		expect(answer.status).toBe(401);
@@ -105,8 +107,9 @@ it('S2 permitted refused read deletes its expired session and advances every ret
 			request,
 			now,
 			central: {
-				pushes: fixture.harness.centralProvisioning.pushes,
-				pushReply: fixture.harness.centralProvisioning.pushReplyMode(),
+				acknowledgements: readCentralAcknowledgements(
+					fixture.harness.centralProvisioning.exchanges.slice(exchangesBefore),
+				),
 			},
 		});
 		expect((after.session ?? []).some((row) => row.id === fixture.sessionId)).toBe(false);
