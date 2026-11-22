@@ -2,6 +2,7 @@ import * as hegel from '@hegeldev/hegel';
 import { afterAll, expect, it } from 'vitest';
 
 import { readCentralAcknowledgements } from '#sign-in-test-support/fuzz/central-acknowledgements';
+import { assertDocumentedAnswer } from '#sign-in-test-support/fuzz/documented-answer';
 import {
 	boundShrinking,
 	fuzzCasesOverride,
@@ -21,11 +22,7 @@ import { syntheticRequestFamilyContext } from '#sign-in-test-support/fuzz/reques
 import { assertRequestRefusalEffects } from '#sign-in-test-support/fuzz/request-refusal-effects';
 import { createCallerHarnessLanes } from '#sign-in-test-support/fuzz/request-shared-harness';
 import { readRequestStorageSnapshot } from '#sign-in-test-support/fuzz/request-storage-snapshot';
-import {
-	documentedAnswersFor,
-	routeClassification,
-	routeKey,
-} from '#sign-in-test-support/fuzz/route-classification';
+import { routeClassification, routeKey } from '#sign-in-test-support/fuzz/route-classification';
 import { useControlledSignInClock } from '#sign-in-test-support/test-fixtures/controlled-node-test-clock';
 
 useControlledSignInClock();
@@ -111,10 +108,12 @@ for (const family of requestFamilies) {
 								answer.status,
 								'S2 no-server-error: generated input without injected storage faults',
 							).toBeLessThan(500);
-							expect(
-								documentedAnswersFor(classification, caller),
-								'S2 documented-answer',
-							).toContain(answer.status);
+							assertDocumentedAnswer({
+								classification,
+								caller,
+								request: generated,
+								status: answer.status,
+							});
 							assertDocumentedErrorBody({
 								documentedErrorBodies: classification.documentedErrorBodies,
 								answer,

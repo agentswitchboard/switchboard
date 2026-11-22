@@ -1,9 +1,15 @@
 import { describe, expect, it } from 'vitest';
 
-import type { GeneratedRequest } from '#sign-in-test-support/fuzz/request-families/index';
+import { assertDocumentedAnswer } from '#sign-in-test-support/fuzz/documented-answer';
+import {
+	requestFamilies,
+	type GeneratedRequest,
+} from '#sign-in-test-support/fuzz/request-families/index';
+import { syntheticRequestFamilyContext } from '#sign-in-test-support/fuzz/request-families/synthetic-context';
 import {
 	documentedAnswersFor,
 	routeClassification,
+	routeKey,
 	type RouteClassification,
 } from '#sign-in-test-support/fuzz/route-classification';
 
@@ -71,5 +77,59 @@ describe('S2 closure: a success is documented only for a caller the route is exp
 			).toBe(false);
 		// The same caller with a readable body keeps its success.
 		expect(documentedAnswersFor(bootstrap, 'owner', request('json'))).toContain(200);
+	});
+});
+
+describe('S2 closure 3: the host check refuses a success for a real generated unreadable body', (): void => {
+	// A drawer that must not be asked: the transport steps draw nothing.
+	const noDraws = {
+		draw: (): never => {
+			throw new Error('a transport step draws nothing');
+		},
+	};
+
+	const unreadableRequests = requestFamilies.flatMap((family) => {
+		const classification = routeClassification.find(
+			(candidate) => routeKey(candidate) === routeKey(family.route),
+		);
+		if (
+			classification === undefined ||
+			!classification.requestParts.some((part) => part === 'json' || part === 'form')
+		)
+			return [];
+		return family
+			.variantSteps(syntheticRequestFamilyContext)
+			.filter((step) => step.encoding === 'malformed' || step.encoding === 'wrong-content-type')
+			.map((step) => ({
+				classification,
+				family,
+				request: family.generate(noDraws, syntheticRequestFamilyContext, step),
+			}));
+	});
+
+	it('plans real malformed and wrong-media-type requests on body-reading routes', (): void => {
+		const encodings = new Set(unreadableRequests.map(({ request }) => request.variant.encoding));
+		expect([...encodings].toSorted()).toEqual(['malformed', 'wrong-content-type']);
+	});
+
+	it('fails a permitted caller that got a credential-free 200 for such a request', (): void => {
+		for (const { classification, family, request } of unreadableRequests)
+			for (const caller of family.callers)
+				if (classification.documentedAnswers.some(isSuccess))
+					expect(
+						() => {
+							assertDocumentedAnswer({ classification, caller, request, status: 200 });
+						},
+						`${routeKey(classification)} ${caller} ${request.variant.encoding}`,
+					).toThrow();
+	});
+
+	it('still documents a refusal for the same request', (): void => {
+		for (const { classification, family, request } of unreadableRequests)
+			for (const caller of family.callers) {
+				const refusal = classification.documentedAnswers.find((status) => !isSuccess(status));
+				if (refusal !== undefined)
+					assertDocumentedAnswer({ classification, caller, request, status: refusal });
+			}
 	});
 });
