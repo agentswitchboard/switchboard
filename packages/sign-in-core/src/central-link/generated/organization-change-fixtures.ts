@@ -1,4 +1,4 @@
-// Change records from Central's OrganizationAdminResult.fixtures.json at c58d1b22.
+// Change records from Central's OrganizationAdminResult.fixtures.json at 773ad8fb.
 import type { OrganizationChangeRecord } from '#sign-in-core/central-link/generated/central-sign-in.gen';
 
 export const organizationChangeFixtures = [
@@ -70,17 +70,6 @@ export const organizationChangeFixtures = [
 		requestId:
 			'019a3dce-2000-7000-8000-000000000007:machineExpired:019a3dce-2000-7000-8000-000000000007',
 		targetId: '019a3dce-2000-7000-8000-000000000007',
-	},
-	{
-		createdAtMillis: 1900000006000,
-		id: '019a3dce-2000-7000-8000-000000000013',
-		kind: 'allowanceChanged',
-		origin: {
-			kind: 'automatic',
-		},
-		requestId:
-			'019a3dce-2000-7000-8000-000000000007:allowanceChanged:019a3dce-2000-7000-8000-000000000002',
-		targetId: '019a3dce-2000-7000-8000-000000000002',
 	},
 	{
 		createdAtMillis: 1900000007000,

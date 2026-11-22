@@ -139,7 +139,7 @@ it('keeps revocation actor and second-factor time out of the request body', (): 
 	}
 });
 
-it('admits the exact device approval and its provisional conflict reply', (): void => {
+it('admits the exact device approval and the generated conflict reply', (): void => {
 	const approved = { result: 'approved', enrollmentId, label: 'Proof Mac', allowedWorkspaces: [] };
 	const conflict = { result: 'refused', reason: { kind: 'requestConflict' } };
 	expect(deviceLoginDecisionSchema.parse(approved)).toEqual(approved);

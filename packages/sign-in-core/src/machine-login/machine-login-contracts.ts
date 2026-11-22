@@ -79,25 +79,16 @@ export const decideDeviceLoginSchema = z.strictObject({
 });
 export type DecideDeviceLogin = z.infer<typeof decideDeviceLoginSchema>;
 
-const deviceLoginWireRefusalSchema = z.discriminatedUnion('kind', [
+export const deviceLoginRefusalSchema = z.discriminatedUnion('kind', [
 	z.strictObject({ kind: z.literal('notPermitted') }),
 	z.strictObject({ kind: z.literal('machineInAnotherOrganization') }),
 	z.strictObject({ kind: z.literal('unknownWorkspace') }),
+	z.strictObject({ kind: z.literal('requestConflict') }),
 	z.strictObject({
 		kind: z.literal('secondFactorRequired'),
 		withinSeconds: z.number().int().positive(),
 	}),
 ]);
-// Provisional DEL-03 compatibility. The pinned producer does not emit RequestConflict yet.
-const provisionalDeviceLoginConflict = z.strictObject({ kind: z.literal('requestConflict') });
-export const deviceLoginRefusalSchema = z.discriminatedUnion('kind', [
-	...deviceLoginWireRefusalSchema.options,
-	provisionalDeviceLoginConflict,
-]);
-type DeviceLoginRouteRefusal = Extract<
-	DeviceLoginWireRefusal,
-	{ kind: z.output<typeof deviceLoginWireRefusalSchema>['kind'] }
->;
 
 /** Central returns the stored snapshot for a repeat with the same bound fields. */
 const machineApprovalWireFactsSchema = z.strictObject({
@@ -110,29 +101,23 @@ const deviceLoginApprovedWireSchema = machineApprovalWireFactsSchema.extend({
 });
 const deviceLoginDecisionWireSchema = z.discriminatedUnion('result', [
 	deviceLoginApprovedWireSchema,
-	z.strictObject({ result: z.literal('refused'), reason: deviceLoginWireRefusalSchema }),
+	z.strictObject({ result: z.literal('refused'), reason: deviceLoginRefusalSchema }),
 ]);
-const provisionalDeviceLoginConflictReplySchema = z.strictObject({
-	result: z.literal('refused'),
-	reason: provisionalDeviceLoginConflict,
-});
 export const machineDeviceApprovalResultSchema = machineApprovalWireFactsSchema.extend({
 	enrollmentId: uuid7Schema,
 	allowedWorkspaces: decideDeviceLoginSchema.shape.allowedWorkspaces,
 });
 export type MachineDeviceApprovalResult = z.infer<typeof machineDeviceApprovalResultSchema>;
-export const deviceLoginDecisionSchema = z
-	.union([deviceLoginDecisionWireSchema, provisionalDeviceLoginConflictReplySchema])
-	.transform((decision) => {
-		if (decision.result === 'refused') return decision;
-		return {
-			...decision,
-			enrollmentId: uuid7Schema.parse(decision.enrollmentId),
-			allowedWorkspaces: decision.allowedWorkspaces.map((workspaceId) =>
-				uuid7Schema.parse(workspaceId),
-			),
-		};
-	});
+export const deviceLoginDecisionSchema = deviceLoginDecisionWireSchema.transform((decision) => {
+	if (decision.result === 'refused') return decision;
+	return {
+		...decision,
+		enrollmentId: uuid7Schema.parse(decision.enrollmentId),
+		allowedWorkspaces: decision.allowedWorkspaces.map((workspaceId) =>
+			uuid7Schema.parse(workspaceId),
+		),
+	};
+});
 export type DeviceLoginDecision = z.infer<typeof deviceLoginDecisionSchema>;
 export const decideMachineTokenSchema = z.strictObject({
 	organizationId: uuid7Schema,
@@ -238,9 +223,6 @@ export type RevokeMachineEnrollmentResult = z.infer<typeof revokeMachineEnrollme
 
 // Compare the inputs of the actual transport decoders. The transforms only apply ID brands.
 type DeviceLoginDecoderInput = z.input<typeof deviceLoginDecisionSchema>;
-type ExpectedDeviceLoginDecoderInput =
-	| DeviceLoginWireDecision
-	| z.input<typeof provisionalDeviceLoginConflictReplySchema>;
 
 // Zod's optional field also admits undefined in a JS object. JSON can only omit it.
 type MachineTokenWireShape<Reply> = Reply extends { result: 'grant' }
@@ -253,7 +235,7 @@ type WithExtraOptionalField<Reply, Result> = Reply extends { result: Result }
 	: Reply;
 type ExtraApprovalFieldMatches = WireTypesEqual<
 	WithExtraOptionalField<DeviceLoginDecoderInput, 'approved'>,
-	ExpectedDeviceLoginDecoderInput
+	DeviceLoginWireDecision
 >;
 type ExtraGrantFieldMatches = WireTypesEqual<
 	MachineTokenWireShape<WithExtraOptionalField<MachineTokenDecoderInput, 'grant'>>,
@@ -267,10 +249,8 @@ export type MachineDecisionWireTypes = [
 	AssertWireType<
 		WireTypesEqual<z.input<typeof decideMachineTokenSchema>, DecideMachineTokenWireRequest>
 	>,
-	AssertWireType<
-		WireTypesEqual<z.output<typeof deviceLoginWireRefusalSchema>, DeviceLoginRouteRefusal>
-	>,
-	AssertWireType<WireTypesEqual<DeviceLoginDecoderInput, ExpectedDeviceLoginDecoderInput>>,
+	AssertWireType<WireTypesEqual<z.output<typeof deviceLoginRefusalSchema>, DeviceLoginWireRefusal>>,
+	AssertWireType<WireTypesEqual<DeviceLoginDecoderInput, DeviceLoginWireDecision>>,
 	// @ts-expect-error The approval decoder must not admit an extra optional reply field.
 	AssertWireType<ExtraApprovalFieldMatches>,
 	AssertWireType<

@@ -357,15 +357,7 @@ it('reads a mixed page of every Central change kind and keeps the record vocabul
 		permissionChecked: 'workspace:create',
 	};
 	const automatic = { kind: 'automatic' };
-	const records = [
-		{ ...base, kind: 'organizationProvisioned', origin: { kind: 'signInProvisioning' } },
-		{ ...base, kind: 'stampRenewed', origin: { kind: 'signInProvisioning' } },
-		{ ...base, kind: 'workspaceCreated', origin: person },
-		{ ...base, kind: 'machineEnrolled', origin: person },
-		{ ...base, kind: 'machineRevoked', origin: person },
-		{ ...base, kind: 'machineExpired', origin: automatic },
-		{ ...base, kind: 'allowanceChanged', origin: person },
-	];
+	const records = organizationChangeFixtures;
 
 	function read(
 		replyRecords: readonly unknown[],
