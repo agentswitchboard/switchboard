@@ -231,6 +231,35 @@ it('organization admin: the owner creates, looks up and lists through each route
 	}
 });
 
+it('organization admin page: renders the machine, workspace and state of an allowance change', async (): Promise<void> => {
+	const { harness, cookie } = await setup();
+	try {
+		const machineId = controlledSignInIds.nextId();
+		const workspaceId = controlledSignInIds.nextId();
+		harness.centralAdmin.scriptNextAnswer('ReadChangeRecords', () => ({
+			result: 'records',
+			records: [
+				{
+					kind: 'machineAllowanceChanged',
+					id: controlledSignInIds.nextId(),
+					requestId: 'proof-allowance-change',
+					origin: { kind: 'automatic' },
+					machineId,
+					workspaceId,
+					state: 'withdrawn',
+					createdAtMillis: controlledSignInClock.now(),
+				},
+			],
+		}));
+		const page = await openOrganizationAdminPage({ harness, cookie });
+		expect(page.changeRecordLines()).toEqual([
+			`${new Date(controlledSignInClock.now()).toISOString()} machineAllowanceChanged ${machineId} ${workspaceId} (withdrawn) by sign-in`,
+		]);
+	} finally {
+		await harness.close();
+	}
+});
+
 it('organization admin page: the served page reports a create; a duplicate name on a new page shows the nameInUse words after one lookup of its own operation, and the next try applies under a fresh operation ID', async () => {
 	// Arrange
 	const fixture = await setup();

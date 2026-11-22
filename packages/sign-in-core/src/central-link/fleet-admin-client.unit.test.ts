@@ -105,20 +105,40 @@ async function producerResults(kind: 'fixtures' | 'negatives'): Promise<readonly
 const resultFixtures = await producerResults('fixtures');
 const resultNegatives = await producerResults('negatives');
 
-it.each(organizationChangeFixtures)(
-	'reads the Central change record fixture for $kind',
-	(record): void => {
-		const reply = { result: 'records', records: [record] };
-		expect(fleetAdminResultSchemas.ReadChangeRecords.parse(reply)).toEqual(reply);
-		const invalidKind = { ...reply, records: [{ ...record, kind: 'unrecognized-change-kind' }] };
-		expect(fleetAdminResultSchemas.ReadChangeRecords.safeParse(invalidKind).success).toBe(false);
-		const invalidOrigin = {
-			...reply,
-			records: [{ ...record, origin: { kind: 'unrecognized-origin' } }],
-		};
-		expect(fleetAdminResultSchemas.ReadChangeRecords.safeParse(invalidOrigin).success).toBe(false);
-	},
-);
+it.each(
+	organizationChangeFixtures.map(
+		(record) =>
+			[
+				record.kind === 'machineAllowanceChanged' ? `${record.kind} ${record.state}` : record.kind,
+				record,
+			] as const,
+	),
+)('reads the Central change record fixture for %s', (_label, record): void => {
+	const reply = { result: 'records', records: [record] };
+	expect(fleetAdminResultSchemas.ReadChangeRecords.parse(reply)).toEqual(reply);
+	const invalidKind = { ...reply, records: [{ ...record, kind: 'unrecognized-change-kind' }] };
+	expect(fleetAdminResultSchemas.ReadChangeRecords.safeParse(invalidKind).success).toBe(false);
+	const invalidOrigin = {
+		...reply,
+		records: [{ ...record, origin: { kind: 'unrecognized-origin' } }],
+	};
+	expect(fleetAdminResultSchemas.ReadChangeRecords.safeParse(invalidOrigin).success).toBe(false);
+	const wrongFields =
+		record.kind === 'machineAllowanceChanged'
+			? { ...record, targetId: record.workspaceId }
+			: { ...record, workspaceId: record.targetId };
+	expect(
+		fleetAdminResultSchemas.ReadChangeRecords.safeParse({ ...reply, records: [wrongFields] })
+			.success,
+	).toBe(false);
+	if (record.kind === 'machineAllowanceChanged') {
+		const invalidState = { ...record, state: 'unrecognized-allowance-state' };
+		expect(
+			fleetAdminResultSchemas.ReadChangeRecords.safeParse({ ...reply, records: [invalidState] })
+				.success,
+		).toBe(false);
+	}
+});
 
 it.each(Object.values(operations))(
 	'$operation is sent to its own route with its closed body',

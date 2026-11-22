@@ -63,7 +63,9 @@ async function load(){const records=await admin('ReadChangeRecords',{organizatio
 if(records.kind!=='answered'){say(records.kind==='refused'?'Central refused: '+records.reason:'Change records are unavailable.');return;}
 const recordList=document.getElementById('change-records');const workspaceList=document.getElementById('workspaces');
 recordList.replaceChildren();workspaceList.replaceChildren();
-for(const record of records.result.records)item(recordList,new Date(record.createdAtMillis).toISOString()+' '+record.kind+' '+record.targetId+(record.origin.kind==='person'?' by '+record.origin.personId+' ('+record.origin.permissionChecked+')':' by sign-in'));
+for(const record of records.result.records){
+const subject=record.kind==='machineAllowanceChanged'?record.machineId+' '+record.workspaceId+' ('+record.state+')':record.targetId;
+item(recordList,new Date(record.createdAtMillis).toISOString()+' '+record.kind+' '+subject+(record.origin.kind==='person'?' by '+record.origin.personId+' ('+record.origin.permissionChecked+')':' by sign-in'));}
 const workspaceIds=[...new Set(records.result.records.filter((record)=>record.kind==='workspaceCreated').map((record)=>record.targetId))];
 for(const workspaceId of workspaceIds){const found=await admin('WorkspaceLookup',{organizationId,workspaceId});
 if(found.kind==='answered'&&found.result.workspace!==null)item(workspaceList,found.result.workspace.name+' ('+found.result.workspace.state+')');}}

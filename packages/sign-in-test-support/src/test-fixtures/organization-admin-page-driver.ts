@@ -19,6 +19,7 @@ export interface OrganizationAdminPageDriver {
 	}) => Promise<string>;
 	/** Every forwarding request the page sent, in order, including its first load. */
 	readonly requests: readonly AdminPageRequest[];
+	readonly changeRecordLines: () => readonly string[];
 	/** How many times the page asked to reload (it does after a reported creation). */
 	readonly reloads: () => number;
 }
@@ -126,6 +127,11 @@ export async function openOrganizationAdminPage(props: {
 	await drained();
 	return {
 		requests,
+		changeRecordLines: () =>
+			Array.from(
+				document.querySelectorAll('#change-records li'),
+				(record) => record.textContent ?? '',
+			),
 		reloads: () => reloads,
 		async submitCreate(fields): Promise<string> {
 			const nameInput = form.querySelector('input[name="name"]');

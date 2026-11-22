@@ -1,4 +1,4 @@
-// One record per change kind from Central's OrganizationAdminResult.fixtures.json at ac2e6232.
+// Change records from Central's OrganizationAdminResult.fixtures.json at c58d1b22.
 import type { OrganizationChangeRecord } from '#sign-in-core/central-link/generated/central-sign-in.gen';
 
 export const organizationChangeFixtures = [
@@ -81,5 +81,31 @@ export const organizationChangeFixtures = [
 		requestId:
 			'019a3dce-2000-7000-8000-000000000007:allowanceChanged:019a3dce-2000-7000-8000-000000000002',
 		targetId: '019a3dce-2000-7000-8000-000000000002',
+	},
+	{
+		createdAtMillis: 1900000007000,
+		id: '019a3dce-2000-7000-8000-000000000016',
+		kind: 'machineAllowanceChanged',
+		machineId: '019a3dce-2000-7000-8000-000000000007',
+		origin: {
+			kind: 'person',
+			permissionChecked: 'machine:enroll',
+			personId: '019a3dce-2000-7000-8000-000000000006',
+		},
+		requestId: 'allowance-granted',
+		state: 'active',
+		workspaceId: '019a3dce-2000-7000-8000-000000000002',
+	},
+	{
+		createdAtMillis: 1900000008000,
+		id: '019a3dce-2000-7000-8000-000000000017',
+		kind: 'machineAllowanceChanged',
+		machineId: '019a3dce-2000-7000-8000-000000000007',
+		origin: {
+			kind: 'automatic',
+		},
+		requestId: 'allowance-expired',
+		state: 'withdrawn',
+		workspaceId: '019a3dce-2000-7000-8000-000000000002',
 	},
 ] as const satisfies readonly OrganizationChangeRecord[];

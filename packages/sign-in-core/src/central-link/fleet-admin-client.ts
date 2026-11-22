@@ -3,10 +3,12 @@ import { z } from 'zod';
 import type { CentralTransport } from '#sign-in-core/central-link/central-transport';
 import type {
 	AdminRefusal,
+	MachineAllowanceState,
 	OrganizationAdminResult_Serialize,
 	OrganizationChangeKind,
 	OrganizationChangeOrigin,
 	OrganizationChangeRecord,
+	TargetedOrganizationChangeKind,
 	WorkspaceView_Serialize,
 } from '#sign-in-core/central-link/generated/central-sign-in.gen';
 import { organizationChangeFixtures } from '#sign-in-core/central-link/generated/organization-change-fixtures';
@@ -22,10 +24,11 @@ import type { CentralLinkUncertainty } from '#sign-in-core/organizations/organiz
 // Central's closed `OrganizationAdminResult` (codex-router #275, merged as `ea030e513`,
 // `collaboration-central-core/src/organization_admin_contract.rs`; mirrored in
 // `contract-fixtures/central-organization-admin/`), tag `result`.
+const centralRecordIdSchema = z
+	.string()
+	.regex(/^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u);
 const workspaceSchema = z.strictObject({
-	workspaceId: z
-		.string()
-		.regex(/^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u),
+	workspaceId: centralRecordIdSchema,
 	name: fleetAdminWorkspaceNameSchema,
 	description: z
 		.string()
@@ -57,7 +60,16 @@ const refusedSchema = z.strictObject({
 	result: z.literal('refused'),
 	reason: fleetAdminRefusalReasonSchema,
 });
-const organizationChangeKindSchema = z.enum(organizationChangeFixtures.map(({ kind }) => kind));
+const targetedChangeKindSchema = z.enum(
+	organizationChangeFixtures
+		.filter((record) => record.kind !== 'machineAllowanceChanged')
+		.map(({ kind }) => kind),
+);
+const machineAllowanceStateSchema = z.enum(
+	organizationChangeFixtures
+		.filter((record) => record.kind === 'machineAllowanceChanged')
+		.map(({ state }) => state),
+);
 const organizationChangeOriginSchema = z.discriminatedUnion('kind', [
 	z.strictObject({ kind: z.literal('signInProvisioning') }),
 	z.strictObject({ kind: z.literal('automatic') }),
@@ -67,17 +79,24 @@ const organizationChangeOriginSchema = z.discriminatedUnion('kind', [
 		permissionChecked: z.string().min(1),
 	}),
 ]);
-const changeRecordSchema = z.strictObject({
+const changeRecordFields = z.strictObject({
 	id: z.uuidv7().refine((id) => id === id.toLowerCase()),
 	requestId: z
 		.string()
 		.min(1)
 		.refine((value) => !value.includes('\0') && new TextEncoder().encode(value).byteLength <= 128),
-	kind: organizationChangeKindSchema,
 	origin: organizationChangeOriginSchema,
-	targetId: z.string().min(1),
 	createdAtMillis: z.number().int(),
 });
+const changeRecordSchema = z.discriminatedUnion('kind', [
+	changeRecordFields.extend({ kind: targetedChangeKindSchema, targetId: z.string().min(1) }),
+	changeRecordFields.extend({
+		kind: z.literal('machineAllowanceChanged'),
+		machineId: centralRecordIdSchema,
+		workspaceId: centralRecordIdSchema,
+		state: machineAllowanceStateSchema,
+	}),
+]);
 export const fleetAdminResultSchemas = {
 	CreateWorkspace: z.union([
 		z.strictObject({ result: z.literal('applied'), workspace: workspaceSchema }),
@@ -101,7 +120,13 @@ export type FleetAdminWireSchemaTypes = [
 	AssertWireType<WireTypesEqual<z.output<typeof workspaceSchema>, WorkspaceView_Serialize>>,
 	AssertWireType<WireTypesEqual<z.output<typeof fleetAdminRefusalReasonSchema>, AdminRefusal>>,
 	AssertWireType<
-		WireTypesEqual<z.output<typeof organizationChangeKindSchema>, OrganizationChangeKind>
+		WireTypesEqual<z.output<typeof targetedChangeKindSchema>, TargetedOrganizationChangeKind>
+	>,
+	AssertWireType<
+		WireTypesEqual<z.output<typeof machineAllowanceStateSchema>, MachineAllowanceState>
+	>,
+	AssertWireType<
+		WireTypesEqual<z.output<typeof changeRecordSchema>['kind'], OrganizationChangeKind>
 	>,
 	AssertWireType<
 		WireTypesEqual<z.output<typeof organizationChangeOriginSchema>, OrganizationChangeOrigin>
