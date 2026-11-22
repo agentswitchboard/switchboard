@@ -485,3 +485,27 @@ describe('per-caller answers', (): void => {
 		expect(documentedAnswersFor(row('/me'), 'member')).toContain(200);
 	});
 });
+
+it('set-active: the incoming session row must already be the caller’s own live one; a request cannot revive or hand over an expired or foreign row', (): void => {
+	const expectsRefusal = 'session cookie outside native issuance contract';
+	const now = controlledSignInClock.now();
+	// A wrong set-active: it accepts an expired incoming session, extends that row's expiry and
+	// re-issues its existing cookie. Before: expired. After: live again.
+	expect(() =>
+		checkSetActive({
+			cookieValue: 'session-secret.signature',
+			before: { session: [{ ...liveSession, expiresAt: now - 1 }] },
+			after: { session: [{ ...liveSession, expiresAt: now + 60_000 }] },
+		}),
+	).toThrow(expectsRefusal);
+	// A wrong set-active that hands the incoming row of another person to the caller.
+	expect(() =>
+		checkSetActive({
+			cookieValue: 'session-secret.signature',
+			before: { session: [{ ...liveSession, userId: foreignId }] },
+			after: { session: [{ ...liveSession }] },
+		}),
+	).toThrow(expectsRefusal);
+	// The positive same-session re-issue (live before and after) still passes.
+	expect(() => checkSetActive({ cookieValue: 'session-secret.signature' })).not.toThrow();
+});

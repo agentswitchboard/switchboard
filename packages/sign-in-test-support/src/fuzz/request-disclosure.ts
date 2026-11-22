@@ -85,7 +85,7 @@ function submittedSessionCookie(cookieHeader: string): string | null {
 /**
  * The amended S2 exception for organization/set-active: the same session's cookie re-issued for the
  * caller's own live session (no new credential). The fixture's own session row, owned by the
- * caller, unexpired, with the same token before and after; the re-issued value is exactly the
+ * caller and unexpired both before the request (the incoming row) and after it, with the same token; the re-issued value is exactly the
  * signed cookie the request submitted (a signature is deterministic), so an unsigned or
  * differently signed value, another session's token, or an expired session fails.
  */
@@ -104,10 +104,18 @@ function isOwnLiveSessionReissue(props: {
 	if (own === undefined || wasOwn === undefined || submitted === null) return false;
 	if (typeof own.token !== 'string' || own.token.length === 0 || own.token !== wasOwn.token)
 		return false;
+	const now = controlledSignInClock.now();
+	// The incoming row (before the request) must already be the caller's own and live: a request
+	// that revives an expired row or takes over another person's row is not a re-issue.
+	const incomingIsLive =
+		wasOwn.userId === fixture.context.personId &&
+		typeof wasOwn.expiresAt === 'number' &&
+		wasOwn.expiresAt > now;
 	return (
+		incomingIsLive &&
 		own.userId === fixture.context.personId &&
 		typeof own.expiresAt === 'number' &&
-		own.expiresAt > controlledSignInClock.now() &&
+		own.expiresAt > now &&
 		value.startsWith(`${own.token}.`) &&
 		value.length > own.token.length + 1 &&
 		value === submitted
