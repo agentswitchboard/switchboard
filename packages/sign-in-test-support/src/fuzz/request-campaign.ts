@@ -214,16 +214,20 @@ export async function runRequestGroup(props: {
 				return value;
 			},
 		};
+		let failure: unknown;
 		try {
 			await runCase(drawer, () => undefined, {
 				stepIndex: replay.mode === 'random' ? undefined : stepIndex,
 				offset: replay.offset,
 			});
-		} finally {
-			// A replay that executed nothing, or more than the one printed case, proves nothing.
-			if (caseNumber !== 1)
-				throw new Error(`The replay executed ${caseNumber} cases, not exactly one`);
+		} catch (error) {
+			failure = error;
 		}
+		// A replay that executed nothing, or more than the one printed case, proves nothing.
+		if (caseNumber !== 1)
+			throw new Error(`The replay executed ${caseNumber} cases, not exactly one`);
+		// The printed case's own failure is what the replay reports.
+		if (failure !== undefined) throw failure;
 		return { executedCases: caseNumber };
 	}
 	if (props.randomCasesOnly !== undefined) {
