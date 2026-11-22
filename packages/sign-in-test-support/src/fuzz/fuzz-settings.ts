@@ -18,6 +18,9 @@ export function fuzzSettings(defaultCases: number): Partial<hegel.Settings> {
 		seed: fuzzSeed,
 		derandomize: true,
 		database: hegel.Database.disabled,
+		// Every case drives a real host (and, in the request campaign, several hosts at once), so
+		// Hegel's generation-speed check measures the host, not the generators.
+		suppressHealthCheck: [hegel.HealthCheck.TooSlow],
 	};
 }
 

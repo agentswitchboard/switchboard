@@ -37,7 +37,12 @@ export function createSharedRequestHarness(): SharedRequestHarness {
 	}
 	return {
 		async acquire(): Promise<RequestHarness> {
-			current ??= await startLocalAuthHarness();
+			if (current === undefined) {
+				current = await startLocalAuthHarness();
+				// A central that confirms organization setup, as the permanent provisioning tests use
+				// (controlled-central-provisioning.ts), so no answer is 503 "setting up".
+				current.centralProvisioning.replyWith('provisioned');
+			}
 			return current;
 		},
 		async release(outcome): Promise<void> {
@@ -56,5 +61,53 @@ export function createSharedRequestHarness(): SharedRequestHarness {
 			}
 		},
 		close: discard,
+	};
+}
+
+/**
+ * Design B: one shared host per caller. Groups of different callers run on different hosts at the
+ * same time; groups of one caller queue on its host, so a host never serves two groups at once.
+ * With `concurrent: false` every caller queues on one host (Design A).
+ */
+export interface CallerHarnessLanes<Caller extends string> {
+	readonly run: <Result>(
+		caller: Caller,
+		work: (harness: RequestHarness) => Promise<Result>,
+	) => Promise<Result>;
+	readonly close: () => Promise<void>;
+}
+
+export function createCallerHarnessLanes<Caller extends string>(
+	callers: readonly Caller[],
+	options: { readonly concurrent: boolean },
+): CallerHarnessLanes<Caller> {
+	const laneFor = (caller: Caller): string => (options.concurrent ? caller : 'one-host');
+	const lanes = new Map(
+		callers.map((caller) => [
+			laneFor(caller),
+			{ host: createSharedRequestHarness(), queue: Promise.resolve() as Promise<unknown> },
+		]),
+	);
+	return {
+		run(caller, work) {
+			const lane = lanes.get(laneFor(caller));
+			if (lane === undefined) throw new Error(`No host lane for caller ${caller}`);
+			const turn = lane.queue.then(async () => {
+				const harness = await lane.host.acquire();
+				let outcome: 'passed' | 'failed' = 'failed';
+				try {
+					const result = await work(harness);
+					outcome = 'passed';
+					return result;
+				} finally {
+					await lane.host.release(outcome);
+				}
+			});
+			lane.queue = turn.catch(() => undefined);
+			return turn;
+		},
+		async close(): Promise<void> {
+			await Promise.all([...lanes.values()].map(async (lane) => lane.host.close()));
+		},
 	};
 }

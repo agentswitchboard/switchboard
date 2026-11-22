@@ -11,29 +11,32 @@ import {
 import { requestFamilies } from '#sign-in-test-support/fuzz/request-families/index';
 import { syntheticRequestFamilyContext } from '#sign-in-test-support/fuzz/request-families/synthetic-context';
 import { assertRequestRefusalEffects } from '#sign-in-test-support/fuzz/request-refusal-effects';
-import { createSharedRequestHarness } from '#sign-in-test-support/fuzz/request-shared-harness';
+import { createCallerHarnessLanes } from '#sign-in-test-support/fuzz/request-shared-harness';
 import { readRequestStorageSnapshot } from '#sign-in-test-support/fuzz/request-storage-snapshot';
 import { routeClassification, routeKey } from '#sign-in-test-support/fuzz/route-classification';
 import { useControlledSignInClock } from '#sign-in-test-support/test-fixtures/controlled-node-test-clock';
 
 useControlledSignInClock();
 
-// One host for the whole file; each case still resets storage and uses a fresh browser address.
-const sharedHarness = createSharedRequestHarness();
-afterAll(async () => sharedHarness.close());
+// Design B on the Node host: one host per caller, the callers running at the same time. On the
+// workerd host the three runtimes plus the sequence file oversubscribe the CPU (measured: slower
+// than one host, and two extra unreproducible failures), so every caller shares one host there.
+// Every case still resets storage and uses a fresh browser address on its host.
+const lanes = createCallerHarnessLanes(['signed-out', 'member', 'owner'] as const, {
+	concurrent: process.env.SIGN_IN_TEST_HOST === 'node',
+});
+afterAll(async () => lanes.close());
 
 for (const family of requestFamilies) {
 	for (const caller of family.callers) {
-		it(`S2 ${routeKey(family.route)} as ${caller}: documented-answer, credential-disclosure, identity-disclosure, refusal-effects`, async () => {
+		it.concurrent(`S2 ${routeKey(family.route)} as ${caller}: documented-answer, credential-disclosure, identity-disclosure, refusal-effects`, async () => {
 			const classification = routeClassification.find(
 				(row) => routeKey(row) === routeKey(family.route),
 			);
 			if (classification === undefined)
 				throw new Error('S1 classification missing for request family');
-			const harness = await sharedHarness.acquire();
-			let outcome: 'passed' | 'failed' = 'failed';
 			let caseNumber = 0;
-			try {
+			await lanes.run(caller, async (harness) => {
 				await hegel.testAsync(
 					boundShrinking(async (testCase, note): Promise<void> => {
 						caseNumber += 1;
@@ -65,12 +68,10 @@ for (const family of requestFamilies) {
 						const answer = await observeRequestAnswer(response);
 						await fixture.harness.settleDeferredWork();
 						const after = await readRequestStorageSnapshot(fixture.harness.database);
-						// A server error is allowed only where the route documents it with its native body.
-						if (answer.status >= 500)
-							expect(
-								classification.documentedErrorBodies?.[answer.status],
-								'S2 no-server-error: generated input without injected storage faults',
-							).toBeDefined();
+						expect(
+							answer.status,
+							'S2 no-server-error: generated input without injected storage faults',
+						).toBeLessThan(500);
 						expect(classification.documentedAnswers, 'S2 documented-answer').toContain(
 							answer.status,
 						);
@@ -105,10 +106,7 @@ for (const family of requestFamilies) {
 					}),
 					fuzzSettings(family.coverageCases(syntheticRequestFamilyContext)),
 				);
-				outcome = 'passed';
-			} finally {
-				await sharedHarness.release(outcome);
-			}
+			});
 		});
 	}
 }

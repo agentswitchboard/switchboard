@@ -189,17 +189,15 @@ const reachableRouteGroups: readonly ReachableRouteGroup[] = [
 		paths: ['/api/auth/organization/retry-provisioning'],
 		exposure: ['member', 'owner'],
 		requestParts: ['json', 'form'],
-		// 409 is a refused statement; 503 is central not confirming the setup, which the local
-		// harness's central never does (organization-provisioning-plugin.ts:64–76).
-		documentedAnswers: [200, 400, 401, 403, 409, 415, 429, 503],
-		documentedErrorBodies: {
-			409: { kind: 'refused' },
-			503: { kind: 'setting-up', reason: 'unavailable' },
-		},
+		// 409 is a refused statement (organization-provisioning-plugin.ts:64–76). The F1 host's
+		// controlled central confirms setup, so the plugin's 503 "setting up" answer is not a
+		// documented answer here: F1 injects no unavailable central, and a 5xx always fails.
+		documentedAnswers: [200, 400, 401, 403, 409, 415, 429],
+		documentedErrorBodies: { 409: { kind: 'refused' } },
 		disclosure: 'Only the caller’s own organization setup state; no credential in refusal.',
 		permittedRefusalEffects: ['none', 'expired-session-cleanup', 'cookie-delete'],
 		evidence:
-			'organization-provisioning-plugin.ts:64–76; people-organization-provisioning.host.e2e.test.ts:81,140,279–283',
+			'organization-provisioning-plugin.ts:64–76; people-organization-provisioning.host.e2e.test.ts:279–283',
 	},
 	// B1-C owner People reads (specification S3–S10): cookie-bound, no-store, live owner
 	// permission checked around the read. Answers come from organization-membership-read-plugin.ts

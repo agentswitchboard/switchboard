@@ -39,3 +39,14 @@ it('marks the provider callback pattern separately from the concrete admitted ca
 		}
 	}
 });
+
+it('documents no 5xx answer for any route: F1 injects no storage or central fault', () => {
+	for (const row of routeClassification) {
+		expect(row.documentedAnswers.filter((status) => status >= 500)).toEqual([]);
+		expect(
+			Object.keys(row.documentedErrorBodies ?? {})
+				.map(Number)
+				.filter((s) => s >= 500),
+		).toEqual([]);
+	}
+});
