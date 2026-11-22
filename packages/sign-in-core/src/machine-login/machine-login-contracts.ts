@@ -35,9 +35,34 @@ export const machineLabelSchema = z
 export const presentedMachineSchema = z.strictObject({ machineId: machineIdSchema });
 export type PresentedMachine = z.infer<typeof presentedMachineSchema>;
 
+const organizationPlaceholder = '{organization_id}';
+const linkUrlTemplateSchema = z.string().refine((template): boolean => {
+	if (
+		!/^https:\/\/[^/\\?#\s]+\//iu.test(template) ||
+		/[\\\p{White_Space}\p{Cc}]/u.test(template) ||
+		template.split(organizationPlaceholder).length !== 2
+	)
+		return false;
+	const url = URL.parse(template);
+	return (
+		url !== null &&
+		url.protocol === 'https:' &&
+		url.username === '' &&
+		url.password === '' &&
+		url.hash === '' &&
+		url.pathname.split('/').includes(encodeURIComponent(organizationPlaceholder))
+	);
+}, 'Expected an absolute HTTPS link with one {organization_id} path segment');
+
+export const fleetLoginDiscoveryResponseSchema = z.strictObject({
+	client_id: uuid7Schema,
+	link_url: linkUrlTemplateSchema,
+});
+
 export const machineLoginConfigurationSchema = z.strictObject({
 	routerClientId: uuid7Schema,
 	machineAudience: machineResourceUriSchema,
+	linkUrlTemplate: linkUrlTemplateSchema,
 	fleetCentral: z.strictObject({ receiver: uuid7Schema, relay: uuid7Schema }),
 });
 export type MachineLoginConfiguration = z.infer<typeof machineLoginConfigurationSchema>;

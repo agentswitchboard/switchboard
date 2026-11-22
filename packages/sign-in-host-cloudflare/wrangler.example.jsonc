@@ -32,6 +32,8 @@
 		// centralPublicOrigin to exactly central's CENTRAL_PUBLIC_ORIGIN, adminPageClientId to the
 		// admin page client's fixed ID, ownerFleetCliClientId to the fleet CLI client's fixed ID,
 		// and organizationStatementLifetimeSeconds to 10368000 (120 days); neither has a default.
+		// To enable machine login, include a machineLogin object in SIGN_IN_CONFIGURATION.
+		// Set its linkUrlTemplate to https://<sign-in issuer origin>/api/fleet/link/{organization_id}.
 		"SIGN_IN_CONFIGURATION": "replace-with-private-deployment-configuration",
 		"AUTH_SECRET": "replace-with-worker-secret",
 		"GOOGLE_CLIENT_ID": "replace-with-provider-client",

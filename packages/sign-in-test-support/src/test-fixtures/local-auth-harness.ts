@@ -166,7 +166,7 @@ export async function startLocalAuthHarness(
 		 */
 		readonly workerdCentral?: (issuer: string) => Promise<WorkerdCentralRuntime>;
 		readonly machineLinkStorageWorker?: WorkerOptions;
-		readonly machineLogin?: MachineLoginConfiguration;
+		readonly machineLogin?: Omit<MachineLoginConfiguration, 'linkUrlTemplate'>;
 		readonly machineDecisions?: (request: Request) => Promise<Response>;
 		/**
 		 * Test-only (V2, Node host only): record every crypto, clock, ID and central call of the
@@ -462,6 +462,17 @@ export async function startLocalAuthHarness(
 	});
 	const authScript = bundles.auth;
 	const gatewayScript = bundles.gateway;
+	const centralPublicOrigin = 'https://central.example.invalid';
+	const machineLogin =
+		options.machineLogin === undefined
+			? undefined
+			: {
+					...options.machineLogin,
+					linkUrlTemplate:
+						signInHost === 'cloudflare'
+							? `https://${new URL(issuer).host}/api/fleet/link/{organization_id}`
+							: `${centralPublicOrigin}/v1/organizations/{organization_id}/link`,
+				};
 	const configuration = {
 		issuer,
 		mode: 'private',
@@ -470,7 +481,7 @@ export async function startLocalAuthHarness(
 		managementAudience,
 		centralIdentityAudience: 'https://central.example.invalid/identity',
 		centralAdminAudience: 'https://central.example.invalid/admin',
-		centralPublicOrigin: 'https://central.example.invalid',
+		centralPublicOrigin,
 		adminPageClientId: 'admin-page-local',
 		ownerFleetCliClientId: 'owner-fleet-cli-local',
 		organizationStatementLifetimeSeconds: 10_368_000,
@@ -478,7 +489,7 @@ export async function startLocalAuthHarness(
 		ownerCliClientId: 'owner-cli-local',
 		ownerCliRedirectUri: 'http://127.0.0.1/callback',
 		accessTokenSeconds: 300,
-		...(options.machineLogin === undefined ? {} : { machineLogin: options.machineLogin }),
+		...(machineLogin === undefined ? {} : { machineLogin }),
 		managementHumanCheck: 'remembered-login',
 		turnstile: {
 			kind: 'local',

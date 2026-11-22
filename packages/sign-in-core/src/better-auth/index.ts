@@ -14,6 +14,7 @@ export {
 	decideDeviceLoginSchema,
 	decideMachineTokenSchema,
 	deviceLoginDecisionSchema,
+	fleetLoginDiscoveryResponseSchema,
 	machineTokenClaimsSchema,
 	machineTokenDecisionSchema,
 	machineTokenResponseSchema,

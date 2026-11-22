@@ -1,4 +1,5 @@
 import { deviceCode, uuid7Schema } from '@agent-collaboration/sign-in-core';
+import { fleetLoginDiscoveryResponseSchema } from '@agent-collaboration/sign-in-core/better-auth';
 import { expect, it } from 'vitest';
 
 import { useControlledSignInClock } from '#sign-in-test-support/test-fixtures/controlled-node-test-clock';
@@ -30,6 +31,24 @@ it('rejects query inputs on every machine POST and requires JSON for enrollment 
 		},
 	});
 	try {
+		const discoveryPath = '/.well-known/fleet-login';
+		const discovery = await harness.auth(discoveryPath, {
+			headers: { 'x-forwarded-host': 'unrelated.example.invalid', 'x-forwarded-proto': 'http' },
+		});
+		expect(discovery.status).toBe(200);
+		expect(discovery.headers.get('cache-control')).toBe('no-store');
+		expect(fleetLoginDiscoveryResponseSchema.parse(await discovery.json())).toEqual({
+			client_id: routerClientId,
+			link_url:
+				harness.signInHost === 'cloudflare'
+					? `https://${new URL(harness.issuer).host}/api/fleet/link/{organization_id}`
+					: 'https://central.example.invalid/v1/organizations/{organization_id}/link',
+		});
+		const suppliedLink = await harness.auth(
+			`${discoveryPath}?link_url=https://unrelated.example.invalid`,
+		);
+		expect(suppliedLink.status).toBe(400);
+
 		const requests = [
 			{
 				path: '/api/auth/device/code',

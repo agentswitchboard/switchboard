@@ -12,6 +12,8 @@ Use [wrangler.example.jsonc](wrangler.example.jsonc) as the deployment template.
 
 The `SIGN_IN_CONFIGURATION` JSON includes the public Turnstile site key in its `turnstile` object (`kind: 'deployed'` for a private-stack or production hostname). The `TURNSTILE_SECRET_KEY` binding is declared by name under `secrets.required`; its actual value is supplied by the deployment owner at the private-stack cut. A missing secret leaves the captcha plugins registered and fails protected starts closed. Local proof uses only Cloudflare's published dummy keys and a loopback siteverify stand-in.
 
+When enabling machine login, set `machineLogin.linkUrlTemplate` in that JSON to `https://<sign-in issuer host>/api/fleet/link/{organization_id}`. Keep the literal organization placeholder. `GET /.well-known/fleet-login` publishes this configured template as `link_url`.
+
 Before dispatch, this host removes incoming `x-sign-in-client-address` and sets it from `cf-connecting-ip`. The core and Better Auth use that address, with IPv6 addresses sharing a /64 budget. Better Auth also uses it for the captcha request's `remoteip`.
 
 The deployment requires both rate-limit bindings from the template: `SIGN_IN_ATTEMPTS` (10 requests per 60 seconds) and `AUTH_REQUESTS` (300 per 60 seconds). The core keys each count by route class and address before dispatch, including its own pages. Better Auth applies its separate memory limits to requests through its HTTP router. The [route policy](../sign-in-core/src/request-limits/request-limit-policy.ts) owns the classes and defaults. Limited requests return 429 with `Retry-After`; an unavailable binding returns 503. Closed captcha and request-limit observations go to the host's JSON log. Telemetry/export configuration is a separate delivery.

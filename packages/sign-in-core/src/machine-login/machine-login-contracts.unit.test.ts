@@ -3,6 +3,8 @@ import { expect, it } from 'vitest';
 import {
 	decideDeviceLoginSchema,
 	deviceLoginDecisionSchema,
+	fleetLoginDiscoveryResponseSchema,
+	machineLoginConfigurationSchema,
 	machinePrincipalSchema,
 	machineTokenDecisionSchema,
 	presentedMachineSchema,
@@ -15,6 +17,40 @@ const organizationId = '019a61bb-0000-7000-8000-000000000002';
 const approver = '019a61bb-0000-7000-8000-000000000003';
 const requestId = '019a61bb-0000-7000-8000-000000000004';
 const enrollmentId = '019a61bb-0000-7000-8000-000000000005';
+
+it('uses the same strict HTTPS link template contract at startup and on discovery', (): void => {
+	const configurations = (linkUrlTemplate: string): unknown => ({
+		routerClientId: machineId,
+		machineAudience: 'https://central.example.invalid/machine',
+		linkUrlTemplate,
+		fleetCentral: { receiver: organizationId, relay: enrollmentId },
+	});
+	for (const link_url of [
+		'https://sign-in.example.invalid/api/fleet/link/{organization_id}',
+		'https://central.example.invalid/v1/organizations/{organization_id}/link',
+	]) {
+		const response = { client_id: machineId, link_url };
+		expect(fleetLoginDiscoveryResponseSchema.parse(response)).toEqual(response);
+		expect(machineLoginConfigurationSchema.safeParse(configurations(link_url)).success).toBe(true);
+		expect(fleetLoginDiscoveryResponseSchema.safeParse({ ...response, extra: true }).success).toBe(
+			false,
+		);
+	}
+	for (const link_url of [
+		'/v1/organizations/{organization_id}/link',
+		'http://central.example.invalid/v1/organizations/{organization_id}/link',
+		'https:///central.example.invalid/v1/organizations/{organization_id}/link',
+		'https://central.example.invalid/v1/organizations/no-placeholder/link',
+		'https://central.example.invalid/v1/{organization_id}/{organization_id}/link',
+		'https://central.example.invalid/v1/organizations?org={organization_id}',
+		'https://user@central.example.invalid/v1/organizations/{organization_id}/link',
+	]) {
+		expect(
+			fleetLoginDiscoveryResponseSchema.safeParse({ client_id: machineId, link_url }).success,
+		).toBe(false);
+		expect(machineLoginConfigurationSchema.safeParse(configurations(link_url)).success).toBe(false);
+	}
+});
 
 it.each([
 	{

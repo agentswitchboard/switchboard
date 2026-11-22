@@ -11,6 +11,7 @@ const enrollmentId = uuid7Schema.parse('019a3dce-2000-7000-8000-0000000000b3');
 const configuration = machineLoginConfigurationSchema.parse({
 	routerClientId: '019a3dce-2000-7000-8000-0000000000b4',
 	machineAudience: 'https://central.example.invalid/machine',
+	linkUrlTemplate: 'https://central.example.invalid/v1/organizations/{organization_id}/link',
 	fleetCentral: {
 		receiver: '019a3dce-2000-7000-8000-0000000000b5',
 		relay: '019a3dce-2000-7000-8000-0000000000b6',

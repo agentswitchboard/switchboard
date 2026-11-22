@@ -58,6 +58,7 @@ import {
 	machineDeviceRequestIsValid,
 	revokeMachineEnrollmentPublicPath,
 } from '#sign-in-core/machine-login/machine-device-requests';
+import { fleetLoginDiscoveryResponseSchema } from '#sign-in-core/machine-login/machine-login-contracts';
 import { runAuthorizationRevisionDrain } from '#sign-in-core/organizations/authorization-revision-drainer';
 import type { OrganizationFleetState } from '#sign-in-core/organizations/organization-provisioning';
 import { pageAssetResponse } from '#sign-in-core/pages/page-document';
@@ -232,7 +233,10 @@ export function createSignInHttpHandler(
 			if (machineLogin !== undefined && url.pathname === '/.well-known/fleet-login') {
 				if (!(await machineDeviceRequestIsValid(request, false))) return invalidRequestResponse();
 				return Response.json(
-					{ client_id: machineLogin.routerClientId },
+					fleetLoginDiscoveryResponseSchema.parse({
+						client_id: machineLogin.routerClientId,
+						link_url: machineLogin.linkUrlTemplate,
+					}),
 					{ headers: { 'cache-control': 'no-store' } },
 				);
 			}

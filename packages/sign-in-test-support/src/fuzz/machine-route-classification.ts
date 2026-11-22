@@ -8,7 +8,8 @@ export const machineRouteGroups: readonly ReachableRouteGroup[] = [
 		exposure: ['signed-out', 'member', 'owner'],
 		requestParts: ['query'],
 		documentedAnswers: [200, 400, 429],
-		disclosure: 'Only the configured public Router client identifier.',
+		disclosure:
+			'The configured public Router client identifier and HTTPS organization link template.',
 		permittedRefusalEffects: ['none'],
 		evidence: 'sign-in-http-handler.ts; machine-request-admission.host.e2e.test.ts',
 	},
