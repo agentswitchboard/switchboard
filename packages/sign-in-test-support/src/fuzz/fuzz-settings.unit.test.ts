@@ -203,3 +203,54 @@ describe('B5 closure: printed evidence replays the failure and says what it omit
 		).toThrow('abbreviated');
 	});
 });
+describe('B5 closure 3: notes omitted, and draws JSON cannot print', (): void => {
+	async function printedFailure(
+		draw: (testCase: hegel.TestCase) => unknown,
+		notes = 0,
+	): Promise<string> {
+		const property = boundShrinking(
+			async (testCase): Promise<void> => {
+				draw(testCase);
+				for (let index = 0; index < notes; index += 1) testCase.note(`note ${index}`);
+				throw new Error('named property failed');
+			},
+			{ maximumReplays: 1 },
+		);
+		try {
+			await hegel.testAsync(property, fuzzSettingsExact(5));
+		} catch (error) {
+			return error instanceof Error ? error.message : String(error);
+		}
+		throw new Error('the property did not fail');
+	}
+
+	it('is not complete when the print says notes were omitted', async (): Promise<void> => {
+		const message = await printedFailure(
+			(testCase) => testCase.draw(generators.integers({ minValue: 0, maxValue: 9 })),
+			205,
+		);
+		expect(message).toMatch(/notes omitted: 5 of 205/u);
+		const evidence = parseFailureEvidence(message);
+		expect(evidence.draws).toHaveLength(1);
+		expect(evidence.complete).toBe(false);
+		expect(() => scriptedTestCase(evidence)).toThrow(/incomplete/u);
+	});
+
+	it('prints a top-level undefined draw explicitly without throwing, and replays it as undefined', async (): Promise<void> => {
+		const message = await printedFailure((testCase) => testCase.draw(generators.just(undefined)));
+		expect(message).toContain('named property failed');
+		expect(message).toContain('draws: [{"$undefined":true}]');
+		const evidence = parseFailureEvidence(message);
+		expect(evidence.complete).toBe(true);
+		expect(scriptedTestCase(evidence).draw(generators.just(1))).toBeUndefined();
+	});
+
+	it('prints a draw JSON cannot print by name and refuses to replay it', async (): Promise<void> => {
+		const message = await printedFailure((testCase) =>
+			testCase.draw(generators.just(() => 'a function')),
+		);
+		expect(message).toContain('named property failed');
+		expect(message).toContain('$unprintable');
+		expect(parseFailureEvidence(message).complete).toBe(false);
+	});
+});

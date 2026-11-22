@@ -63,14 +63,26 @@ const maximumRecordedEntries = 200;
 const maximumRecordedLength = 300;
 const abbreviationMarker = '<abbreviated';
 
+/** Marks a draw that is undefined: JSON has no value for it, so the print says so explicitly. */
+const undefinedDrawKey = '$undefined';
+/** Marks a draw JSON cannot print at all (a function, a symbol): printed by name, never replayable. */
+const unprintableDrawKey = '$unprintable';
+
 function printable(value: unknown): string {
+	if (value === undefined) return JSON.stringify({ [undefinedDrawKey]: true });
 	try {
-		return JSON.stringify(value, (_key, item: unknown) =>
+		const text = JSON.stringify(value, (_key, item: unknown) =>
 			typeof item === 'bigint' ? item.toString() : item,
 		);
+		// JSON.stringify returns undefined (not a string) for a function or a symbol.
+		return text ?? JSON.stringify({ [unprintableDrawKey]: Object.prototype.toString.call(value) });
 	} catch {
-		return JSON.stringify(String(value));
+		return JSON.stringify({ [unprintableDrawKey]: Object.prototype.toString.call(value) });
 	}
+}
+
+function isMarkedDraw(draw: unknown, key: string): boolean {
+	return typeof draw === 'object' && draw !== null && !Array.isArray(draw) && key in draw;
 }
 
 /** A draw as it is printed: its JSON value, or a marker saying it was cut at the character cap. */
@@ -141,9 +153,64 @@ export function parseFailureEvidence(message: string): FailureEvidence {
 		line !== undefined &&
 		!/^draws omitted: /mu.test(message) &&
 		!/^entries abbreviated to /mu.test(message) &&
-		!draws.some((draw) => typeof draw === 'string' && draw.startsWith(abbreviationMarker));
+		!/^notes omitted: /mu.test(message) &&
+		!draws.some(
+			(draw) =>
+				(typeof draw === 'string' && draw.startsWith(abbreviationMarker)) ||
+				isMarkedDraw(draw, unprintableDrawKey),
+		);
 	return { draws, complete };
 }
+
+/** One printed case, everything needed to rerun it: where it ran and the values it drew. */
+export interface FailureReplay {
+	readonly seed: number;
+	readonly offset: number;
+	readonly route: string;
+	readonly caller: string;
+	readonly variant: string;
+	readonly evidence: FailureEvidence;
+}
+
+/** The line the campaign notes at the start of every case; the identity half of the printed evidence. */
+export function caseIdentityNote(identity: {
+	readonly offset: number;
+	readonly route: string;
+	readonly caller: string;
+	readonly variant: string;
+}): string {
+	return `S5 seed=${fuzzSeed}+${identity.offset}; route=${identity.route}; caller=${identity.caller}; variant=${identity.variant}`;
+}
+
+/** Read a printed failure (identity note and draws) back into the one case to replay. */
+export function parseFailureReplay(message: string): FailureReplay {
+	const identity =
+		/^S5 seed=(\d+)\+(\d+); route=(.+?); caller=(\S+); variant=(.+?)(?: \[at .*)?$/mu.exec(message);
+	if (identity === null) throw new Error('The printed failure carries no case identity note');
+	const [, seed, offset, route, caller, variant] = identity;
+	if (
+		seed === undefined ||
+		offset === undefined ||
+		route === undefined ||
+		caller === undefined ||
+		variant === undefined
+	)
+		throw new Error('The printed case identity is incomplete');
+	return {
+		seed: Number(seed),
+		offset: Number(offset),
+		route,
+		caller,
+		variant,
+		evidence: parseFailureEvidence(message),
+	};
+}
+
+/** `SIGN_IN_FUZZ_REPLAY`, when set: the printed failure text of one case to replay instead of generating. */
+export const failureReplayFromEnvironment: FailureReplay | undefined =
+	process.env.SIGN_IN_FUZZ_REPLAY === undefined
+		? undefined
+		: parseFailureReplay(process.env.SIGN_IN_FUZZ_REPLAY);
 
 /**
  * A test case that answers each draw from printed evidence, in order, so a recorded failure is
@@ -162,7 +229,7 @@ export function scriptedTestCase(evidence: FailureEvidence): Pick<hegel.TestCase
 				throw new Error('The replay drew more values than the printed evidence holds');
 			const value = evidence.draws[next];
 			next += 1;
-			return value as Value;
+			return (isMarkedDraw(value, undefinedDrawKey) ? undefined : value) as Value;
 		},
 		note: (): void => undefined,
 	};
@@ -226,11 +293,15 @@ export function boundShrinking(
 				recorded.note(text);
 			});
 		} catch (error) {
-			if (!isHegelControlFlow(error))
+			if (!isHegelControlFlow(error)) {
+				// Every executed failure prints the evidence to rerun it (draws and notes), not only the one
+				// a stopped shrink reports, so the last replay Hegel shows is always replayable.
 				latestExecutedFailure = [
 					error instanceof Error ? error.message : String(error),
 					...describeRecord(record),
 				].join('\n');
+				if (error instanceof Error) error.message = latestExecutedFailure;
+			}
 			throw error;
 		}
 	};
