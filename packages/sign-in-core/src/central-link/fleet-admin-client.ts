@@ -9,6 +9,7 @@ import type {
 	OrganizationChangeRecord,
 	WorkspaceView_Serialize,
 } from '#sign-in-core/central-link/generated/central-sign-in.gen';
+import { organizationChangeFixtures } from '#sign-in-core/central-link/generated/organization-change-fixtures';
 import type { AssertWireType, WireTypesEqual } from '#sign-in-core/central-link/wire-type-equality';
 import {
 	fleetAdminRequestBody,
@@ -56,15 +57,7 @@ const refusedSchema = z.strictObject({
 	result: z.literal('refused'),
 	reason: fleetAdminRefusalReasonSchema,
 });
-const organizationChangeKindSchema = z.enum([
-	'organizationProvisioned',
-	'stampRenewed',
-	'workspaceCreated',
-	'machineEnrolled',
-	'machineRevoked',
-	'machineExpired',
-	'allowanceChanged',
-]);
+const organizationChangeKindSchema = z.enum(organizationChangeFixtures.map(({ kind }) => kind));
 const organizationChangeOriginSchema = z.discriminatedUnion('kind', [
 	z.strictObject({ kind: z.literal('signInProvisioning') }),
 	z.strictObject({ kind: z.literal('automatic') }),
