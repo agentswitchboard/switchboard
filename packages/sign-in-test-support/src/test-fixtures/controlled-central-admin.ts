@@ -153,7 +153,7 @@ function independentIntent(request: FleetAdminRequest): string {
 				organization,
 				target: organization,
 				operationId: null,
-				params: {},
+				params: { after: request.after ?? null, limit: request.limit },
 			}),
 		);
 	const intent =
@@ -208,7 +208,7 @@ export function createControlledCentralAdmin(props: {
 	const workspaces: AdminWorkspace[] = [];
 	const usedRequestIds = new Set<string>();
 	const ledger = new Map<string, { readonly intent: string; readonly result: FleetAdminResult }>();
-	const scripted = new Map<AdminRouteName, (request: FleetAdminRequest) => FleetAdminResult>();
+	const scripted = new Map<AdminRouteName, ((request: FleetAdminRequest) => FleetAdminResult)[]>();
 	const records: {
 		readonly id: string;
 		readonly requestId: string;
@@ -361,13 +361,18 @@ export function createControlledCentralAdmin(props: {
 					workspace:
 						workspaces.find((workspace) => workspace.workspaceId === body.workspaceId) ?? null,
 				};
-			case 'ListWorkspaces':
+			case 'ListWorkspaces': {
+				const { after, limit } = body;
+				const remaining = workspaces
+					.filter((workspace) => after === undefined || workspace.workspaceId > after)
+					.toSorted((left, right) => left.workspaceId.localeCompare(right.workspaceId));
+				const page = remaining.slice(0, limit);
 				return {
 					result: 'workspaces',
-					workspaces: workspaces.toSorted((left, right) =>
-						left.workspaceId.localeCompare(right.workspaceId),
-					),
+					workspaces: page,
+					nextAfter: remaining.length > limit ? (page.at(-1)?.workspaceId ?? null) : null,
 				};
+			}
 			case 'ReadChangeRecords': {
 				const start =
 					body.after === null ? 0 : records.findIndex((record) => record.id === body.after) + 1;
@@ -384,7 +389,7 @@ export function createControlledCentralAdmin(props: {
 		workspaces,
 		changeRecords: records,
 		scriptNextAnswer(route, answer): void {
-			scripted.set(route, answer);
+			scripted.set(route, [...(scripted.get(route) ?? []), answer]);
 		},
 		async fetch(request, route): Promise<Response> {
 			const authorization = request.headers.get('authorization');
@@ -438,8 +443,9 @@ export function createControlledCentralAdmin(props: {
 				return new Response(null, { status: 401 });
 			}
 			const refused = admit(route, verified.claims, verified.requestId);
-			const script = refused === null ? scripted.get(route) : undefined;
-			if (script !== undefined) scripted.delete(route);
+			const scripts = refused === null ? scripted.get(route) : undefined;
+			const script = scripts?.shift();
+			if (scripts?.length === 0) scripted.delete(route);
 			const result =
 				refused ??
 				(script === undefined

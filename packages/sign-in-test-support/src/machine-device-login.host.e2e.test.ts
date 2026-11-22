@@ -171,18 +171,42 @@ it('the real host approves one machine ID, presents active workspaces and releas
 			.parse(decodeJwt(await harness.ownerToken()));
 		const organizationId = ownerClaims.organization_id;
 		await harness.settleDeferredWork();
-		harness.centralAdmin.scriptNextAnswer('ListWorkspaces', () => ({
-			result: 'workspaces',
-			workspaces: [
-				{ workspaceId, name: 'Active workspace', description: '', state: 'active' },
-				{
-					workspaceId: enrollmentId,
-					name: 'Archived workspace',
-					description: '',
-					state: 'archived',
-				},
-			],
-		}));
+		function offerWorkspacePages(): void {
+			harness.centralAdmin.scriptNextAnswer('ListWorkspaces', (request) => {
+				if (
+					request.operation !== 'ListWorkspaces' ||
+					request.after !== undefined ||
+					request.limit !== 100
+				)
+					throw new Error('First workspace page was not requested');
+				return {
+					result: 'workspaces',
+					workspaces: [
+						{
+							workspaceId: enrollmentId,
+							name: 'Archived workspace',
+							description: '',
+							state: 'archived',
+						},
+					],
+					nextAfter: enrollmentId,
+				};
+			});
+			harness.centralAdmin.scriptNextAnswer('ListWorkspaces', (request) => {
+				if (
+					request.operation !== 'ListWorkspaces' ||
+					request.after !== enrollmentId ||
+					request.limit !== 100
+				)
+					throw new Error('Workspace continuation was not requested');
+				return {
+					result: 'workspaces',
+					workspaces: [{ workspaceId, name: 'Active workspace', description: '', state: 'active' }],
+					nextAfter: null,
+				};
+			});
+		}
+		offerWorkspacePages();
 
 		const deviceRequest = {
 			client_id: routerClientId,
@@ -245,10 +269,7 @@ it('the real host approves one machine ID, presents active workspaces and releas
 				permissions: expect.arrayContaining(['organization:view']),
 			}),
 		);
-		harness.centralAdmin.scriptNextAnswer('ListWorkspaces', () => ({
-			result: 'workspaces',
-			workspaces: [{ workspaceId, name: 'Active workspace', description: '', state: 'active' }],
-		}));
+		offerWorkspacePages();
 		const decide = (allowedWorkspaces: readonly string[]): Promise<Response> =>
 			harness.auth('/api/auth/machine-login/approve', {
 				method: 'POST',
@@ -273,6 +294,7 @@ it('the real host approves one machine ID, presents active workspaces and releas
 		const workspaceReads = harness.centralAdmin.arrivals.filter(
 			({ route }) => route === 'ListWorkspaces',
 		).length;
+		expect(workspaceReads).toBe(4);
 		const repeated = await decide([workspaceId]);
 		expect(repeated.status).toBe(200);
 		expect(await repeated.json()).toEqual({

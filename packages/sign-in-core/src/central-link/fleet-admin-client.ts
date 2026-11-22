@@ -2,6 +2,11 @@ import { z } from 'zod';
 
 import type { CentralTransport } from '#sign-in-core/central-link/central-transport';
 import {
+	fleetAdminWorkspaceSchema,
+	fleetAdminRefusedSchema,
+	listWorkspacesReplySchema,
+} from '#sign-in-core/contracts/fleet-admin-wire';
+import {
 	revokeMachineEnrollmentResultSchema,
 	type RevokeMachineEnrollmentRequest,
 	type RevokeMachineEnrollmentResult,
@@ -9,51 +14,18 @@ import {
 import {
 	fleetAdminRequestBody,
 	fleetAdminRoutePaths,
-	fleetAdminWorkspaceNameSchema,
 	type FleetAdminRequest,
 } from '#sign-in-core/organizations/fleet-admin-operation';
 import type { CentralLinkUncertainty } from '#sign-in-core/organizations/organization-provisioning';
 
+export {
+	fleetAdminRefusalReasonSchema,
+	type FleetAdminRefusalReason,
+} from '#sign-in-core/contracts/fleet-admin-wire';
+
 // Central's closed `OrganizationAdminResult` (codex-router #275, merged as `ea030e513`,
 // `collaboration-central-core/src/organization_admin_contract.rs`; mirrored in
 // `contract-fixtures/central-organization-admin/`), tag `result`.
-export const fleetAdminWorkspaceSchema = z.strictObject({
-	workspaceId: z
-		.string()
-		.regex(/^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u),
-	name: fleetAdminWorkspaceNameSchema,
-	description: z
-		.string()
-		// Central #275 `WorkspaceView`: at most 2048 UTF-8 bytes, the same bound a create sends.
-		.refine((text) => new TextEncoder().encode(text).length <= 2048, 'Description too long'),
-	state: z.enum(['active', 'archiving', 'archived']),
-});
-export const fleetAdminRefusalReasonSchema = z.enum([
-	/** Another workspace already holds this name (case-insensitive, trimmed). */
-	'nameInUse',
-	'notPermitted',
-	'secondFactorRequired',
-	'refreshRequired',
-	'authorizationSyncRequired',
-	'expired',
-	'requestTime',
-	'requestReused',
-	/** The same operation ID arrived with a different request. */
-	'conflict',
-	'rejected',
-]);
-export type FleetAdminRefusalReason = z.infer<typeof fleetAdminRefusalReasonSchema>;
-export const fleetAdminRefusedSchema = z.strictObject({
-	result: z.literal('refused'),
-	reason: fleetAdminRefusalReasonSchema,
-});
-export const listWorkspacesReplySchema = z.discriminatedUnion('result', [
-	z.strictObject({
-		result: z.literal('workspaces'),
-		workspaces: z.array(fleetAdminWorkspaceSchema),
-	}),
-	fleetAdminRefusedSchema,
-]);
 const changeRecordSchema = z.strictObject({
 	id: z.uuidv7().refine((id) => id === id.toLowerCase()),
 	requestId: z

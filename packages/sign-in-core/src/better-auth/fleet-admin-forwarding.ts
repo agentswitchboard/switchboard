@@ -10,8 +10,12 @@ import {
 	signMachineEnrollmentRevocationProof,
 	type FleetAdminProofKey,
 } from '#sign-in-core/central-link/fleet-admin-proof';
-import type { ListWorkspacesResult } from '#sign-in-core/central-link/list-workspaces';
+import {
+	collectWorkspacePages,
+	type ListWorkspacesResult,
+} from '#sign-in-core/central-link/list-workspaces';
 import type { SignInConfiguration } from '#sign-in-core/contracts/deployment-configuration';
+import { listWorkspacesPageLimit } from '#sign-in-core/contracts/fleet-admin-wire';
 import { personFleetTokenClaimsSchema } from '#sign-in-core/contracts/person-fleet-token';
 import { trustedSignInClientAddressHeader } from '#sign-in-core/contracts/sign-in-client-address';
 import type { SignInPlatform } from '#sign-in-core/contracts/sign-in-platform';
@@ -184,29 +188,33 @@ export async function forwardMachineEnrollmentRevocation(
 export async function listWorkspacesForPerson(
 	props: PersonFleetCaller & { readonly organizationId: string },
 ): Promise<ListWorkspacesResult> {
-	const parsed = fleetAdminRequestSchema.safeParse({
-		operation: 'ListWorkspaces',
-		organizationId: props.organizationId,
-	});
-	if (!parsed.success || props.request.headers.has('authorization'))
-		return { result: 'refused', reason: 'notPermitted' };
-	const answer = await sendSignedFleetAdminRequest({ ...props, operation: parsed.data });
-	switch (answer.kind) {
-		case 'answered':
-			if (answer.result.result === 'workspaces' || answer.result.result === 'refused')
-				return answer.result;
-			return { result: 'unavailable' };
-		case 'credential-refused':
-		case 'organization-mismatch':
+	return collectWorkspacePages(async (after) => {
+		const parsed = fleetAdminRequestSchema.safeParse({
+			operation: 'ListWorkspaces',
+			organizationId: props.organizationId,
+			limit: listWorkspacesPageLimit,
+			...(after === undefined ? {} : { after }),
+		});
+		if (!parsed.success || props.request.headers.has('authorization'))
 			return { result: 'refused', reason: 'notPermitted' };
-		case 'request-refused':
-		case 'unauthenticated':
-		case 'answered-unavailable':
-		case 'unknown':
-			return { result: 'unavailable' };
-		default:
-			return answer satisfies never;
-	}
+		const answer = await sendSignedFleetAdminRequest({ ...props, operation: parsed.data });
+		switch (answer.kind) {
+			case 'answered':
+				if (answer.result.result === 'workspaces' || answer.result.result === 'refused')
+					return answer.result;
+				return { result: 'unavailable' };
+			case 'credential-refused':
+			case 'organization-mismatch':
+				return { result: 'refused', reason: 'notPermitted' };
+			case 'request-refused':
+			case 'unauthenticated':
+			case 'answered-unavailable':
+			case 'unknown':
+				return { result: 'unavailable' };
+			default:
+				return answer satisfies never;
+		}
+	});
 }
 
 async function sendSignedFleetAdminRequest(

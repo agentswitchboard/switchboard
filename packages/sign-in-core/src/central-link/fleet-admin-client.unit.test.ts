@@ -73,7 +73,7 @@ const operations: Readonly<Record<FleetAdminRequest['operation'], FleetAdminRequ
 		organizationId,
 		workspaceId: workspace.workspaceId,
 	},
-	ListWorkspaces: { operation: 'ListWorkspaces', organizationId },
+	ListWorkspaces: { operation: 'ListWorkspaces', organizationId, limit: 100 },
 	ReadChangeRecords: { operation: 'ReadChangeRecords', organizationId, after: null, limit: 10 },
 };
 /** Which route may answer each result tag; a refusal can come from any of them. */
@@ -85,7 +85,7 @@ const routesForResult: Readonly<Record<string, readonly FleetAdminRequest['opera
 };
 
 it('lists an organization using only its ID and parses the closed WorkspaceLookup row shape', async (): Promise<void> => {
-	const payload = { result: 'workspaces', workspaces: [workspace] };
+	const payload = { result: 'workspaces', workspaces: [workspace], nextAfter: null };
 	const transport = scripted(async () => Response.json(payload));
 	const client = createFleetAdminLinkClient(transport);
 	const answer = await client.sendFleetAdminRequest({
@@ -96,7 +96,7 @@ it('lists an organization using only its ID and parses the closed WorkspaceLooku
 	expect(answer).toEqual({ kind: 'answered', result: payload });
 	const [request] = transport.sent;
 	expect(request?.url).toBe('http://central.invalid/organization-admin/v1/list-workspaces');
-	expect(await request?.json()).toEqual({ organizationId });
+	expect(await request?.json()).toEqual({ organizationId, limit: 100 });
 });
 async function producerResults(kind: 'fixtures' | 'negatives'): Promise<readonly unknown[]> {
 	return z
