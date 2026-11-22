@@ -1,6 +1,15 @@
 import { z } from 'zod';
 
 import type { CentralTransport } from '#sign-in-core/central-link/central-transport';
+import type {
+	AdminRefusal,
+	OrganizationAdminResult_Serialize,
+	OrganizationChangeKind,
+	OrganizationChangeOrigin,
+	OrganizationChangeRecord,
+	WorkspaceView_Serialize,
+} from '#sign-in-core/central-link/generated/central-sign-in.gen';
+import type { AssertWireType, WireTypesEqual } from '#sign-in-core/central-link/wire-type-equality';
 import {
 	fleetAdminRequestBody,
 	fleetAdminRoutePaths,
@@ -36,37 +45,43 @@ export const fleetAdminRefusalReasonSchema = z.enum([
 	/** The same operation ID arrived with a different request. */
 	'conflict',
 	'rejected',
+	'notFound',
+	'notRetired',
+	'discardUnsupported',
+	'stale',
+	'subjectUnreadable',
 ]);
-export type FleetAdminRefusalReason = z.infer<typeof fleetAdminRefusalReasonSchema>;
+export type FleetAdminRefusalReason = AdminRefusal;
 const refusedSchema = z.strictObject({
 	result: z.literal('refused'),
 	reason: fleetAdminRefusalReasonSchema,
 });
+const organizationChangeKindSchema = z.enum([
+	'organizationProvisioned',
+	'stampRenewed',
+	'workspaceCreated',
+	'machineEnrolled',
+	'machineRevoked',
+	'machineExpired',
+	'allowanceChanged',
+]);
+const organizationChangeOriginSchema = z.discriminatedUnion('kind', [
+	z.strictObject({ kind: z.literal('signInProvisioning') }),
+	z.strictObject({ kind: z.literal('automatic') }),
+	z.strictObject({
+		kind: z.literal('person'),
+		personId: z.string().min(1),
+		permissionChecked: z.string().min(1),
+	}),
+]);
 const changeRecordSchema = z.strictObject({
 	id: z.uuidv7().refine((id) => id === id.toLowerCase()),
 	requestId: z
 		.string()
 		.min(1)
 		.refine((value) => !value.includes('\0') && new TextEncoder().encode(value).byteLength <= 128),
-	kind: z.enum([
-		'organizationProvisioned',
-		'stampRenewed',
-		'workspaceCreated',
-		'machineEnrolled',
-		'machineRevoked',
-		'machineExpired',
-		'allowanceChanged',
-	]),
-	/** A sign-in-originated change carries no person or permission. */
-	origin: z.discriminatedUnion('kind', [
-		z.strictObject({ kind: z.literal('signInProvisioning') }),
-		z.strictObject({ kind: z.literal('automatic') }),
-		z.strictObject({
-			kind: z.literal('person'),
-			personId: z.string().min(1),
-			permissionChecked: z.string().min(1),
-		}),
-	]),
+	kind: organizationChangeKindSchema,
+	origin: organizationChangeOriginSchema,
 	targetId: z.string().min(1),
 	createdAtMillis: z.number().int(),
 });
@@ -84,10 +99,40 @@ export const fleetAdminResultSchemas = {
 		refusedSchema,
 	]),
 } as const;
-export type FleetAdminResult =
-	| z.infer<(typeof fleetAdminResultSchemas)['CreateWorkspace']>
-	| z.infer<(typeof fleetAdminResultSchemas)['WorkspaceLookup']>
-	| z.infer<(typeof fleetAdminResultSchemas)['ReadChangeRecords']>;
+type AdminReplyFor<Results extends OrganizationAdminResult_Serialize['result']> = Extract<
+	OrganizationAdminResult_Serialize,
+	{ result: Results }
+>;
+export type FleetAdminResult = AdminReplyFor<'applied' | 'found' | 'records' | 'refused'>;
+export type FleetAdminWireSchemaTypes = [
+	AssertWireType<WireTypesEqual<z.output<typeof workspaceSchema>, WorkspaceView_Serialize>>,
+	AssertWireType<WireTypesEqual<z.output<typeof fleetAdminRefusalReasonSchema>, AdminRefusal>>,
+	AssertWireType<
+		WireTypesEqual<z.output<typeof organizationChangeKindSchema>, OrganizationChangeKind>
+	>,
+	AssertWireType<
+		WireTypesEqual<z.output<typeof organizationChangeOriginSchema>, OrganizationChangeOrigin>
+	>,
+	AssertWireType<WireTypesEqual<z.output<typeof changeRecordSchema>, OrganizationChangeRecord>>,
+	AssertWireType<
+		WireTypesEqual<
+			z.output<(typeof fleetAdminResultSchemas)['CreateWorkspace']>,
+			AdminReplyFor<'applied' | 'refused'>
+		>
+	>,
+	AssertWireType<
+		WireTypesEqual<
+			z.output<(typeof fleetAdminResultSchemas)['WorkspaceLookup']>,
+			AdminReplyFor<'found' | 'refused'>
+		>
+	>,
+	AssertWireType<
+		WireTypesEqual<
+			z.output<(typeof fleetAdminResultSchemas)['ReadChangeRecords']>,
+			AdminReplyFor<'records' | 'refused'>
+		>
+	>,
+];
 
 /**
  * Central's answer, or why there is none. 401 (any token or proof failure, empty body) and 400
