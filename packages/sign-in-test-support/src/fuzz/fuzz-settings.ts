@@ -51,23 +51,121 @@ function isHegelControlFlow(error: unknown): boolean {
 
 /** What an executed case did, kept so a stopped shrink can still print it. */
 interface ExecutedCaseRecord {
-	readonly draws: string[];
+	/** The first `maximumRecordedEntries` draws, each as its JSON value or an abbreviation marker. */
+	readonly draws: unknown[];
+	drawCount: number;
+	abbreviatedDraws: number;
 	readonly notes: string[];
+	noteCount: number;
 }
 
 const maximumRecordedEntries = 200;
 const maximumRecordedLength = 300;
+const abbreviationMarker = '<abbreviated';
 
 function printable(value: unknown): string {
-	let text: string;
 	try {
-		text = JSON.stringify(value, (_key, item: unknown) =>
+		return JSON.stringify(value, (_key, item: unknown) =>
 			typeof item === 'bigint' ? item.toString() : item,
 		);
 	} catch {
-		text = String(value);
+		return JSON.stringify(String(value));
 	}
-	return text.length > maximumRecordedLength ? `${text.slice(0, maximumRecordedLength)}...` : text;
+}
+
+/** A draw as it is printed: its JSON value, or a marker saying it was cut at the character cap. */
+function recordedDraw(value: unknown, record: ExecutedCaseRecord): unknown {
+	const text = printable(value);
+	if (text.length <= maximumRecordedLength) return JSON.parse(text);
+	record.abbreviatedDraws += 1;
+	return `${abbreviationMarker} to ${maximumRecordedLength} of ${text.length} characters: ${text.slice(0, maximumRecordedLength)}>`;
+}
+
+/** The record as the lines the budget error prints; every cap it hit is said, not implied. */
+function describeRecord(record: ExecutedCaseRecord): readonly string[] {
+	return [
+		`draws: ${JSON.stringify(record.draws)}`,
+		...(record.drawCount > record.draws.length
+			? [
+					`draws omitted: ${record.drawCount - record.draws.length} of ${record.drawCount} (only the first ${maximumRecordedEntries} are kept)`,
+				]
+			: []),
+		...(record.abbreviatedDraws > 0
+			? [
+					`entries abbreviated to ${maximumRecordedLength} characters: ${record.abbreviatedDraws} draw(s)`,
+				]
+			: []),
+		...(record.noteCount > record.notes.length
+			? [
+					`notes omitted: ${record.noteCount - record.notes.length} of ${record.noteCount} (only the first ${maximumRecordedEntries} are kept)`,
+				]
+			: []),
+		...record.notes,
+	];
+}
+
+export interface FailureEvidence {
+	readonly draws: readonly unknown[];
+	/** False when the print omitted or abbreviated anything: such evidence cannot be replayed. */
+	readonly complete: boolean;
+}
+
+/** The JSON array at the start of `text`, whatever follows it on the line (Hegel appends the origin to a final line). */
+function leadingJsonArray(text: string): string {
+	let depth = 0;
+	let inString = false;
+	let escaped = false;
+	for (let index = 0; index < text.length; index += 1) {
+		const character = text.charAt(index);
+		if (inString) {
+			if (escaped) escaped = false;
+			else if (character === '\\') escaped = true;
+			else if (character === '"') inString = false;
+		} else if (character === '"') inString = true;
+		else if (character === '[') depth += 1;
+		else if (character === ']') {
+			depth -= 1;
+			if (depth === 0) return text.slice(0, index + 1);
+		}
+	}
+	throw new Error('The printed draws are not a complete JSON array');
+}
+
+/** Read the draws back out of a printed UNSHRUNK budget error. */
+export function parseFailureEvidence(message: string): FailureEvidence {
+	const line = message.split('\n').find((candidate) => candidate.startsWith('draws: '));
+	const parsed: unknown =
+		line === undefined ? [] : JSON.parse(leadingJsonArray(line.slice('draws: '.length)));
+	const draws = Array.isArray(parsed) ? parsed : [];
+	const complete =
+		line !== undefined &&
+		!/^draws omitted: /mu.test(message) &&
+		!/^entries abbreviated to /mu.test(message) &&
+		!draws.some((draw) => typeof draw === 'string' && draw.startsWith(abbreviationMarker));
+	return { draws, complete };
+}
+
+/**
+ * A test case that answers each draw from printed evidence, in order, so a recorded failure is
+ * rerun with exactly the values it drew. It refuses evidence that was omitted or abbreviated, and
+ * a replay that draws more than was printed.
+ */
+export function scriptedTestCase(evidence: FailureEvidence): Pick<hegel.TestCase, 'draw' | 'note'> {
+	if (!evidence.complete)
+		throw new Error(
+			'The printed evidence is incomplete (omitted or abbreviated entries): it cannot be replayed',
+		);
+	let next = 0;
+	return {
+		draw: <Value>(): Value => {
+			if (next >= evidence.draws.length)
+				throw new Error('The replay drew more values than the printed evidence holds');
+			const value = evidence.draws[next];
+			next += 1;
+			return value as Value;
+		},
+		note: (): void => undefined,
+	};
 }
 
 /**
@@ -83,11 +181,14 @@ function recordingTestCase(testCase: hegel.TestCase, record: ExecutedCaseRecord)
 			if (property === 'draw')
 				return (generator: Parameters<hegel.TestCase['draw']>[0]): unknown => {
 					const drawn: unknown = target.draw(generator);
-					if (record.draws.length < maximumRecordedEntries) record.draws.push(printable(drawn));
+					record.drawCount += 1;
+					if (record.draws.length < maximumRecordedEntries)
+						record.draws.push(recordedDraw(drawn, record));
 					return drawn;
 				};
 			if (property === 'note')
 				return (message: string): void => {
+					record.noteCount += 1;
 					if (record.notes.length < maximumRecordedEntries) record.notes.push(message);
 					target.note(message);
 				};
@@ -112,7 +213,13 @@ export function boundShrinking(
 						`UNSHRUNK finding, the latest failure an executed case produced:\n${latestExecutedFailure}`,
 				);
 		}
-		const record: ExecutedCaseRecord = { draws: [], notes: [] };
+		const record: ExecutedCaseRecord = {
+			draws: [],
+			drawCount: 0,
+			abbreviatedDraws: 0,
+			notes: [],
+			noteCount: 0,
+		};
 		const recorded = recordingTestCase(testCase, record);
 		try {
 			await property(recorded, (text): void => {
@@ -122,8 +229,7 @@ export function boundShrinking(
 			if (!isHegelControlFlow(error))
 				latestExecutedFailure = [
 					error instanceof Error ? error.message : String(error),
-					`draws: [${record.draws.join(', ')}]`,
-					...record.notes,
+					...describeRecord(record),
 				].join('\n');
 			throw error;
 		}

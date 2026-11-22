@@ -1,4 +1,7 @@
 import type { TestCase } from '@hegeldev/hegel';
+
+/** What a family needs of a test case: to draw. A replay can supply just that. */
+export type Drawer = Pick<TestCase, 'draw'>;
 import * as generators from '@hegeldev/hegel/generators';
 
 export interface RequestFamilyContext {
@@ -63,7 +66,7 @@ export interface RequestFamily {
 	 * one, the step is drawn from `variantSteps`, so the variant is a function of the draw alone.
 	 */
 	readonly generate: (
-		testCase: TestCase,
+		testCase: Drawer,
 		context: RequestFamilyContext,
 		step?: VariantStep,
 	) => GeneratedRequest;
@@ -97,7 +100,7 @@ function transportStep(encoding: string): VariantStep {
 }
 
 function chooseStep(
-	testCase: TestCase,
+	testCase: Drawer,
 	steps: readonly VariantStep[],
 	given: VariantStep | undefined,
 ): VariantStep {
@@ -108,7 +111,7 @@ function chooseStep(
 }
 
 function mutateFields(
-	testCase: TestCase,
+	testCase: Drawer,
 	valid: Fields,
 	step: VariantStep,
 ): { fields: Fields; label: string } {

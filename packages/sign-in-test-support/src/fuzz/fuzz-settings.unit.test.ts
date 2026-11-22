@@ -1,8 +1,17 @@
 import * as hegel from '@hegeldev/hegel';
 import * as generators from '@hegeldev/hegel/generators';
-import { expect, it } from 'vitest';
+import { describe, expect, it } from 'vitest';
 
-import { boundShrinking, fuzzSettingsExact } from '#sign-in-test-support/fuzz/fuzz-settings';
+import {
+	boundShrinking,
+	fuzzSettingsExact,
+	parseFailureEvidence,
+	scriptedTestCase,
+} from '#sign-in-test-support/fuzz/fuzz-settings';
+import { assertRequestDisclosure } from '#sign-in-test-support/fuzz/request-disclosure';
+import { requestFamilies } from '#sign-in-test-support/fuzz/request-families/index';
+import { syntheticRequestFamilyContext } from '#sign-in-test-support/fuzz/request-families/synthetic-context';
+import type { RequestStorageSnapshot } from '#sign-in-test-support/fuzz/request-storage-snapshot';
 
 interface Execution {
 	readonly value: number;
@@ -88,6 +97,107 @@ it('a capped replay prints the actual draws and the direct testCase.note trace o
 	if (latest === undefined) throw new Error('No executed failure');
 	expect(message).toContain('shrink budget exhausted');
 	// The actual draws of that executed failure, in order, and its trace.
-	expect(message).toContain(`draws: [${latest.a}, ${latest.b}]`);
+	expect(message).toContain(`draws: [${latest.a},${latest.b}]`);
 	expect(message).toContain('operation-trace a-is-large=true');
+});
+
+describe('B5 closure: printed evidence replays the failure and says what it omitted', (): void => {
+	it('says explicitly when entries were omitted or abbreviated', async (): Promise<void> => {
+		const property = boundShrinking(
+			async (testCase): Promise<void> => {
+				const long = testCase.draw(generators.text({ minSize: 400, maxSize: 400 }));
+				for (let index = 0; index < 205; index += 1)
+					testCase.draw(generators.integers({ minValue: 0, maxValue: 9 }));
+				testCase.note('a short note');
+				throw new Error(`failed with ${long.length}`);
+			},
+			{ maximumReplays: 1 },
+		);
+		let message = '';
+		try {
+			await hegel.testAsync(property, fuzzSettingsExact(20));
+		} catch (error) {
+			message = error instanceof Error ? error.message : String(error);
+		}
+		expect(message).toContain('shrink budget exhausted');
+		// The record keeps 200 entries: the other 6 draws (205 integers and the text make 206) are said to be omitted.
+		expect(message).toMatch(/draws omitted: 6 of 206/u);
+		expect(message).toMatch(/entries abbreviated to 300 characters/u);
+	});
+
+	it('replays a recorded failure from its printed draws and fails with the same named property', async (): Promise<void> => {
+		// A wrong build: the host echoes the stored session token when a boundary field is long.
+		const family = requestFamilies.find(
+			(candidate) => candidate.route.path === '/api/auth/sign-in/social',
+		);
+		if (family === undefined) throw new Error('social family missing');
+		const step = { encoding: 'json', field: 'callbackURL', mutation: 'boundary' } as const;
+		const before: RequestStorageSnapshot = {
+			session: [{ id: 'session-row', userId: 'person', token: 'session-secret' }],
+		};
+		const property = async (testCase: Pick<hegel.TestCase, 'draw'>): Promise<void> => {
+			const generated = family.generate(testCase, syntheticRequestFamilyContext, step);
+			const body: unknown = JSON.parse(String(generated.init.body));
+			const length = String(
+				typeof body === 'object' && body !== null && 'callbackURL' in body ? body.callbackURL : '',
+			).length;
+			const text = length > 2000 ? '{"echo":"session-secret"}' : '{}';
+			assertRequestDisclosure({
+				fixture: {
+					caller: 'owner',
+					sessionId: 'session-row',
+					cookie: '',
+					forbiddenIdentities: [],
+					foreignIdentities: [],
+					invitedOrganizationId: 'org',
+					invitedPersonId: 'person',
+					issuedCredentials: [],
+					context: { ...syntheticRequestFamilyContext, personId: 'person' },
+				},
+				path: '/api/auth/sign-in/social',
+				request: generated,
+				answer: {
+					status: 200,
+					headers: new Headers(),
+					text,
+					body: JSON.parse(text) as unknown,
+					bodyKind: 'json',
+				},
+				before,
+				after: before,
+			});
+		};
+		let message = '';
+		try {
+			await hegel.testAsync(
+				boundShrinking(async (testCase): Promise<void> => property(testCase), {
+					maximumReplays: 1,
+				}),
+				fuzzSettingsExact(200),
+			);
+		} catch (error) {
+			message = error instanceof Error ? error.message : String(error);
+		}
+		expect(message).toContain('S2 credential-disclosure: body contains a stored credential');
+		expect(message).toContain('UNSHRUNK');
+		// Replay from the printed evidence alone: its draws, nothing else.
+		const evidence = parseFailureEvidence(message);
+		expect(evidence.complete).toBe(true);
+		expect(evidence.draws.length).toBeGreaterThan(0);
+		await expect(property(scriptedTestCase(evidence))).rejects.toThrow(
+			'S2 credential-disclosure: body contains a stored credential',
+		);
+		// A control: the same replay with a short field does not fail, so the draws are what matters.
+		await expect(
+			property(scriptedTestCase({ draws: [10], complete: true })),
+		).resolves.toBeUndefined();
+		// And evidence that was abbreviated cannot be replayed: it refuses rather than guessing.
+		expect(() =>
+			scriptedTestCase(
+				parseFailureEvidence(
+					'draws: ["<abbreviated to 300 of 900 characters: x>"]\nentries abbreviated to 300 characters: 1 draw(s)',
+				),
+			),
+		).toThrow('abbreviated');
+	});
 });
