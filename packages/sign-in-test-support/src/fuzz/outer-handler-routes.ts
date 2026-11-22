@@ -242,3 +242,19 @@ export function staticServedOuterRoutes(props: {
 export const providerRequestHookRoutes: readonly OuterRouteIdentity[] = [
 	{ method: 'GET', path: '/.well-known/oauth-authorization-server' },
 ];
+
+/**
+ * The live probe is a one-way cross-check of the static inventory: a pair the live host serves that
+ * the static inventory lacks fails. A static pair the probe cannot tell from the reference answer is
+ * not a mismatch (the probe is the weaker instrument there), so the reverse direction is not checked.
+ */
+export function liveServedButNotStatic(props: {
+	readonly live: readonly OuterRouteIdentity[];
+	readonly staticPairs: readonly OuterRouteIdentity[];
+}): readonly string[] {
+	const known = new Set(props.staticPairs.map((route) => `${route.method} ${route.path}`));
+	return props.live
+		.map((route) => `${route.method} ${route.path}`)
+		.filter((key) => !known.has(key))
+		.map((key) => `${key}: served by the live host, absent from the static inventory`);
+}

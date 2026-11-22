@@ -15,6 +15,7 @@ import {
 	ambiguousMethodMismatches,
 	discoverOuterHandlerRoutes,
 	discoverOuterResponder,
+	liveServedButNotStatic,
 	servedOuterRoutes,
 	staticServedOuterRoutes,
 } from '#sign-in-test-support/fuzz/outer-handler-routes';
@@ -411,6 +412,59 @@ describe('B1 closure 2: the static method and path inventory is the coverage aut
 				classification: routeClassification,
 				admitted: actualOuterRoutes(classifiedPaths),
 			}),
+		).toEqual([]);
+	});
+
+	// The shape of the real responder: a GET branch first, then another method on the same path.
+	const laterMethodHandler = (later: string): string =>
+		`export function respond(request: Request, url: URL): Response | null {\n` +
+		`  if (request.method === 'GET' && ['/api/a'].includes(url.pathname)) { return new Response('page'); }\n` +
+		later +
+		`  return null;\n}\n`;
+
+	it('collects a later branch on the same path with a different method (not only the first guard)', (): void => {
+		const served = staticServed(
+			laterMethodHandler(
+				`  if (request.method === 'DELETE' && url.pathname === '/api/a') { return new Response('no', { status: 405 }); }\n`,
+			),
+			'/api/a',
+		);
+		expect(served.map((route) => route.method)).toEqual(['GET', 'DELETE']);
+	});
+
+	it('fails closed on an opaque method guard even when other branches gave evidence', (): void => {
+		for (const guard of [
+			`request.method.toUpperCase() === 'PUT'`,
+			`isAllowedMethod(request.method)`,
+			`['PUT', 'PATCH'].includes(request.method)`,
+		])
+			expect(
+				() =>
+					staticServed(
+						laterMethodHandler(
+							`  if (${guard} && url.pathname === '/api/a') { return new Response('x'); }\n`,
+						),
+						'/api/a',
+					),
+				guard,
+			).toThrow(/Unsupported route predicate form/u);
+	});
+
+	it('treats the live probe as a one-way cross-check of the static inventory', (): void => {
+		const staticPairs = [
+			{ method: 'GET', path: '/api/a' },
+			{ method: 'DELETE', path: '/api/a' },
+		];
+		// A method the live host serves that the static inventory lacks fails.
+		expect(
+			liveServedButNotStatic({
+				live: [{ method: 'PATCH', path: '/api/a' }],
+				staticPairs: staticPairs,
+			}),
+		).toEqual(['PATCH /api/a: served by the live host, absent from the static inventory']);
+		// A static method the probe cannot tell from the reference answer is not a failure.
+		expect(
+			liveServedButNotStatic({ live: [{ method: 'GET', path: '/api/a' }], staticPairs }),
 		).toEqual([]);
 	});
 });

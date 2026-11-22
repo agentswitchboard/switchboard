@@ -69,10 +69,40 @@ function literalText(expression: ts.Expression, checker: ts.TypeChecker): string
 	return undefined;
 }
 
+/** Whether an expression reads the request method anywhere outside a route-admission call. */
+function mentionsMethod(node: ts.Node, checker: ts.TypeChecker): boolean {
+	if (
+		ts.isCallExpression(node) &&
+		node.arguments.some((argument) => isPathname(argument)) &&
+		node.arguments.some((argument) => isMethodReference(argument))
+	)
+		return false;
+	if (ts.isPropertyAccessExpression(node) && node.name.text === 'method') return true;
+	// A bare `method` is the request's only where it is a parameter (a helper's); a local variable of
+	// that name (a sign-in method) is something else.
+	if (ts.isIdentifier(node) && node.text === 'method') {
+		const declared = resolveDeclaration(node, checker);
+		return declared !== undefined && ts.isParameter(declared);
+	}
+	return (
+		ts.forEachChild(node, (child) => (mentionsMethod(child, checker) ? true : undefined)) === true
+	);
+}
+
+/**
+ * A guard this reader cannot take apart. When it reads the request method it is a method guard whose
+ * methods are unknown, so the scan fails closed: ignoring it would let a served method go unseen.
+ */
+function opaqueGuard(expression: ts.Expression, checker: ts.TypeChecker): Guard {
+	if (mentionsMethod(expression, checker))
+		return unsupportedRouteForm(expression, `an opaque method guard: ${expression.getText()}`);
+	return { path: undefined, methods: [] };
+}
+
 /** Read a guard as what it says about the path and the method; anything else is opaque. */
 function analyze(expression: ts.Expression, path: string, checker: ts.TypeChecker): Guard {
 	const current = unwrapExpression(expression);
-	const opaque: Guard = { path: undefined, methods: [] };
+	const opaque = (): Guard => opaqueGuard(current, checker);
 	if (ts.isPrefixUnaryExpression(current) && current.operator === ts.SyntaxKind.ExclamationToken) {
 		const inner = analyze(current.operand, path, checker);
 		return { path: inner.path === undefined ? undefined : !inner.path, methods: inner.methods };
@@ -110,7 +140,7 @@ function analyze(expression: ts.Expression, path: string, checker: ts.TypeChecke
 				}
 			}
 		}
-		return opaque;
+		return opaque();
 	}
 	if (ts.isCallExpression(current)) {
 		const callee = current.expression;
@@ -142,7 +172,7 @@ function analyze(expression: ts.Expression, path: string, checker: ts.TypeChecke
 				// A predicate that takes the pathname and the method is the route admission itself (isPublicSignInRoute):
 				// the static admission evaluates it, so it is no dispatch evidence here.
 				if (current.arguments.some(isPathname) && current.arguments.some(isMethodReference))
-					return opaque;
+					return opaque();
 				// A helper that compares its method parameter (isSameOriginSignInPost(method, ...)).
 				const argumentIndex = current.arguments.findIndex(isMethodReference);
 				const parameter = argumentIndex < 0 ? undefined : target.parameters[argumentIndex];
@@ -154,7 +184,7 @@ function analyze(expression: ts.Expression, path: string, checker: ts.TypeChecke
 			}
 		}
 	}
-	return opaque;
+	return opaque();
 }
 
 /** The literal methods a function body compares one of its names with. */
@@ -298,10 +328,14 @@ function walkStatements(
 					frame.anchors.push(`${method} ${anchor(statement.expression)}`);
 				}
 				frame.branch.found = true;
-				return (
+				const ended =
 					walkStatements([statement.thenStatement], { ...frame, inBranch: true }, checker) ||
-					alwaysEnds(statement.thenStatement)
-				);
+					alwaysEnds(statement.thenStatement);
+				// A branch that names a method serves that method only: a later branch on the same path
+				// (another method) is still reachable and is collected. Only a branch with no method of
+				// its own ends the walk for this path.
+				if (ended && guard.methods.length === 0) return true;
+				continue;
 			}
 			// The guard does not look at the path: a method gate, or something opaque.
 			for (const method of guard.methods) {

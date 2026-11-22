@@ -4,6 +4,7 @@ import {
 	actualOuterRoutes,
 	ambiguousMethodMismatches,
 	discoverOuterResponder,
+	liveServedButNotStatic,
 	providerRequestHookRoutes,
 	servedOuterRoutes,
 	staticServedOuterRoutes,
@@ -107,13 +108,9 @@ it('classifies exactly the installed provider and outer-handler routes, and give
 		},
 	});
 	expect(served.map(routeKey).filter((key) => !classified.has(key))).toEqual([]);
-	expect(
-		ambiguousMethodMismatches({
-			served,
-			classification: routeClassification,
-			admitted: actualOuterRoutes(classifiedPaths),
-		}),
-	).toEqual([]);
+	// One way: a pair the live host serves that the static inventory lacks. A static pair the probe cannot
+	// tell from the reference answer is not a failure.
+	expect(liveServedButNotStatic({ live: served, staticPairs: staticServed })).toEqual([]);
 	for (const route of inventory.httpRoutes) {
 		const row = routeClassification.find((candidate) => routeKey(candidate) === routeKey(route));
 		expect(row?.providerServerOnly).toBe(route.serverOnly);
