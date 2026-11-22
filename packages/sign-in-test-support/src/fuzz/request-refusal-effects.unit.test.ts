@@ -95,7 +95,10 @@ it('permits an expired-session read only to advance (and drain-acknowledge) the 
 		session: [{ id: sessionId, userId: personId, expiresAt: expiredAt }],
 		personOrganizationAuthorizationRevisions: [pair('own', personId), pair('other', otherPersonId)],
 	};
-	const centralFor = (revision: number, overrides: Record<string, unknown> = {}) => ({
+	const centralFor = (
+		revision: number,
+		overrides: Record<string, unknown> = {},
+	): CentralEvidence => ({
 		pushReply: 'acknowledge',
 		pushes: [{ kind: 'person', organizationId: 'org', personId, revision, ...overrides }],
 	});
@@ -103,7 +106,7 @@ it('permits an expired-session read only to advance (and drain-acknowledge) the 
 		pairs: readonly StoredRowForTest[],
 		options: {
 			readonly sessionsAfter?: readonly StoredRowForTest[];
-			readonly central?: ReturnType<typeof centralFor>;
+			readonly central?: CentralEvidence;
 		} = {},
 	): void {
 		assertRequestRefusalEffects({
@@ -154,9 +157,10 @@ it('permits an expired-session read only to advance (and drain-acknowledge) the 
 		{ ...centralFor(2), pushReply: 'unavailable' },
 	])
 		expect(() =>
-			run([pair('own', personId, drained), pair('other', otherPersonId)], {
-				...(central === undefined ? {} : { central }),
-			}),
+			run(
+				[pair('own', personId, drained), pair('other', otherPersonId)],
+				central === undefined ? {} : { central },
+			),
 		).toThrow(effects);
 	// The pair advances only with the exact deletion: a bump while the session survives is refused.
 	expect(() =>
@@ -171,3 +175,12 @@ it('permits an expired-session read only to advance (and drain-acknowledge) the 
 });
 
 type StoredRowForTest = Record<string, unknown>;
+interface CentralEvidence {
+	readonly pushReply: string;
+	readonly pushes: readonly {
+		readonly kind: string;
+		readonly organizationId: string;
+		readonly personId?: string;
+		readonly revision: number;
+	}[];
+}
