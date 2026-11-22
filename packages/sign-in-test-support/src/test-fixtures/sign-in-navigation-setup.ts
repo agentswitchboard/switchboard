@@ -239,6 +239,9 @@ export async function followReadyLinkToMe(browser: NavigationBrowser): Promise<v
 	void terminal.catch(() => undefined);
 	await proof.page.getByRole('link', { name: 'Go to Me' }).click();
 	await proof.page.getByRole('heading', { name: 'Me', exact: true }).waitFor();
+	// Not the rendered rows: N4 makes more than the 10 passkey requests a minute that request class
+	// admits, so a late visit's list is a 429 and its skeleton never clears. The request being over
+	// is the outcome this wait owns.
 	await terminal;
 }
 
@@ -305,8 +308,7 @@ export async function observeNavigationFactors(browser: NavigationBrowser): Prom
 	await proof.afterNavigation('/owner-ready', () =>
 		proof.page.getByRole('button', { name: "I've saved my recovery codes" }).click(),
 	);
-	await proof.page.getByRole('link', { name: 'Go to Me' }).click();
-	await proof.page.getByRole('heading', { name: 'Me', exact: true }).waitFor();
+	await followReadyLinkToMe(browser);
 
 	await proof.addVirtualAuthenticator();
 	const registration = await proof.responseTo('/api/auth/passkey/verify-registration', () =>
@@ -323,7 +325,7 @@ export async function observeNavigationFactors(browser: NavigationBrowser): Prom
 		proof.page.getByRole('button', { name: 'Remove app before replacing it' }).click(),
 	);
 	expect(await rows()).toEqual([]);
-	await proof.page.getByRole('link', { name: 'Go to Me' }).click();
+	await followReadyLinkToMe(browser);
 	const enrollment = await proof.responseTo('/api/auth/two-factor/enable', () =>
 		proof.page.getByRole('button', { name: 'Set up replacement app' }).click(),
 	);
@@ -342,6 +344,5 @@ export async function observeNavigationFactors(browser: NavigationBrowser): Prom
 		proof.page.getByRole('button', { name: 'Confirm app', exact: true }).click(),
 	);
 	expect((await rows())[0]?.verified).toBe(true);
-	await proof.page.getByRole('link', { name: 'Go to Me' }).click();
-	await proof.page.getByRole('heading', { name: 'Me', exact: true }).waitFor();
+	await followReadyLinkToMe(browser);
 }
