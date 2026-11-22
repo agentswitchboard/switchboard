@@ -255,29 +255,51 @@ it('organization admin forwarding treats an engine-only refusal as upstream unav
 	}
 });
 
-it('organization admin page: renders the machine, workspace and state of an allowance change', async (): Promise<void> => {
-	const { harness, cookie } = await setup();
+it('organization admin page: renders targeted and allowance records with three distinct origins', async (): Promise<void> => {
+	const { harness, cookie, ownerId, organizationId } = await setup();
 	try {
 		const machineId = controlledSignInIds.nextId();
 		const workspaceId = controlledSignInIds.nextId();
+		const createdAtMillis = controlledSignInClock.now();
 		harness.centralAdmin.scriptNextAnswer('ReadChangeRecords', () => ({
 			result: 'records',
 			records: [
 				{
+					kind: 'organizationProvisioned',
+					id: controlledSignInIds.nextId(),
+					requestId: 'proof-provision',
+					origin: { kind: 'signInProvisioning' },
+					targetId: organizationId,
+					createdAtMillis,
+				},
+				{
 					kind: 'machineAllowanceChanged',
 					id: controlledSignInIds.nextId(),
-					requestId: 'proof-allowance-change',
+					requestId: 'proof-allow',
+					origin: { kind: 'person', personId: ownerId, permissionChecked: 'machine:enroll' },
+					machineId,
+					workspaceId,
+					state: 'active',
+					createdAtMillis,
+				},
+				{
+					kind: 'machineAllowanceChanged',
+					id: controlledSignInIds.nextId(),
+					requestId: 'proof-withdraw',
 					origin: { kind: 'automatic' },
 					machineId,
 					workspaceId,
 					state: 'withdrawn',
-					createdAtMillis: controlledSignInClock.now(),
+					createdAtMillis,
 				},
 			],
 		}));
 		const page = await openOrganizationAdminPage({ harness, cookie });
+		const timestamp = new Date(createdAtMillis).toISOString();
 		expect(page.changeRecordLines()).toEqual([
-			`${new Date(controlledSignInClock.now()).toISOString()} machineAllowanceChanged ${machineId} ${workspaceId} (withdrawn) by sign-in`,
+			`${timestamp} organizationProvisioned ${organizationId} by sign-in`,
+			`${timestamp} machineAllowanceChanged ${machineId} ${workspaceId} (active) by ${ownerId} (machine:enroll)`,
+			`${timestamp} machineAllowanceChanged ${machineId} ${workspaceId} (withdrawn) automatically in Central`,
 		]);
 	} finally {
 		await harness.close();

@@ -65,7 +65,8 @@ const recordList=document.getElementById('change-records');const workspaceList=d
 recordList.replaceChildren();workspaceList.replaceChildren();
 for(const record of records.result.records){
 const subject=record.kind==='machineAllowanceChanged'?record.machineId+' '+record.workspaceId+' ('+record.state+')':record.targetId;
-item(recordList,new Date(record.createdAtMillis).toISOString()+' '+record.kind+' '+subject+(record.origin.kind==='person'?' by '+record.origin.personId+' ('+record.origin.permissionChecked+')':' by sign-in'));}
+const origin=record.origin.kind==='person'?' by '+record.origin.personId+' ('+record.origin.permissionChecked+')':record.origin.kind==='automatic'?' automatically in Central':' by sign-in';
+item(recordList,new Date(record.createdAtMillis).toISOString()+' '+record.kind+' '+subject+origin);}
 const workspaceIds=[...new Set(records.result.records.filter((record)=>record.kind==='workspaceCreated').map((record)=>record.targetId))];
 for(const workspaceId of workspaceIds){const found=await admin('WorkspaceLookup',{organizationId,workspaceId});
 if(found.kind==='answered'&&found.result.workspace!==null)item(workspaceList,found.result.workspace.name+' ('+found.result.workspace.state+')');}}
