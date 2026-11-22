@@ -108,3 +108,43 @@ it('replays a failed host case from its printed evidence and fails the same name
 	// replay really ran the printed case against the real host.
 	await lanes.run('signed-out', async (harness) => runRequestGroup({ ...group, harness, replay }));
 }, 600_000);
+
+/**
+ * S2 on the host: a wrong build (a test-support stub, not product code) that gives a permitted caller
+ * a credential-free 200 `{}` for a malformed generated body. The campaign's own documented-answer
+ * check, given the generated request, must fail the group with its named property.
+ */
+it('the host campaign fails a permitted caller that got a credential-free 200 for a malformed body', async () => {
+	if (family === undefined || classification === undefined)
+		throw new Error('the social sign-in family is missing');
+	const seen: string[] = [];
+	const message = await lanes
+		.run('signed-out', async (harness) =>
+			runRequestGroup({
+				family,
+				caller: 'signed-out',
+				classification,
+				harness,
+				observeAnswer: (answer, request) => {
+					if (request.variant.encoding !== 'malformed') return answer;
+					seen.push(request.label);
+					return {
+						...answer,
+						status: 200,
+						headers: new Headers({ 'content-type': 'application/json' }),
+						text: '{}',
+						body: {},
+						bodyKind: 'json',
+					};
+				},
+			}),
+		)
+		.then(
+			() => {
+				throw new Error('a 200 for a malformed body passed the campaign');
+			},
+			(error: unknown) => (error instanceof Error ? error.message : String(error)),
+		);
+	expect(seen.length).toBeGreaterThan(0);
+	expect(message).toContain('S2 documented-answer');
+}, 600_000);
