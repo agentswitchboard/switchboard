@@ -117,28 +117,39 @@ async function observeUnavailableList(browser: NavigationBrowser): Promise<void>
 	const alert = passkeyList.getByRole('alert');
 	const retry = alert.getByRole('button', { name: 'Retry', exact: true });
 	await runNavigationSteps(['http-503', 'connection-failed'] as const, async (failure) => {
+		const repeatedRequest = Promise.withResolvers<void>();
 		let refused = false;
-		await proof.page.route(
-			(url) => url.pathname === passkeyListPath,
-			async (route): Promise<void> => {
-				refused = true;
-				if (failure === 'http-503') {
-					await route.fulfill({ status: 503, json: { message: 'Service unavailable' } });
-				} else {
-					await route.abort('connectionfailed');
-				}
-			},
-			{ times: 1 },
-		);
-		await visitNavigation(browser, '/me');
-		await alert.waitFor();
-		expect(refused, failure).toBe(true);
-		expect(await passkeyList.locator('[data-slot="skeleton"]').count(), failure).toBe(0);
-		expect(await alert.textContent(), failure).toContain('Passkeys are unavailable.');
-		const recovered = await proof.responseTo(passkeyListPath, () => retry.click());
-		expect(recovered.response.status, failure).toBe(200);
-		await passkeyList.getByText('No passkeys yet.', { exact: true }).waitFor();
-		expect(await alert.count(), failure).toBe(0);
+		async function refuseFirstListRequest(route: Route): Promise<void> {
+			if (refused) {
+				repeatedRequest.resolve();
+				await route.continue();
+				return;
+			}
+			refused = true;
+			if (failure === 'http-503') {
+				await route.fulfill({ status: 503, json: { message: 'Service unavailable' } });
+			} else {
+				await route.abort('connectionfailed');
+			}
+		}
+		await proof.page.route(matchesPasskeyList, refuseFirstListRequest);
+		try {
+			await visitNavigation(browser, '/me');
+			const errorOrAutomaticRequest = await Promise.race([
+				alert.waitFor().then(() => 'error displayed'),
+				repeatedRequest.promise.then(() => 'list requested again before Retry'),
+			]);
+			expect(errorOrAutomaticRequest, failure).toBe('error displayed');
+			expect(refused, failure).toBe(true);
+			expect(await passkeyList.locator('[data-slot="skeleton"]').count(), failure).toBe(0);
+			expect(await alert.textContent(), failure).toContain('Passkeys are unavailable.');
+			const recovered = await proof.responseTo(passkeyListPath, () => retry.click());
+			expect(recovered.response.status, failure).toBe(200);
+			await passkeyList.getByText('No passkeys yet.', { exact: true }).waitFor();
+			expect(await alert.count(), failure).toBe(0);
+		} finally {
+			await proof.page.unrouteAll({ behavior: 'wait' });
+		}
 	});
 }
 
