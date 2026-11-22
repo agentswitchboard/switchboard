@@ -35,6 +35,7 @@ it('holds actual response bytes until the HTTP close event without a manual rele
 	const sent = controls.send({
 		pathname: '/api/auth/jwks',
 		method: 'GET',
+		holdToken: null,
 		response: observed.response,
 		body,
 	});
@@ -54,6 +55,7 @@ it('releases the exact remaining body bytes when the explicit control is used', 
 	const sent = controls.send({
 		pathname: '/api/auth/jwks',
 		method: 'GET',
+		holdToken: null,
 		response: observed.response,
 		body,
 	});
@@ -72,6 +74,7 @@ it('keeps an armed JWKS hold out of unrelated HTTP responses', async () => {
 	await controls.send({
 		pathname: '/api/auth/other',
 		method: 'GET',
+		holdToken: null,
 		response: observed.response,
 		body,
 	});
@@ -91,6 +94,7 @@ it('rejects hold entry and disarms the hold when its signal aborts before any re
 	await controls.send({
 		pathname: '/api/auth/other',
 		method: 'GET',
+		holdToken: null,
 		response: observed.response,
 		body,
 	});
@@ -106,6 +110,7 @@ it('lets an entered hold finish as closed when its signal aborts', async () => {
 	const sent = controls.send({
 		pathname: '/api/auth/other',
 		method: 'GET',
+		holdToken: null,
 		response: observed.response,
 		body: Buffer.from('held'),
 	});
@@ -113,4 +118,20 @@ it('lets an entered hold finish as closed when its signal aborts', async () => {
 	cancellation.abort(new Error('scenario ended'));
 	await sent;
 	expect(await hold.settled).toBe('closed');
+});
+
+it('holds only the response whose request carries the armed token', async () => {
+	const controls = createAuthProofHttpResponseHolds();
+	controls.armNextGetResponse('/api/auth/other', undefined, 'token-one');
+	const unmarked = observedResponse();
+	const body = Buffer.from('unmarked');
+	await controls.send({
+		pathname: '/api/auth/other',
+		method: 'GET',
+		holdToken: null,
+		response: unmarked.response,
+		body,
+	});
+	expect(Buffer.concat(unmarked.chunks)).toEqual(body);
+	expect(() => controls.armNextGetResponse('/api/auth/other')).toThrow('already armed');
 });

@@ -7,6 +7,9 @@ interface ProofHttpResponse {
 	readonly end: (chunk: Uint8Array) => unknown;
 }
 
+/** A browser scenario marks the one request it wants held with this header; the relay strips it. */
+export const authProofHoldTokenHeader = 'x-auth-proof-hold';
+
 export interface AuthProofHttpResponseHold {
 	readonly entered: Promise<void>;
 	readonly settled: Promise<'closed' | 'released'>;
@@ -16,14 +19,20 @@ export interface AuthProofHttpResponseHold {
 /** Holds real response bytes on the existing HTTP listener, after receipt recording. */
 export function createAuthProofHttpResponseHolds(): {
 	readonly armNextJwksResponse: () => AuthProofHttpResponseHold;
-	/** An aborted signal rejects `entered`, disarms an unentered hold and releases an entered one. */
+	/**
+	 * Holds the next GET of `pathname`, only one carrying `holdToken` in its hold-token header
+	 * when a token is given. An aborted signal rejects `entered`, disarms an unentered hold and
+	 * releases an entered one.
+	 */
 	readonly armNextGetResponse: (
 		pathname: string,
 		signal?: AbortSignal,
+		holdToken?: string,
 	) => AuthProofHttpResponseHold;
 	readonly send: (props: {
 		readonly pathname: string;
 		readonly method: string;
+		readonly holdToken: string | null;
 		readonly response: ProofHttpResponse;
 		readonly body: Buffer;
 	}) => Promise<void>;
@@ -31,6 +40,7 @@ export function createAuthProofHttpResponseHolds(): {
 	let armed:
 		| {
 				readonly pathname: string;
+				readonly holdToken: string | undefined;
 				readonly entered: PromiseWithResolvers<void>;
 				readonly finished: PromiseWithResolvers<'closed' | 'released'>;
 				readonly outcome: PromiseWithResolvers<'closed' | 'released'>;
@@ -40,10 +50,11 @@ export function createAuthProofHttpResponseHolds(): {
 		armNextJwksResponse(): AuthProofHttpResponseHold {
 			return this.armNextGetResponse('/api/auth/jwks');
 		},
-		armNextGetResponse(pathname, signal): AuthProofHttpResponseHold {
+		armNextGetResponse(pathname, signal, holdToken): AuthProofHttpResponseHold {
 			if (armed !== undefined) throw new Error('HTTP response hold already armed');
 			const hold = {
 				pathname,
+				holdToken,
 				entered: Promise.withResolvers<void>(),
 				finished: Promise.withResolvers<'closed' | 'released'>(),
 				outcome: Promise.withResolvers<'closed' | 'released'>(),
@@ -63,8 +74,13 @@ export function createAuthProofHttpResponseHolds(): {
 				release: () => hold.outcome.resolve('released'),
 			};
 		},
-		async send({ pathname, method, response, body }): Promise<void> {
-			if (armed === undefined || pathname !== armed.pathname || method !== 'GET') {
+		async send({ pathname, method, holdToken, response, body }): Promise<void> {
+			if (
+				armed === undefined ||
+				pathname !== armed.pathname ||
+				method !== 'GET' ||
+				(armed.holdToken !== undefined && holdToken !== armed.holdToken)
+			) {
 				response.end(body);
 				return;
 			}
