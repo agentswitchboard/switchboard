@@ -1,9 +1,5 @@
-import { spawn } from 'node:child_process';
 import { once } from 'node:events';
-import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { createServer, request as sendHttpRequest } from 'node:http';
-import { join } from 'node:path';
-import { createInterface } from 'node:readline';
 import type { Duplex } from 'node:stream';
 
 import {
@@ -22,7 +18,10 @@ import { expect, it } from 'vitest';
 import { z } from 'zod';
 
 import { centralProductionWorkers } from '#sign-in-test-support/test-fixtures/b3-central-production-workers';
-import { assertB3CentralNativeProofArtifact } from '#sign-in-test-support/test-fixtures/b3-central-proof-pin';
+import {
+	b3CentralTrust,
+	startB3CentralTokio,
+} from '#sign-in-test-support/test-fixtures/b3-central-tokio';
 import { startLocalAuthHarness } from '#sign-in-test-support/test-fixtures/local-auth-harness';
 
 const centralExecutable = process.env.B3_CENTRAL_SERVE;
@@ -33,12 +32,8 @@ const authorizationSubject = '019f0000-0000-7000-8000-00000000d203';
 const sessionId = '019f0000-0000-7000-8000-00000000d206';
 const machineId = '019f0000-0000-7000-8000-00000000d207';
 const pendingMachineId = '019f0000-0000-7000-8000-00000000d208';
-const serviceId = '019f0000-0000-7000-8000-00000000d209';
 const issuer = 'https://sign-in.example.invalid';
-const publicOrigin = 'https://central.example.invalid';
-const audience = `${publicOrigin}/identity`;
-const adminAudience = `${publicOrigin}/admin`;
-const machineAudience = `${publicOrigin}/machine`;
+const { publicOrigin, audience, adminAudience, machineAudience } = b3CentralTrust(issuer);
 const keyId = 'b3-joint-fixture';
 const welcomeSchema = z.strictObject({
 	kind: z.literal('welcome'),
@@ -308,16 +303,12 @@ it.runIf(centralExecutable !== undefined && process.env.SIGN_IN_TEST_HOST !== 'c
 	'joins the real Central Tokio link directly and revokes the enrollment through its private admin socket',
 	async (): Promise<void> => {
 		if (centralExecutable === undefined) throw new Error('Expected the pinned Central executable');
-		await assertB3CentralNativeProofArtifact(centralExecutable);
-		const root = await mkdtemp('/tmp/b3-central-join-');
 		const { privateKey, publicKey } = await generateKeyPair('EdDSA');
 		const publicJwk = { ...(await exportJWK(publicKey)), kid: keyId, alg: 'EdDSA' };
 		const keyServer = createServer((_request, response): void => {
 			response.setHeader('content-type', 'application/json');
 			response.end(JSON.stringify({ keys: [publicJwk] }));
 		});
-		const centralRoot = join(root, 'central');
-		const centralConfig = join(root, 'central.json');
 		let stopCentral: (() => Promise<void>) | undefined;
 		let socket: Duplex | undefined;
 		try {
@@ -326,49 +317,14 @@ it.runIf(centralExecutable !== undefined && process.env.SIGN_IN_TEST_HOST !== 'c
 			const keyAddress = keyServer.address();
 			if (keyAddress === null || typeof keyAddress === 'string')
 				throw new Error('No JWKS listener');
-			await writeFile(
-				centralConfig,
-				JSON.stringify({
-					listen: '127.0.0.1:0',
-					root: centralRoot,
-					signIn: {
-						issuer,
-						audience,
-						adminAudience,
-						machineAudience,
-						publicOrigin,
-						serviceId,
-						jwksUrl: `http://127.0.0.1:${keyAddress.port}/jwks`,
-					},
-				}),
-				{ mode: 0o600 },
-			);
-			const central = spawn(centralExecutable, ['central', 'serve', '--config', centralConfig], {
-				stdio: ['ignore', 'pipe', 'inherit'],
+			const central = await startB3CentralTokio({
+				executable: centralExecutable,
+				issuer,
+				jwksUrl: `http://127.0.0.1:${keyAddress.port}/jwks`,
 			});
-			const exited = once(central, 'close');
-			stopCentral = async (): Promise<void> => {
-				central.kill('SIGTERM');
-				const [status]: readonly unknown[] = await exited;
-				expect(status).toBe(0);
-			};
-			const readiness = createInterface({ input: central.stdout });
-			const opened = await Promise.race([
-				once(readiness, 'line').then(([line]: readonly unknown[]) => {
-					if (typeof line !== 'string') throw new Error('Missing Central readiness line');
-					return /^central listening: (http:\/\/127\.0\.0\.1:\d+) \(private sign-in socket (.+)\)$/.exec(
-						line,
-					);
-				}),
-				exited.then(() => {
-					throw new Error('Central exited before readiness');
-				}),
-			]);
-			const [, tcpAddress, privateSocket] = opened ?? [];
-			if (tcpAddress === undefined || privateSocket !== join(centralRoot, 'signin.sock'))
-				throw new Error('Central did not announce the expected private listeners');
-			const tcp = new URL(tcpAddress);
-			const privateLink = createCentralUnixTransport(privateSocket);
+			stopCentral = central.close;
+			const { tcp } = central;
+			const privateLink = createCentralUnixTransport(central.socketPath);
 
 			// central serve owns a real clock. Sample its HTTP Date once for synthetic claims
 			// rather than reading the test runner's clock or asserting elapsed time.
@@ -431,7 +387,6 @@ it.runIf(centralExecutable !== undefined && process.env.SIGN_IN_TEST_HOST !== 'c
 			} finally {
 				keyServer.closeAllConnections();
 				await new Promise<void>((resolveClose) => keyServer.close(() => resolveClose()));
-				await rm(root, { recursive: true, force: true });
 			}
 		}
 	},
@@ -467,8 +422,8 @@ it.runIf(centralWorkerSource !== undefined && process.env.SIGN_IN_TEST_HOST === 
 			workerdCentral: async () =>
 				centralProductionWorkers({
 					checkout: centralWorkerSource,
-					jwksBody: JSON.stringify({ keys: [jwk] }),
-					trust: { issuer, audience, adminAudience, machineAudience, publicOrigin, serviceId },
+					readJwks: async () => JSON.stringify({ keys: [jwk] }),
+					trust: b3CentralTrust(issuer),
 				}),
 		});
 		let socket: WorkerWebSocket | null = null;

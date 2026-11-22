@@ -57,7 +57,7 @@ export const fleetAdminRefusedSchema = z.strictObject({
 	result: z.literal('refused'),
 	reason: fleetAdminRefusalReasonSchema,
 });
-/** Provisional mirror of Central 054c8fcc4 until DEL-08 merges and generated types replace it. */
+/** Central DEL-08 at b0e33b15, mirrored until the generated wire types are available. */
 export const listWorkspacesPath = '/organization-admin/v1/list-workspaces';
 export const listWorkspacesPageLimit = 100;
 export const listWorkspacesReplySchema = z.discriminatedUnion('result', [

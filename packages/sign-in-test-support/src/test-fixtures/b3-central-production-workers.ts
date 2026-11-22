@@ -2,12 +2,22 @@ import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
 import { Response as WorkerResponse, type WorkerOptions } from 'miniflare';
+import { z } from 'zod';
 
 import { assertB3CentralWorkerProofArtifacts } from '#sign-in-test-support/test-fixtures/b3-central-proof-pin';
 import {
 	textBindings,
 	type WorkerdCentralRuntime,
 } from '#sign-in-test-support/test-fixtures/local-auth-harness';
+
+export const workspaceListPath = '/organization-admin/v1/list-workspaces';
+export const deviceDecisionPath = '/internal/device-login-decisions';
+const observedCentralReplySchema = z.strictObject({
+	path: z.enum([workspaceListPath, deviceDecisionPath]),
+	status: z.number().int(),
+	body: z.unknown(),
+});
+export type ObservedCentralReply = z.infer<typeof observedCentralReplySchema>;
 
 async function centralBundle(
 	checkout: string,
@@ -29,7 +39,8 @@ async function centralBundle(
 
 export async function centralProductionWorkers(props: {
 	readonly checkout: string;
-	readonly jwksBody: string;
+	readonly readJwks: () => Promise<string>;
+	readonly observe?: (reply: ObservedCentralReply) => void;
 	readonly trust: {
 		readonly issuer: string;
 		readonly audience: string;
@@ -41,7 +52,7 @@ export async function centralProductionWorkers(props: {
 }): Promise<WorkerdCentralRuntime> {
 	const {
 		checkout,
-		jwksBody,
+		readJwks,
 		trust: { issuer, audience, adminAudience, machineAudience, publicOrigin, serviceId },
 	} = props;
 	await assertB3CentralWorkerProofArtifacts(checkout);
@@ -66,8 +77,55 @@ export async function centralProductionWorkers(props: {
 		centralBundle(checkout, 'build'),
 		centralBundle(checkout, 'build-link'),
 	]);
+	const observationName = 'central-production-observer';
+	const observe = props.observe;
+	const observationWorker: WorkerOptions | undefined =
+		observe === undefined
+			? undefined
+			: {
+					config: {
+						type: 'worker',
+						name: observationName,
+						compatibilityDate: '2026-08-21',
+						manifest: {
+							mainModule: 'observer.mjs',
+							modules: {
+								'observer.mjs': {
+									type: 'esm',
+									contents: `
+				export default { async fetch(request, env) {
+					const response = await env.UPSTREAM.fetch(request);
+					const path = new URL(request.url).pathname;
+					if (path === '${workspaceListPath}' || path === '${deviceDecisionPath}') {
+						const body = await response.clone().json().catch(() => null);
+						await env.OBSERVE.fetch('http://observe.invalid', {
+							method: 'POST', body: JSON.stringify({ path, status: response.status, body }),
+						});
+					}
+					return response;
+				} };
+			`,
+								},
+							},
+						},
+						env: {
+							UPSTREAM: { type: 'worker', workerName: privateName },
+							OBSERVE: {
+								type: 'fetcher',
+								async handler(request): Promise<WorkerResponse> {
+									observe(observedCentralReplySchema.parse(await request.json()));
+									return new WorkerResponse(null, { status: 204 });
+								},
+							},
+						},
+					},
+				};
 	return {
-		centralBinding: { type: 'worker', workerName: privateName },
+		centralBinding: {
+			type: 'worker',
+			workerName: observationWorker === undefined ? privateName : observationName,
+		},
+		...(observationWorker === undefined ? {} : { observationWorker }),
 		storageWorker: {
 			config: {
 				type: 'worker',
@@ -89,7 +147,9 @@ export async function centralProductionWorkers(props: {
 					type: 'fetcher',
 					handler: async (request): Promise<WorkerResponse> =>
 						request.method === 'GET' && request.url === jwksUrl
-							? new WorkerResponse(jwksBody, { headers: { 'content-type': 'application/json' } })
+							? new WorkerResponse(await readJwks(), {
+									headers: { 'content-type': 'application/json' },
+								})
 							: new WorkerResponse(null, { status: 502 }),
 				},
 			},

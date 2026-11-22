@@ -7,15 +7,15 @@ import { promisify } from 'node:util';
 const runFile = promisify(execFile);
 
 export const b3CentralProofPin = {
-	commit: '19d097732af9db9b5d3019c37b308707d4a5a73c',
-	tree: '93c5c52403ebc903edf0f967e7b8e6afda83606c',
+	commit: 'b0e33b15e6d7b9cc448f3fa822b3a3ca2159eb10',
+	tree: '57808cb62351b00db87ab8c073171ec2a1b2cbc8',
 	// Locked production CLI debug build, then signed for direct macOS execution.
-	nativeSha256: '0daa4a04722e581557b6f0fe299154d39a968c2020564884b634318a4d98668d',
+	nativeSha256: 'ef8af00ff781cc864a0607819a13e7a483e370c640b3370d9d92db2e3a81d3b1',
 	workers: {
 		'build/index.js': '78ba0e8570ad458e63cb51d6ae1740e27f5e38c7aaf34f9d19610295557efea6',
-		'build/index_bg.wasm': 'd1d2f5e6d5e36716753268519389b2ee33cc8ed57d406a8a031aa7cdf070cf81',
+		'build/index_bg.wasm': 'd53f81cff8a61846c8b6c542fbd1a4bec52581e702d4a1905d0911ac9da33a70',
 		'build-link/index.js': '6b37e7d90a31920d7edb3b685f6a725332b78c82a6b89fd634a43f49e8710caf',
-		'build-link/index_bg.wasm': 'ba13823d764ef8c17db11ed5501a0244553bd1b77e858a32588ba356f036b750',
+		'build-link/index_bg.wasm': '9a9021c391c7addbf020efe829d630314bcd6d4bbdc37283d6e7d5cdbb896f77',
 	},
 } as const;
 

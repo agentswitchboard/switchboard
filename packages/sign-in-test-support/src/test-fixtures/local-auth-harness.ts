@@ -141,6 +141,7 @@ export interface WorkerdCentralRuntime {
 	readonly centralBinding: WorkerEnvironmentBinding;
 	readonly privateWorker?: WorkerOptions;
 	readonly storageWorker?: WorkerOptions;
+	readonly observationWorker?: WorkerOptions;
 }
 
 export async function startLocalAuthHarness(
@@ -673,6 +674,9 @@ export async function startLocalAuthHarness(
 						},
 						...(machineLinkStorageWorker === undefined ? [] : [machineLinkStorageWorker]),
 						...(workerdCentral?.privateWorker === undefined ? [] : [workerdCentral.privateWorker]),
+						...(workerdCentral?.observationWorker === undefined
+							? []
+							: [workerdCentral.observationWorker]),
 						...['gateway-one', 'gateway-two'].map((name): WorkerOptions => ({
 							config: {
 								type: 'worker',

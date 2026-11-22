@@ -103,7 +103,7 @@ async function confirmAndRetryDenyInBrowser(props: {
 	});
 }
 
-it('the real host approves one machine ID, presents active workspaces and releases one redemption', async (): Promise<void> => {
+it('the real host approves one machine ID, handles a Central replay conflict and releases one redemption', async (): Promise<void> => {
 	const approveBodies: z.infer<typeof decideDeviceLoginSchema>[] = [];
 	const mintBodies: z.infer<typeof decideMachineTokenSchema>[] = [];
 	const revokeBodies: Array<{ readonly organizationId: string; readonly enrollmentId: string }> =
@@ -171,43 +171,6 @@ it('the real host approves one machine ID, presents active workspaces and releas
 			.parse(decodeJwt(await harness.ownerToken()));
 		const organizationId = ownerClaims.organization_id;
 		await harness.settleDeferredWork();
-		function offerWorkspacePages(): void {
-			harness.centralAdmin.scriptNextAnswer('ListWorkspaces', (request) => {
-				if (
-					request.operation !== 'ListWorkspaces' ||
-					request.after !== undefined ||
-					request.limit !== 100
-				)
-					throw new Error('First workspace page was not requested');
-				return {
-					result: 'workspaces',
-					workspaces: [
-						{
-							workspaceId: enrollmentId,
-							name: 'Archived workspace',
-							description: '',
-							state: 'archived',
-						},
-					],
-					next: enrollmentId,
-				};
-			});
-			harness.centralAdmin.scriptNextAnswer('ListWorkspaces', (request) => {
-				if (
-					request.operation !== 'ListWorkspaces' ||
-					request.after !== enrollmentId ||
-					request.limit !== 100
-				)
-					throw new Error('Workspace continuation was not requested');
-				return {
-					result: 'workspaces',
-					workspaces: [{ workspaceId, name: 'Active workspace', description: '', state: 'active' }],
-					next: null,
-				};
-			});
-		}
-		offerWorkspacePages();
-
 		const deviceRequest = {
 			client_id: routerClientId,
 			machine_id: machineId,
@@ -232,8 +195,6 @@ it('the real host approves one machine ID, presents active workspaces and releas
 		const html = await page.text();
 		expect(html).toContain('Machines');
 		expect(html).toContain('data-device-page-state="review"');
-		expect(html).toContain('Active workspace');
-		expect(html).not.toContain('Archived workspace');
 		const [eligible] = await harness.database
 			.select()
 			.from(deviceCode)
@@ -269,40 +230,39 @@ it('the real host approves one machine ID, presents active workspaces and releas
 				permissions: expect.arrayContaining(['organization:view']),
 			}),
 		);
-		offerWorkspacePages();
 		const decide = (allowedWorkspaces: readonly string[]): Promise<Response> =>
 			harness.auth('/api/auth/machine-login/approve', {
 				method: 'POST',
 				headers: { 'content-type': 'application/json', origin: harness.issuer },
 				body: JSON.stringify({ userCode: code.user_code, allowedWorkspaces }),
 			});
-		const approval = await decide([workspaceId]);
+		const approval = await decide([]);
 		expect(approval.status).toBe(200);
 		expect(approval.headers.has('set-cookie')).toBe(false);
 		expect(approval.headers.has('authorization')).toBe(false);
 		expect(await approval.json()).toEqual({
 			enrollmentId,
 			label: 'Proof Mac',
-			allowedWorkspaces: [workspaceId],
+			allowedWorkspaces: [],
 		});
 		expect(approveBodies[0]).toMatchObject({
 			organizationId,
 			machineId,
-			allowedWorkspaces: [workspaceId],
+			allowedWorkspaces: [],
 		});
 
 		const workspaceReads = harness.centralAdmin.arrivals.filter(
 			({ route }) => route === 'ListWorkspaces',
 		).length;
-		expect(workspaceReads).toBe(4);
-		const repeated = await decide([workspaceId]);
+		expect(workspaceReads).toBe(2);
+		const repeated = await decide([]);
 		expect(repeated.status).toBe(200);
 		expect(await repeated.json()).toEqual({
 			enrollmentId,
 			label: 'Proof Mac',
-			allowedWorkspaces: [workspaceId],
+			allowedWorkspaces: [],
 		});
-		const conflict = await decide([]);
+		const conflict = await decide([workspaceId]);
 		expect(conflict.status).toBe(409);
 		expect(await conflict.json()).toEqual({
 			error: 'access_denied',
