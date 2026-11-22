@@ -69,14 +69,25 @@ function literalText(expression: ts.Expression, checker: ts.TypeChecker): string
 	return undefined;
 }
 
+/**
+ * Whether a call is the route admission itself: the call of the declared `isPublicSignInRoute` of
+ * the sign-in request handler, identified by what it resolves to and not by the shape of its
+ * arguments (the static admission interpreter evaluates it; it is no dispatch evidence here).
+ */
+function isRouteAdmissionCall(node: ts.Node, checker: ts.TypeChecker): boolean {
+	if (!ts.isCallExpression(node) || !ts.isIdentifier(node.expression)) return false;
+	const target = resolveDeclaration(node.expression, checker);
+	return (
+		target !== undefined &&
+		ts.isFunctionDeclaration(target) &&
+		target.name?.text === 'isPublicSignInRoute' &&
+		target.getSourceFile().fileName.endsWith('response-release/sign-in-request-handler.ts')
+	);
+}
+
 /** Whether an expression reads the request method anywhere outside a route-admission call. */
 function mentionsMethod(node: ts.Node, checker: ts.TypeChecker): boolean {
-	if (
-		ts.isCallExpression(node) &&
-		node.arguments.some((argument) => isPathname(argument)) &&
-		node.arguments.some((argument) => isMethodReference(argument))
-	)
-		return false;
+	if (isRouteAdmissionCall(node, checker)) return false;
 	if (ts.isPropertyAccessExpression(node) && node.name.text === 'method') return true;
 	// A bare `method` is the request's only where it is a parameter (a helper's); a local variable of
 	// that name (a sign-in method) is something else.
@@ -169,10 +180,10 @@ function analyze(expression: ts.Expression, path: string, checker: ts.TypeChecke
 				const table = tablePathsOfDeclaration(target, checker);
 				if (table !== undefined && current.arguments.some(isPathname))
 					return { path: table.includes(path), methods: [] };
-				// A predicate that takes the pathname and the method is the route admission itself (isPublicSignInRoute):
-				// the static admission evaluates it, so it is no dispatch evidence here.
-				if (current.arguments.some(isPathname) && current.arguments.some(isMethodReference))
-					return opaque();
+				// The route admission itself (isPublicSignInRoute) is evaluated by the static admission, so it
+				// is no dispatch evidence here. Any other helper that takes the pathname and the method is read
+				// like every helper below, and fails closed when it cannot be.
+				if (isRouteAdmissionCall(current, checker)) return { path: undefined, methods: [] };
 				// A helper that compares its method parameter (isSameOriginSignInPost(method, ...)).
 				const argumentIndex = current.arguments.findIndex(isMethodReference);
 				const parameter = argumentIndex < 0 ? undefined : target.parameters[argumentIndex];
@@ -187,13 +198,18 @@ function analyze(expression: ts.Expression, path: string, checker: ts.TypeChecke
 	return opaque();
 }
 
-/** The literal methods a function body compares one of its names with. */
+/**
+ * The literal methods a function body compares one of its names with. Every use of the name must be
+ * such a comparison: array membership, a computed form, a call that passes it on or no use at all is
+ * a method guard this reader cannot take apart, and the scan fails closed.
+ */
 function methodsComparedTo(
 	name: string,
 	body: ts.Node,
 	checker: ts.TypeChecker,
 ): readonly string[] {
 	const found: string[] = [];
+	const compared = new Set<ts.Node>();
 	function visit(node: ts.Node): void {
 		if (
 			ts.isBinaryExpression(node) &&
@@ -209,12 +225,26 @@ function methodsComparedTo(
 					ts.isIdentifier(unwrapExpression(subject)) && unwrapExpression(subject).getText() === name
 						? literalText(other, checker)
 						: undefined;
-				if (literal !== undefined && httpMethods.has(literal)) found.push(literal);
+				if (literal !== undefined && httpMethods.has(literal)) {
+					found.push(literal);
+					compared.add(unwrapExpression(subject));
+				}
 			}
 		}
 		ts.forEachChild(node, visit);
 	}
 	visit(body);
+	function checkUses(node: ts.Node): void {
+		if (ts.isIdentifier(node) && node.text === name && !compared.has(node))
+			unsupportedRouteForm(
+				node,
+				`an opaque method guard: ${name} is used in ${node.parent.getText()}`,
+			);
+		ts.forEachChild(node, checkUses);
+	}
+	checkUses(body);
+	if (found.length === 0)
+		unsupportedRouteForm(body, `an opaque method guard: ${name} is never compared with a method`);
 	return found;
 }
 
@@ -334,7 +364,14 @@ function walkStatements(
 				// A branch that names a method serves that method only: a later branch on the same path
 				// (another method) is still reachable and is collected. Only a branch with no method of
 				// its own ends the walk for this path.
-				if (ended && guard.methods.length === 0) return true;
+				if (guard.methods.length === 0) {
+					if (ended) return true;
+					continue;
+				}
+				// The condition matched path and method: the else arm (and an else-if chain) is reached by the
+				// other methods on this same path, so it is walked too.
+				if (statement.elseStatement !== undefined)
+					walkStatements([statement.elseStatement], { ...frame, inBranch: true }, checker);
 				continue;
 			}
 			// The guard does not look at the path: a method gate, or something opaque.

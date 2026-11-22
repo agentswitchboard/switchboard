@@ -334,7 +334,10 @@ describe('B1 closure 2: the static method and path inventory is the coverage aut
 				: original(name, languageVersion, ...rest);
 		const program = ts.createProgram(['synthetic-handler.ts'], {}, host);
 		const file = program.getSourceFile('synthetic-handler.ts');
-		const responder = file?.statements.find(ts.isFunctionDeclaration);
+		const responder = file?.statements.find(
+			(statement): statement is ts.FunctionDeclaration =>
+				ts.isFunctionDeclaration(statement) && statement.name?.text === 'respond',
+		);
 		if (responder === undefined) throw new Error('no responder');
 		return staticServedOuterRoutes({
 			responder,
@@ -466,5 +469,76 @@ describe('B1 closure 2: the static method and path inventory is the coverage aut
 		expect(
 			liveServedButNotStatic({ live: [{ method: 'GET', path: '/api/a' }], staticPairs }),
 		).toEqual([]);
+	});
+
+	// Closure 4 (a): the else arm and an else-if chain of a branch that matched path and method.
+	const elseHandler = (arm: string): string =>
+		`export function respond(request: Request, url: URL): Response | null {\n` +
+		`  if (request.method === 'GET' && url.pathname === '/api/a') { return new Response('page'); } ${arm}\n` +
+		`  return null;\n}\n`;
+
+	it('walks the else arm and the else-if chain of a branch that matched path and method', (): void => {
+		for (const arm of [
+			`else if (url.pathname === '/api/a') { if (request.method === 'DELETE') { return new Response('no', { status: 405 }); } }`,
+			`else if (request.method === 'DELETE' && url.pathname === '/api/a') { return new Response('no', { status: 405 }); }`,
+			`else { if (request.method === 'DELETE' && url.pathname === '/api/a') { return new Response('no', { status: 405 }); } }`,
+		])
+			expect(
+				staticServed(elseHandler(arm), '/api/a').map((route) => route.method),
+				arm,
+			).toEqual(['GET', 'DELETE']);
+	});
+
+	// Closure 4 (b): a resolved helper that reads the method in a form the walker cannot take apart.
+	const helperHandler = (helper: string, guard: string): string =>
+		`${helper}\nexport function respond(request: Request, url: URL): Response | null {\n` +
+		`  if (request.method === 'GET' && url.pathname === '/api/a') { return new Response('page'); }\n` +
+		`  if (${guard}) { return new Response('x'); }\n  return null;\n}\n`;
+
+	it('fails closed on a resolved helper that reads the method in an opaque form, after an earlier branch gave evidence', (): void => {
+		for (const [helper = '', guard = ''] of [
+			[
+				`function allowed(method: string): boolean { return ['PUT', 'PATCH'].includes(method); }`,
+				`allowed(request.method) && url.pathname === '/api/a'`,
+			],
+			[
+				`function allowed(method: string): boolean { return method.toUpperCase() === 'PUT'; }`,
+				`allowed(request.method) && url.pathname === '/api/a'`,
+			],
+			[
+				`function allowed(method: string): boolean { return true; }`,
+				`allowed(request.method) && url.pathname === '/api/a'`,
+			],
+			[
+				`function allowed(method: string): boolean { return other(method); }\nfunction other(value: string): boolean { return value === 'PUT'; }`,
+				`allowed(request.method) && url.pathname === '/api/a'`,
+			],
+		])
+			expect(() => staticServed(helperHandler(helper, guard), '/api/a'), helper).toThrow(
+				/Unsupported route predicate form/u,
+			);
+		// A helper that compares its parameter with a literal method is still read.
+		expect(
+			staticServed(
+				helperHandler(
+					`function allowed(method: string): boolean { return method === 'PUT'; }`,
+					`allowed(request.method) && url.pathname === '/api/a'`,
+				),
+				'/api/a',
+			).map((route) => route.method),
+		).toEqual(['GET', 'PUT']);
+	});
+
+	it('exempts only the actual admission predicate, not any call that takes a pathname and a method', (): void => {
+		// A look-alike: takes the pathname and the method, reads the method as array membership.
+		expect(() =>
+			staticServed(
+				helperHandler(
+					`function isAdmitted(pathname: string, method: string): boolean { return ['PUT', 'PATCH'].includes(method) && pathname === '/api/a'; }`,
+					`isAdmitted(url.pathname, request.method)`,
+				),
+				'/api/a',
+			),
+		).toThrow(/Unsupported route predicate form/u);
 	});
 });
