@@ -5,12 +5,16 @@ import type { RequestCaseFixture } from '#sign-in-test-support/fuzz/request-case
 import type {
 	GeneratedRequest,
 	RequestFamilyContext,
+	VariantStep,
 } from '#sign-in-test-support/fuzz/request-families/index';
 import {
 	storedCredentials,
 	type RequestStorageSnapshot,
 } from '#sign-in-test-support/fuzz/request-storage-snapshot';
-import type { RouteClassification } from '#sign-in-test-support/fuzz/route-classification';
+import type {
+	RouteCaller,
+	RouteClassification,
+} from '#sign-in-test-support/fuzz/route-classification';
 import { controlledSignInClock } from '#sign-in-test-support/test-fixtures/controlled-sign-in-clock';
 import { expectNoIssuedCredentials } from '#sign-in-test-support/test-fixtures/credential-free-refusal';
 
@@ -307,19 +311,66 @@ export function assertRequestDisclosure(props: {
 	}
 }
 
-/** A 5xx or 404 is documented only when its body carries the route's native error fields. */
+/**
+ * A native error status (the unknown-provider 404, a refused 409) is documented only together with
+ * its exact body, the callers it is for and the input that causes it. Any condition missing, an
+ * extra body field, another caller or a request that did not change the named field fails.
+ */
 export function assertDocumentedErrorBody(props: {
 	readonly documentedErrorBodies: RouteClassification['documentedErrorBodies'];
 	readonly answer: Pick<ObservedRequestAnswer, 'status' | 'body'>;
+	readonly caller: RouteCaller;
+	readonly variant: VariantStep;
 }): void {
-	const expected = props.documentedErrorBodies?.[props.answer.status];
-	if (expected === undefined) return;
-	const actual = z.record(z.string(), z.unknown()).safeParse(props.answer.body);
+	const documented = props.documentedErrorBodies?.[props.answer.status];
+	if (documented === undefined) return;
+	const refuse = (why: string): never => {
+		throw new Error(`S2 documented-answer: status ${props.answer.status} ${why}`);
+	};
+	if (documented.callers !== undefined && !documented.callers.includes(props.caller))
+		refuse(`is not documented for the ${props.caller} caller`);
 	if (
-		!actual.success ||
-		Object.entries(expected).some(([field, value]) => actual.data[field] !== value)
+		documented.variantFields !== undefined &&
+		(props.variant.field === null ||
+			props.variant.mutation === 'valid' ||
+			!documented.variantFields.includes(props.variant.field))
 	)
-		throw new Error(
-			`S2 documented-answer: status ${props.answer.status} without its documented error body`,
+		refuse('is not documented for a request that did not change its documented input');
+	const actual = z.record(z.string(), z.unknown()).safeParse(props.answer.body);
+	if (!actual.success) return refuse('has no documented error body');
+	if (Object.entries(documented.values).some(([field, value]) => actual.data[field] !== value))
+		refuse('has another error body than its documented one');
+	const keys = Object.keys(actual.data).toSorted();
+	if (JSON.stringify(keys) !== JSON.stringify([...documented.exactKeys].toSorted()))
+		refuse(
+			`carries body fields ${keys.join(',')} instead of exactly ${documented.exactKeys.join(',')}`,
 		);
+}
+
+/**
+ * A refusal's body is generic: empty, or an object of these error-describing keys with plain values.
+ * `error_description` is the OAuth error field (RFC 6749 section 5.2) of the token and introspection routes.
+ */
+const genericRefusalKeys = new Set([
+	'error',
+	'error_description',
+	'message',
+	'code',
+	'kind',
+	'reason',
+	'status',
+]);
+
+export function assertGenericRefusalBody(
+	answer: Pick<ObservedRequestAnswer, 'status' | 'body'>,
+): void {
+	if (answer.status < 400 || answer.body === null) return;
+	const record = z.record(z.string(), z.unknown()).safeParse(answer.body);
+	if (!record.success)
+		throw new Error('S2 documented-answer: a refusal body is not a generic error object');
+	for (const [key, value] of Object.entries(record.data))
+		if (!genericRefusalKeys.has(key) || !['string', 'number', 'boolean'].includes(typeof value))
+			throw new Error(
+				`S2 documented-answer: a refusal body carries ${key}, beyond a generic error`,
+			);
 }

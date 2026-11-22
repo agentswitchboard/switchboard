@@ -18,6 +18,28 @@ export type PermittedRefusalEffect =
 	| 'provider-verification-consumption'
 	| 'cookie-delete';
 
+export type RouteCaller = 'signed-out' | 'member' | 'owner';
+
+/**
+ * A status that is documented only together with its body and the conditions that produce it: the
+ * exact set of body keys, the values the native error carries, the callers it is for, and the
+ * request input (a changed field) that causes it. Missing any condition is not the documented answer.
+ */
+export interface DocumentedErrorBody {
+	readonly values: Readonly<Record<string, unknown>>;
+	readonly exactKeys: readonly string[];
+	readonly callers?: readonly RouteCaller[];
+	readonly variantFields?: readonly string[];
+}
+
+/** The answers a caller may get from a route: its own list where the route names one. */
+export function documentedAnswersFor(
+	classification: Pick<RouteClassification, 'documentedAnswers' | 'documentedAnswersByCaller'>,
+	caller: RouteCaller,
+): readonly number[] {
+	return classification.documentedAnswersByCaller?.[caller] ?? classification.documentedAnswers;
+}
+
 export interface RouteClassification extends RouteIdentity {
 	readonly exposure: readonly RouteExposure[];
 	readonly requestParts: readonly RequestPart[];
@@ -27,7 +49,9 @@ export interface RouteClassification extends RouteIdentity {
 	readonly evidence: string;
 	readonly providerServerOnly?: boolean;
 	/** Fields the body of a native error answer must carry; the only way a 5xx or 404 is documented. */
-	readonly documentedErrorBodies?: Readonly<Record<number, Readonly<Record<string, unknown>>>>;
+	readonly documentedErrorBodies?: Readonly<Record<number, DocumentedErrorBody>>;
+	/** Where a caller may get fewer answers than the route-wide list, its own list. */
+	readonly documentedAnswersByCaller?: Readonly<Partial<Record<RouteCaller, readonly number[]>>>;
 }
 
 interface ReachableRouteGroup {
@@ -39,7 +63,8 @@ interface ReachableRouteGroup {
 	readonly disclosure: string;
 	readonly permittedRefusalEffects: readonly PermittedRefusalEffect[];
 	readonly evidence: string;
-	readonly documentedErrorBodies?: Readonly<Record<number, Readonly<Record<string, unknown>>>>;
+	readonly documentedErrorBodies?: Readonly<Record<number, DocumentedErrorBody>>;
+	readonly documentedAnswersByCaller?: Readonly<Partial<Record<RouteCaller, readonly number[]>>>;
 }
 
 // These groups are transcribed from the sign-in route contracts and permanent host tests,
@@ -57,13 +82,28 @@ const reachableRouteGroups: readonly ReachableRouteGroup[] = [
 	},
 	{
 		method: 'GET',
-		paths: ['/me', '/people'],
+		paths: ['/me'],
 		exposure: ['signed-out', 'member', 'owner'],
 		requestParts: ['query'],
 		// Signed-in shell pages (sign-in-navigation.ts:92-122): the page for a person with a current
 		// organization (200), a step back to /sign-in or /owner-ready (303), a refusal for a person
 		// without the page's permission or for a request carrying an authorization header (403).
 		documentedAnswers: [200, 303, 403, 429],
+		disclosure: "Only the caller's own organization choices and the pages the current role allows.",
+		permittedRefusalEffects: ['none', 'expired-session-cleanup', 'cookie-delete'],
+		evidence: 'sign-in-navigation.ts:92-122; sign-in-navigation.host.e2e.test.ts',
+	},
+	{
+		method: 'GET',
+		paths: ['/people'],
+		exposure: ['signed-out', 'member', 'owner'],
+		requestParts: ['query'],
+		// Signed-in shell pages (sign-in-navigation.ts:92-122): the page for a person with a current
+		// organization (200), a step back to /sign-in or /owner-ready (303), a refusal for a person
+		// without the page's permission or for a request carrying an authorization header (403).
+		documentedAnswers: [200, 303, 403, 429],
+		// A member sees only Me: the People page is refused to a member (sign-in-navigation.ts:107-111).
+		documentedAnswersByCaller: { member: [303, 403, 429] },
 		disclosure: "Only the caller's own organization choices and the pages the current role allows.",
 		permittedRefusalEffects: ['none', 'expired-session-cleanup', 'cookie-delete'],
 		evidence: 'sign-in-navigation.ts:92-122; sign-in-navigation.host.e2e.test.ts',
@@ -206,7 +246,13 @@ const reachableRouteGroups: readonly ReachableRouteGroup[] = [
 		// controlled central confirms setup, so the plugin's 503 "setting up" answer is not a
 		// documented answer here: F1 injects no unavailable central, and a 5xx always fails.
 		documentedAnswers: [200, 400, 401, 403, 409, 415, 429],
-		documentedErrorBodies: { 409: { kind: 'refused' } },
+		documentedErrorBodies: {
+			409: {
+				values: { kind: 'refused' },
+				exactKeys: ['kind', 'reason'],
+				callers: ['member', 'owner'],
+			},
+		},
 		disclosure: 'Only the caller’s own organization setup state; no credential in refusal.',
 		permittedRefusalEffects: ['none', 'expired-session-cleanup', 'cookie-delete'],
 		evidence:
@@ -233,6 +279,8 @@ const reachableRouteGroups: readonly ReachableRouteGroup[] = [
 		exposure: ['member', 'owner'],
 		requestParts: ['query'],
 		documentedAnswers: [200, 400, 401, 403, 429],
+		// A member sees only Me: the owner People reads are refused to a member (B1-C S3-S10).
+		documentedAnswersByCaller: { member: [400, 401, 403, 429] },
 		disclosure:
 			'Only the current organization’s people page, for a caller with live view permission.',
 		permittedRefusalEffects: ['none', 'expired-session-cleanup', 'cookie-delete'],
@@ -245,6 +293,8 @@ const reachableRouteGroups: readonly ReachableRouteGroup[] = [
 		exposure: ['member', 'owner'],
 		requestParts: ['query'],
 		documentedAnswers: [200, 303, 400, 403, 429],
+		// A member sees only Me: the owner People reads are refused to a member (B1-C S3-S10).
+		documentedAnswersByCaller: { member: [303, 400, 403, 429] },
 		disclosure: 'Only the current organization’s people page; signed-out callers go to /sign-in.',
 		permittedRefusalEffects: ['none', 'expired-session-cleanup', 'cookie-delete'],
 		evidence:
@@ -256,6 +306,8 @@ const reachableRouteGroups: readonly ReachableRouteGroup[] = [
 		exposure: ['member', 'owner'],
 		requestParts: ['json'],
 		documentedAnswers: [200, 400, 401, 403, 429],
+		// A member sees only Me: the owner People reads are refused to a member (B1-C S3-S10).
+		documentedAnswersByCaller: { member: [400, 401, 403, 429] },
 		disclosure:
 			'Only whether one person belongs to the caller’s current organization; no other organization.',
 		permittedRefusalEffects: ['none', 'expired-session-cleanup', 'cookie-delete'],
@@ -327,7 +379,13 @@ const reachableRouteGroups: readonly ReachableRouteGroup[] = [
 		// Better Auth answers an unknown provider with 404 PROVIDER_NOT_FOUND (sign-in.mjs:152,
 		// account.mjs:160 in better-auth 1.7.11).
 		documentedAnswers: [200, 302, 400, 401, 403, 404, 415, 429],
-		documentedErrorBodies: { 404: { code: 'PROVIDER_NOT_FOUND' } },
+		documentedErrorBodies: {
+			404: {
+				values: { code: 'PROVIDER_NOT_FOUND' },
+				exactKeys: ['code', 'message'],
+				variantFields: ['provider'],
+			},
+		},
 		disclosure: 'Only the caller’s authorized redirect; no credential in refusal.',
 		permittedRefusalEffects: [
 			'none',

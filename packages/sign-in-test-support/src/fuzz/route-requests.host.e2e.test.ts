@@ -10,6 +10,7 @@ import {
 import { createRequestCaseFixture } from '#sign-in-test-support/fuzz/request-case-fixture';
 import {
 	assertDocumentedErrorBody,
+	assertGenericRefusalBody,
 	assertRequestDisclosure,
 	observeRequestAnswer,
 } from '#sign-in-test-support/fuzz/request-disclosure';
@@ -19,7 +20,11 @@ import { syntheticRequestFamilyContext } from '#sign-in-test-support/fuzz/reques
 import { assertRequestRefusalEffects } from '#sign-in-test-support/fuzz/request-refusal-effects';
 import { createCallerHarnessLanes } from '#sign-in-test-support/fuzz/request-shared-harness';
 import { readRequestStorageSnapshot } from '#sign-in-test-support/fuzz/request-storage-snapshot';
-import { routeClassification, routeKey } from '#sign-in-test-support/fuzz/route-classification';
+import {
+	documentedAnswersFor,
+	routeClassification,
+	routeKey,
+} from '#sign-in-test-support/fuzz/route-classification';
 import { useControlledSignInClock } from '#sign-in-test-support/test-fixtures/controlled-node-test-clock';
 
 useControlledSignInClock();
@@ -104,13 +109,17 @@ for (const family of requestFamilies) {
 								answer.status,
 								'S2 no-server-error: generated input without injected storage faults',
 							).toBeLessThan(500);
-							expect(classification.documentedAnswers, 'S2 documented-answer').toContain(
-								answer.status,
-							);
+							expect(
+								documentedAnswersFor(classification, caller),
+								'S2 documented-answer',
+							).toContain(answer.status);
 							assertDocumentedErrorBody({
 								documentedErrorBodies: classification.documentedErrorBodies,
 								answer,
+								caller,
+								variant: generated.variant,
 							});
+							assertGenericRefusalBody(answer);
 							assertRequestDisclosure({
 								fixture,
 								path: family.route.path,

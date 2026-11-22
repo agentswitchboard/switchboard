@@ -1,14 +1,23 @@
 import { SignJWT } from 'jose';
-import { expect, it } from 'vitest';
+import { describe, expect, it } from 'vitest';
 
 import {
 	assertDocumentedErrorBody,
+	assertGenericRefusalBody,
 	assertRequestDisclosure,
 	observeRequestAnswer,
 	type ObservedRequestAnswer,
 } from '#sign-in-test-support/fuzz/request-disclosure';
-import type { GeneratedRequest } from '#sign-in-test-support/fuzz/request-families/index';
+import type {
+	GeneratedRequest,
+	VariantStep,
+} from '#sign-in-test-support/fuzz/request-families/index';
 import type { RequestStorageSnapshot } from '#sign-in-test-support/fuzz/request-storage-snapshot';
+import {
+	documentedAnswersFor,
+	routeClassification,
+	type RouteClassification,
+} from '#sign-in-test-support/fuzz/route-classification';
 import { controlledSignInClock } from '#sign-in-test-support/test-fixtures/controlled-sign-in-clock';
 
 type DisclosureFixture = Parameters<typeof assertRequestDisclosure>[0]['fixture'];
@@ -357,17 +366,122 @@ it('parses an empty refusal or redirect but not an empty success that claims JSO
 	).rejects.toThrow('malformed');
 });
 
-it('documents a 404 or 5xx only with its native error body', (): void => {
+describe('documented error answers', (): void => {
 	const documentedErrorBodies = {
-		404: { code: 'PROVIDER_NOT_FOUND' },
-		503: { kind: 'setting-up', reason: 'unavailable' },
+		404: {
+			values: { code: 'PROVIDER_NOT_FOUND' },
+			exactKeys: ['code', 'message'],
+			variantFields: ['provider'],
+		},
+		409: {
+			values: { kind: 'refused' },
+			exactKeys: ['kind', 'reason'],
+			callers: ['member', 'owner'],
+		},
+	} as const;
+	const providerMutation: VariantStep = {
+		encoding: 'json',
+		field: 'provider',
+		mutation: 'near-valid',
 	};
-	const doc = (status: number, body: unknown): void =>
-		assertDocumentedErrorBody({ documentedErrorBodies, answer: { status, body } });
-	expect(() => doc(404, { code: 'PROVIDER_NOT_FOUND', message: 'x' })).not.toThrow();
-	expect(() => doc(503, { kind: 'setting-up', reason: 'unavailable' })).not.toThrow();
-	expect(() => doc(404, { code: 'SOMETHING_ELSE' })).toThrow('documented error body');
-	expect(() => doc(404, null)).toThrow('documented error body');
-	expect(() => doc(503, { kind: 'setting-up', reason: 'other' })).toThrow('documented error body');
-	expect(() => doc(400, { anything: true })).not.toThrow();
+	const documented = (props: {
+		readonly status: number;
+		readonly body: unknown;
+		readonly caller?: 'signed-out' | 'member' | 'owner';
+		readonly variant?: VariantStep;
+	}): void =>
+		assertDocumentedErrorBody({
+			documentedErrorBodies,
+			answer: { status: props.status, body: props.body },
+			caller: props.caller ?? 'owner',
+			variant: props.variant ?? providerMutation,
+		});
+
+	it('accepts the native answer for its caller and input, and nothing else', (): void => {
+		const notFound = { code: 'PROVIDER_NOT_FOUND', message: 'Provider not found' };
+		expect(() => documented({ status: 404, body: notFound })).not.toThrow();
+		expect(() =>
+			documented({
+				status: 404,
+				body: notFound,
+				variant: { ...providerMutation, mutation: 'boundary' },
+			}),
+		).not.toThrow();
+		expect(() =>
+			documented({ status: 409, body: { kind: 'refused', reason: 'stale' } }),
+		).not.toThrow();
+		// Wrong answers: another code, an extra field, a missing field, no body, the right body for a
+		// request that did not change the documented input (valid, another field, no field), and for
+		// another caller.
+		expect(() =>
+			documented({ status: 404, body: { code: 'SOMETHING_ELSE', message: 'x' } }),
+		).toThrow('another error body');
+		expect(() => documented({ status: 404, body: { ...notFound, detail: 'extra' } })).toThrow(
+			'instead of exactly',
+		);
+		expect(() => documented({ status: 404, body: { code: 'PROVIDER_NOT_FOUND' } })).toThrow(
+			'instead of exactly',
+		);
+		expect(() => documented({ status: 404, body: null })).toThrow('no documented error body');
+		for (const variant of [
+			{ encoding: 'json', field: 'provider', mutation: 'valid' },
+			{ encoding: 'json', field: 'callbackURL', mutation: 'near-valid' },
+			{ encoding: 'json', field: null, mutation: 'valid' },
+		] as const)
+			expect(() => documented({ status: 404, body: notFound, variant })).toThrow(
+				'did not change its documented input',
+			);
+		expect(() =>
+			documented({ status: 409, body: { kind: 'refused', reason: 'stale' }, caller: 'signed-out' }),
+		).toThrow('not documented for the signed-out caller');
+		expect(() =>
+			documented({ status: 409, body: { kind: 'refused', reason: 'stale', extra: 1 } }),
+		).toThrow('instead of exactly');
+		expect(() => documented({ status: 400, body: { anything: true } })).not.toThrow();
+	});
+
+	it('requires a refusal body to be a generic error', (): void => {
+		expect(() =>
+			assertGenericRefusalBody({ status: 403, body: { kind: 'refused' } }),
+		).not.toThrow();
+		expect(() => assertGenericRefusalBody({ status: 401, body: null })).not.toThrow();
+		expect(() =>
+			assertGenericRefusalBody({
+				status: 400,
+				body: { error: 'invalid_request', error_description: 'x' },
+			}),
+		).not.toThrow();
+		expect(() => assertGenericRefusalBody({ status: 200, body: { people: [] } })).not.toThrow();
+		// A refusal that carries data (or a nested value) is not generic.
+		expect(() =>
+			assertGenericRefusalBody({ status: 403, body: { kind: 'refused', people: [{ id: 'x' }] } }),
+		).toThrow('beyond a generic error');
+		expect(() =>
+			assertGenericRefusalBody({ status: 400, body: { message: { nested: true } } }),
+		).toThrow('beyond a generic error');
+		expect(() => assertGenericRefusalBody({ status: 400, body: ['list'] })).toThrow(
+			'not a generic error object',
+		);
+	});
+});
+
+describe('per-caller answers', (): void => {
+	it('refuses a member the owner People reads and the People page, and still allows the owner', (): void => {
+		const row = (path: string): RouteClassification => {
+			const found = routeClassification.find((candidate) => candidate.path === path);
+			if (found === undefined) throw new Error(`${path} not classified`);
+			return found;
+		};
+		for (const path of [
+			'/api/auth/organization/people-list',
+			'/api/auth/organization/people',
+			'/api/auth/organization/person-membership',
+			'/people',
+		]) {
+			expect(documentedAnswersFor(row(path), 'member'), path).not.toContain(200);
+			expect(documentedAnswersFor(row(path), 'owner'), path).toContain(200);
+		}
+		// A route without its own list gives every caller the route-wide answers.
+		expect(documentedAnswersFor(row('/me'), 'member')).toContain(200);
+	});
 });
