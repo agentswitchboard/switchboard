@@ -6,6 +6,8 @@ Composes the portable [sign-in core](../sign-in-core) with Worker HTTP/RPC entry
 
 The deployment also requires the `CENTRAL` service binding to the private central Worker. Organization provisioning uses only that binding; there is no central public URL or service credential. The central Worker must have no internet route, custom domain or workers.dev endpoint.
 
+Bind `CENTRAL_LINK` separately to Central's storage Worker. The sign-in host carries organization-scoped WebSocket upgrades through that binding and sends private Fleet HTTP calls through `CENTRAL`.
+
 Use [wrangler.example.jsonc](wrangler.example.jsonc) as the deployment template. Replace its database and configuration placeholders, and supply private secrets through the deployment's existing Worker-secret process. The entrypoint is the built `dist/index.js`; its migrations directory points to the core's checked-in generated migrations.
 
 The `SIGN_IN_CONFIGURATION` JSON includes the public Turnstile site key in its `turnstile` object (`kind: 'deployed'` for a private-stack or production hostname). The `TURNSTILE_SECRET_KEY` binding is declared by name under `secrets.required`; its actual value is supplied by the deployment owner at the private-stack cut. A missing secret leaves the captcha plugins registered and fails protected starts closed. Local proof uses only Cloudflare's published dummy keys and a loopback siteverify stand-in.

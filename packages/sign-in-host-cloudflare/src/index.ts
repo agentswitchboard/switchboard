@@ -7,6 +7,7 @@ import { WorkerEntrypoint } from 'cloudflare:workers';
 
 import { workerClientAddressHeaders } from '#sign-in-host-cloudflare/worker-client-address';
 import { signInWorkerConfiguration } from '#sign-in-host-cloudflare/worker-configuration';
+import { forwardWorkerMachineLink } from '#sign-in-host-cloudflare/worker-machine-link';
 
 /** Only the named service binding can reach agent management; the public fetch handler exposes no RPC route. */
 export class AgentClientManagement extends WorkerEntrypoint<AuthWorkerEnv> {
@@ -72,6 +73,8 @@ export default {
 		context: Pick<ExecutionContext, 'waitUntil'>,
 	): Promise<Response> {
 		try {
+			const machineLink = forwardWorkerMachineLink(request, bindings.CENTRAL_LINK);
+			if (machineLink !== undefined) return await machineLink;
 			return await createSignInHttpHandler(signInWorkerConfiguration(bindings), {
 				// A committed fence change drains after the response; a lost hint drains on the next Fleet call.
 				deferAfterResponse: (work: Promise<unknown>): void => context.waitUntil(work),

@@ -6,7 +6,10 @@
 	"compatibility_flags": ["nodejs_compat"],
 	"workers_dev": false,
 	"preview_urls": false,
-	"services": [{ "binding": "CENTRAL", "service": "replace-with-private-central-worker" }],
+	"services": [
+		{ "binding": "CENTRAL", "service": "replace-with-private-central-worker" },
+		{ "binding": "CENTRAL_LINK", "service": "replace-with-central-storage-worker" },
+	],
 	"secrets": { "required": ["TURNSTILE_SECRET_KEY"] },
 	"ratelimits": [
 		// Replace these example namespace IDs with your deployment's IDs.
