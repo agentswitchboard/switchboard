@@ -2,6 +2,10 @@ import type { GenericEndpointContext } from '@better-auth/core';
 import { signJWT } from 'better-auth/plugins/jwt';
 
 import { signInJwtOptions } from '#sign-in-core/better-auth/native-jwt-options';
+import type {
+	OrganizationStampClaims_Deserialize,
+	OrganizationStampHeader,
+} from '#sign-in-core/central-link/generated/central-sign-in.gen';
 import type { SignInConfiguration } from '#sign-in-core/contracts/deployment-configuration';
 import {
 	organizationStatementClaimsSchema,
@@ -31,10 +35,10 @@ export async function signOrganizationStatement(props: {
 		iat: issuedAt,
 		exp: issuedAt + props.configuration.organizationStatementLifetimeSeconds,
 		...(props.request.replaces === undefined ? {} : { replaces: props.request.replaces }),
-	});
+	} satisfies OrganizationStampClaims_Deserialize);
 	return signJWT(props.context, {
 		options: signInJwtOptions(props.configuration),
-		header: { typ: organizationStatementType },
+		header: { typ: organizationStatementType } satisfies Pick<OrganizationStampHeader, 'typ'>,
 		payload: claims,
 	});
 }

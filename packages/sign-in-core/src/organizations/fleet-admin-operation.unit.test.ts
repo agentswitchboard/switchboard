@@ -207,3 +207,22 @@ it("each of central's OrganizationAdminIntent fixtures is the intent built for t
 		expect(built).toEqual(intent);
 	}
 });
+
+it('matches the Central ac2e6232 canonical admin intent bytes and digest', async (): Promise<void> => {
+	const vector = z
+		.strictObject({
+			route: z.literal('createWorkspace'),
+			requestBody: z.record(z.string(), z.unknown()),
+			canonicalIntent: z.string(),
+			intentSha256Base64Url: z.string(),
+		})
+		.parse(await producerFile('OrganizationAdminIntent.ac2e6232.vector.json'));
+	const operation = fleetAdminRequestSchema.parse({
+		...vector.requestBody,
+		operation: routeOperations[vector.route],
+	});
+	expect(canonicalJson(fleetAdminIntent(operation))).toBe(vector.canonicalIntent);
+	await expect(fleetAdminIntentDigest(globalThis.crypto, operation)).resolves.toBe(
+		vector.intentSha256Base64Url,
+	);
+});

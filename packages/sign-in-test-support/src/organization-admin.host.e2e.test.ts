@@ -231,6 +231,81 @@ it('organization admin: the owner creates, looks up and lists through each route
 	}
 });
 
+it('organization admin forwarding treats an engine-only refusal as upstream unavailable', async (): Promise<void> => {
+	const fixture = await setup();
+	try {
+		fixture.harness.centralAdmin.scriptNextRawAnswer('WorkspaceLookup', {
+			result: 'refused',
+			reason: 'notFound',
+		});
+		const response = await adminPost(fixture, 'workspace-lookup', {
+			organizationId: fixture.organizationId,
+			workspaceId: controlledSignInIds.nextId(),
+		});
+		expect(fixture.harness.centralAdmin.arrivals.at(-1)).toMatchObject({
+			route: 'WorkspaceLookup',
+			outcome: { kind: 'scripted-raw' },
+		});
+		expect([response.status, await response.json()]).toEqual([
+			503,
+			{ error: 'central-unavailable' },
+		]);
+	} finally {
+		await fixture.harness.close();
+	}
+});
+
+it('organization admin page: renders targeted and allowance records with three distinct origins', async (): Promise<void> => {
+	const { harness, cookie, ownerId, organizationId } = await setup();
+	try {
+		const machineId = controlledSignInIds.nextId();
+		const workspaceId = controlledSignInIds.nextId();
+		const createdAtMillis = controlledSignInClock.now();
+		harness.centralAdmin.scriptNextAnswer('ReadChangeRecords', () => ({
+			result: 'records',
+			records: [
+				{
+					kind: 'organizationProvisioned',
+					id: controlledSignInIds.nextId(),
+					requestId: 'proof-provision',
+					origin: { kind: 'signInProvisioning' },
+					targetId: organizationId,
+					createdAtMillis,
+				},
+				{
+					kind: 'machineAllowanceChanged',
+					id: controlledSignInIds.nextId(),
+					requestId: 'proof-allow',
+					origin: { kind: 'person', personId: ownerId, permissionChecked: 'machine:enroll' },
+					machineId,
+					workspaceId,
+					state: 'active',
+					createdAtMillis,
+				},
+				{
+					kind: 'machineAllowanceChanged',
+					id: controlledSignInIds.nextId(),
+					requestId: 'proof-withdraw',
+					origin: { kind: 'automatic' },
+					machineId,
+					workspaceId,
+					state: 'withdrawn',
+					createdAtMillis,
+				},
+			],
+		}));
+		const page = await openOrganizationAdminPage({ harness, cookie });
+		const timestamp = new Date(createdAtMillis).toISOString();
+		expect(page.changeRecordLines()).toEqual([
+			`${timestamp} organizationProvisioned ${organizationId} by sign-in`,
+			`${timestamp} machineAllowanceChanged ${machineId} ${workspaceId} (active) by ${ownerId} (machine:enroll)`,
+			`${timestamp} machineAllowanceChanged ${machineId} ${workspaceId} (withdrawn) automatically in Central`,
+		]);
+	} finally {
+		await harness.close();
+	}
+});
+
 it('organization admin page: the served page reports a create; a duplicate name on a new page shows the nameInUse words after one lookup of its own operation, and the next try applies under a fresh operation ID', async () => {
 	// Arrange
 	const fixture = await setup();

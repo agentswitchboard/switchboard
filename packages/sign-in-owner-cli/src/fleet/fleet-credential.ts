@@ -2,6 +2,7 @@ import { createHash, randomBytes } from 'node:crypto';
 
 import {
 	fleetAdminProofKeyThumbprint,
+	personFleetTokenBindingSchema,
 	signFleetAdminProof,
 	type FleetAdminProofKey,
 	type SignInCrypto,
@@ -42,11 +43,8 @@ const tokenResponseSchema = z.object({
 	token_type: z.literal('DPoP'),
 	refresh_token: z.string().min(1),
 });
-const issuedClaimsSchema = z.looseObject({
-	aud: z.string(),
+const issuedClaimsSchema = personFleetTokenBindingSchema.extend({
 	client_id: z.string(),
-	token_profile: z.literal('person-fleet'),
-	cnf: z.looseObject({ jkt: z.string() }),
 });
 
 function decodePayload(token: string): unknown {
