@@ -43,19 +43,31 @@ const refusedSchema = z.strictObject({
 	reason: fleetAdminRefusalReasonSchema,
 });
 const changeRecordSchema = z.strictObject({
-	id: z.uuid(),
-	requestId: z.string().min(1).max(128),
-	kind: z.enum(['organizationProvisioned', 'stampRenewed', 'workspaceCreated']),
+	id: z.uuidv7().refine((id) => id === id.toLowerCase()),
+	requestId: z
+		.string()
+		.min(1)
+		.refine((value) => !value.includes('\0') && new TextEncoder().encode(value).byteLength <= 128),
+	kind: z.enum([
+		'organizationProvisioned',
+		'stampRenewed',
+		'workspaceCreated',
+		'machineEnrolled',
+		'machineRevoked',
+		'machineExpired',
+		'allowanceChanged',
+	]),
 	/** A sign-in-originated change carries no person or permission. */
 	origin: z.discriminatedUnion('kind', [
 		z.strictObject({ kind: z.literal('signInProvisioning') }),
+		z.strictObject({ kind: z.literal('automatic') }),
 		z.strictObject({
 			kind: z.literal('person'),
-			personId: z.string(),
-			permissionChecked: z.string(),
+			personId: z.string().min(1),
+			permissionChecked: z.string().min(1),
 		}),
 	]),
-	targetId: z.string(),
+	targetId: z.string().min(1),
 	createdAtMillis: z.number().int(),
 });
 export const fleetAdminResultSchemas = {

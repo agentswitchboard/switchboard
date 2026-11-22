@@ -7,7 +7,7 @@ import {
 	session,
 	fleetPermissionPolicyDigest,
 } from '@agent-collaboration/sign-in-core';
-import { and, eq } from 'drizzle-orm';
+import { and, eq, sql } from 'drizzle-orm';
 import { expect, it } from 'vitest';
 import { z } from 'zod';
 
@@ -791,6 +791,76 @@ it('authorization fence: the production organization routes create and move fenc
 		});
 		expect((await peoplePost(harness, 'accept-invitation', { invitationId })).status).toBe(200);
 		expect(await pairOf(memberId)).toEqual({ revision: 1, state: 'active' });
+		await signInConfirmedPeopleBrowser({ harness, email: 'member@example.invalid' });
+		const memberSessions = async (): Promise<
+			readonly { id: string; activeOrganizationId: string | null }[]
+		> =>
+			harness.database
+				.select({ id: session.id, activeOrganizationId: session.activeOrganizationId })
+				.from(session)
+				.where(eq(session.userId, memberId))
+				.orderBy(session.id);
+		const selected = await memberSessions();
+		expect(selected).toHaveLength(2);
+		expect(selected.map((row) => row.activeOrganizationId)).toEqual([
+			organizationId,
+			organizationId,
+		]);
+
+		const otherOrganization = await peoplePost(
+			harness,
+			'create',
+			{ name: 'Other active choice', slug: 'other-active-choice' },
+			ownerCookie,
+		);
+		expect(otherOrganization.status).toBe(200);
+		const otherOrganizationId = z
+			.object({ id: z.uuidv7() })
+			.parse(await otherOrganization.json()).id;
+		const otherMembership = await native(
+			harness,
+			'organization/add-member',
+			{
+				organizationId: otherOrganizationId,
+				userId: memberId,
+				role: 'member',
+			},
+			ownerCookie,
+		);
+		expect(otherMembership.status).toBe(200);
+		const [current] = await harness.database
+			.select()
+			.from(session)
+			.where(eq(session.userId, memberId));
+		if (current === undefined) throw new Error('Native member session missing');
+		const expiredId = controlledSignInIds.nextId();
+		const otherId = controlledSignInIds.nextId();
+		await harness.database.insert(session).values([
+			{
+				...current,
+				id: expiredId,
+				token: controlledSignInIds.nextId(),
+				expiresAt: new Date(controlledSignInClock.now() - 1),
+			},
+			{
+				...current,
+				id: otherId,
+				token: controlledSignInIds.nextId(),
+				activeOrganizationId: otherOrganizationId,
+			},
+		]);
+		const allMemberChoices = await memberSessions();
+		expect(allMemberChoices).toHaveLength(4);
+		const ownerSessionChoices = async (): Promise<
+			readonly { activeOrganizationId: string | null }[]
+		> =>
+			harness.database
+				.select({ activeOrganizationId: session.activeOrganizationId })
+				.from(session)
+				.where(eq(session.userId, ownerId))
+				.orderBy(session.id);
+		const ownerChoices = await ownerSessionChoices();
+
 		// Act: the owner removes the member through the production route.
 		expect(
 			(
@@ -805,10 +875,95 @@ it('authorization fence: the production organization routes create and move fenc
 		// Assert: the removed pair is retained, bumped and inactive; the owner's pair is untouched.
 		expect(await pairOf(memberId)).toEqual({ revision: 2, state: 'inactive' });
 		expect(await pairOf(ownerId)).toEqual({ revision: 1, state: 'active' });
+		expect(await memberSessions()).toEqual(
+			allMemberChoices.map(({ id, activeOrganizationId }) => ({
+				id,
+				activeOrganizationId: activeOrganizationId === organizationId ? null : activeOrganizationId,
+			})),
+		);
+		expect(allMemberChoices.find((row) => row.id === expiredId)?.activeOrganizationId).toBe(
+			organizationId,
+		);
+		expect(allMemberChoices.find((row) => row.id === otherId)?.activeOrganizationId).toBe(
+			otherOrganizationId,
+		);
+		expect(await ownerSessionChoices()).toEqual(ownerChoices);
 	} finally {
 		await harness.close();
 	}
 });
+
+it.each(['session update', 'final member delete'] as const)(
+	'authorization fence: rolls back membership, session choice and revision when the %s fails',
+	async (failurePoint): Promise<void> => {
+		const { harness, organizationId, personId, membershipId, ownerCookie } = await setup();
+		try {
+			await harness.database
+				.update(session)
+				.set({ activeOrganizationId: organizationId })
+				.where(eq(session.userId, personId));
+			async function readMemberRemovalState(): Promise<readonly unknown[]> {
+				return Promise.all([
+					harness.database.select().from(member).where(eq(member.id, membershipId)),
+					harness.database
+						.select({ id: session.id, choice: session.activeOrganizationId })
+						.from(session)
+						.where(eq(session.userId, personId))
+						.orderBy(session.id),
+					harness.database
+						.select({
+							id: personFence.id,
+							revision: personFence.revision,
+							state: personFence.state,
+						})
+						.from(personFence)
+						.where(
+							and(
+								eq(personFence.personId, personId),
+								eq(personFence.organizationId, organizationId),
+							),
+						),
+				]);
+			}
+			const before = await readMemberRemovalState();
+			expect(before[1]).toEqual([{ id: expect.any(String), choice: organizationId }]);
+
+			// A database trigger faults inside the real transaction on both hosts.
+			// The final-delete trigger can only fire after this member's scoped
+			// session has been cleared, since the recorded before state has one.
+			await harness.database.run(
+				failurePoint === 'session update'
+					? sql`CREATE TRIGGER proof_refuse_member_removal
+						BEFORE UPDATE OF activeOrganizationId ON session
+						WHEN OLD.activeOrganizationId IS NOT NULL AND NEW.activeOrganizationId IS NULL
+						BEGIN SELECT RAISE(ABORT, 'proof: clearing session refused'); END`
+					: sql`CREATE TRIGGER proof_refuse_member_removal
+						BEFORE DELETE ON member
+						WHEN NOT EXISTS (
+							SELECT 1 FROM session
+							WHERE session.userId = OLD.userId AND session.activeOrganizationId = OLD.organizationId
+						)
+						BEGIN SELECT RAISE(ABORT, 'proof: final delete refused after session clear'); END`,
+			);
+			const removal = {
+				kind: 'delete',
+				model: 'member',
+				where: [{ field: 'id', value: membershipId }],
+			};
+			expect((await call(harness, removal, ownerCookie)).status).toBe(503);
+			expect(await readMemberRemovalState()).toEqual(before);
+
+			await harness.database.run(sql`DROP TRIGGER proof_refuse_member_removal`);
+			expect((await call(harness, removal, ownerCookie)).status).toBe(200);
+			const committed = await readMemberRemovalState();
+			expect(committed[0]).toEqual([]);
+			expect(committed[1]).toEqual([{ id: expect.any(String), choice: null }]);
+			expect(committed[2]).toEqual([{ id: expect.any(String), revision: 2, state: 'inactive' }]);
+		} finally {
+			await harness.close();
+		}
+	},
+);
 
 // Cloudflare's deploy step is a server-only management method (Lead, 8 Nov); the Node host's
 // equivalent is its startup caller, proven in sign-in-node-host.integration.test.ts.

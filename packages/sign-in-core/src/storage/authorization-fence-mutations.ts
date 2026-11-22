@@ -407,10 +407,32 @@ export function createAuthorizationFenceMutations(props: {
 					)
 				).length;
 			}
-			if (model !== 'organization')
+			if (model === 'member')
 				return (
 					await commit(
-						[invariantGuard(model, predicate), bumpTargets(model, predicate), finalDelete],
+						[
+							invariantGuard(model, predicate),
+							bumpTargets(model, predicate),
+							database
+								.update(session)
+								.set({ activeOrganizationId: null })
+								.where(
+									exists(
+										database
+											.select({ id: member.id })
+											.from(member)
+											.where(
+												and(
+													predicate,
+													eq(member.userId, session.userId),
+													eq(member.organizationId, session.activeOrganizationId),
+												),
+											),
+									),
+								)
+								.returning({ id: session.id }),
+							finalDelete,
+						],
 						async () => affectedOrganizations(model, predicate),
 					)
 				).length;
