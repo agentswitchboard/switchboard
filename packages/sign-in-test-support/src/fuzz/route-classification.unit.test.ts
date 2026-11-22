@@ -58,6 +58,7 @@ it('documents no 5xx answer for any route: F1 injects no storage or central faul
 it('the supported social providers are exactly the concrete callback routes', () => {
 	const callbacks = routeClassification
 		.filter((row) => row.method === 'GET' && /^\/api\/auth\/callback\/[a-z]+$/u.test(row.path))
-		.map((row) => row.path.split('/').at(-1));
-	expect([...supportedSocialProviders].toSorted()).toEqual(callbacks.toSorted());
+		.map((row) => String(row.path.split('/').at(-1)));
+	const byName = (left: string, right: string): number => left.localeCompare(right);
+	expect([...supportedSocialProviders].toSorted(byName)).toEqual(callbacks.toSorted(byName));
 });
