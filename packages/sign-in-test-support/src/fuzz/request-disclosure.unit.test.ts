@@ -9,6 +9,7 @@ import {
 } from '#sign-in-test-support/fuzz/request-disclosure';
 import type { GeneratedRequest } from '#sign-in-test-support/fuzz/request-families/index';
 import type { RequestStorageSnapshot } from '#sign-in-test-support/fuzz/request-storage-snapshot';
+import { controlledSignInClock } from '#sign-in-test-support/test-fixtures/controlled-sign-in-clock';
 
 type DisclosureFixture = Parameters<typeof assertRequestDisclosure>[0]['fixture'];
 const personId = '019a3dce-2000-7000-8000-000000000001';
@@ -19,6 +20,8 @@ const fixture: DisclosureFixture = {
 	sessionId,
 	forbiddenIdentities: [],
 	foreignIdentities: [foreignId],
+	cookie: 'better-auth.session_token=session-secret.signature; other=1',
+	invitedPersonId: personId,
 	invitedOrganizationId: '019a3dce-2000-7000-8000-000000000006',
 	issuedCredentials: ['issued-secret'],
 	context: {
@@ -176,63 +179,163 @@ it('accepts only the entitled token input and matching declared claims', async (
 });
 
 const setActivePath = '/api/auth/organization/set-active';
-const nativeSessionCookie = (token: string): Headers =>
-	new Headers({ 'set-cookie': `better-auth.session_token=${token}.signature; Path=/; HttpOnly` });
+const nativeSessionCookie = (value: string): Headers =>
+	new Headers({ 'set-cookie': `better-auth.session_token=${value}; Path=/; HttpOnly` });
+const liveSession = {
+	id: sessionId,
+	userId: personId,
+	token: 'session-secret',
+	expiresAt: controlledSignInClock.now() + 60_000,
+};
 
-it('permits the native set-active cookie only for the caller’s own live session on that route', (): void => {
-	const body = { name: 'Organization' };
+function checkSetActive(props: {
+	readonly cookieValue: string;
+	readonly status?: number;
+	readonly before?: RequestStorageSnapshot;
+	readonly after?: RequestStorageSnapshot;
+	readonly path?: string;
+}): void {
+	const snapshot: RequestStorageSnapshot = { session: [liveSession] };
+	assertRequestDisclosure({
+		fixture,
+		path: props.path ?? setActivePath,
+		request,
+		answer: answer(
+			{ name: 'Organization' },
+			props.status ?? 200,
+			nativeSessionCookie(props.cookieValue),
+		),
+		before: props.before ?? snapshot,
+		after: props.after ?? snapshot,
+	});
+}
+
+it('permits the set-active cookie only as the caller’s own live session re-issued with its submitted signature', (): void => {
+	expect(() => checkSetActive({ cookieValue: 'session-secret.signature' })).not.toThrow();
+	const expectsRefusal = 'session cookie outside native issuance contract';
+	// The same person's OTHER session: another row, another token, and the fixture's session still present.
+	const otherSession = {
+		id: '019a3dce-2000-7000-8000-000000000007',
+		userId: personId,
+		token: 'other-secret',
+		expiresAt: liveSession.expiresAt,
+	};
+	const withOther: RequestStorageSnapshot = { session: [liveSession, otherSession] };
 	expect(() =>
-		check(answer(body, 200, nativeSessionCookie('session-secret')), { path: setActivePath }),
-	).not.toThrow();
-	// Wrong builds: an unknown token, another person's session, or the same cookie on another route.
-	expect(() =>
-		check(answer(body, 200, nativeSessionCookie('unissued-token')), { path: setActivePath }),
-	).toThrow('session cookie outside native issuance contract');
-	const othersSession: RequestStorageSnapshot = {
-		session: [{ id: sessionId, userId: foreignId, token: 'session-secret' }],
+		checkSetActive({ cookieValue: 'other-secret.signature', before: withOther, after: withOther }),
+	).toThrow(expectsRefusal);
+	// An expired row, even with the right token and signature.
+	const expired: RequestStorageSnapshot = {
+		session: [{ ...liveSession, expiresAt: controlledSignInClock.now() - 1 }],
 	};
 	expect(() =>
-		assertRequestDisclosure({
-			fixture,
-			path: setActivePath,
-			request,
-			answer: answer(body, 200, nativeSessionCookie('session-secret')),
+		checkSetActive({ cookieValue: 'session-secret.signature', before: expired, after: expired }),
+	).toThrow(expectsRefusal);
+	// An unsigned cookie and a cookie with another signature.
+	expect(() => checkSetActive({ cookieValue: 'session-secret' })).toThrow(expectsRefusal);
+	expect(() => checkSetActive({ cookieValue: 'session-secret.' })).toThrow(expectsRefusal);
+	expect(() => checkSetActive({ cookieValue: 'session-secret.forged-signature' })).toThrow(
+		expectsRefusal,
+	);
+	// The token changed between the snapshots (a different session under the fixture's id).
+	const rotated: RequestStorageSnapshot = {
+		session: [{ ...liveSession, token: 'rotated-secret' }],
+	};
+	expect(() => checkSetActive({ cookieValue: 'rotated-secret.signature', after: rotated })).toThrow(
+		expectsRefusal,
+	);
+	// Another person's session, another route, a refusal.
+	const othersSession: RequestStorageSnapshot = {
+		session: [{ ...liveSession, userId: foreignId }],
+	};
+	expect(() =>
+		checkSetActive({
+			cookieValue: 'session-secret.signature',
 			before: othersSession,
 			after: othersSession,
 		}),
-	).toThrow('session cookie outside native issuance contract');
+	).toThrow(expectsRefusal);
 	expect(() =>
-		check(answer(body, 200, nativeSessionCookie('session-secret')), {
-			path: '/api/auth/get-session',
-		}),
-	).toThrow('session cookie outside native issuance contract');
-	expect(() =>
-		check(answer(body, 403, nativeSessionCookie('session-secret')), { path: setActivePath }),
-	).toThrow('credential-disclosure');
+		checkSetActive({ cookieValue: 'session-secret.signature', path: '/api/auth/get-session' }),
+	).toThrow(expectsRefusal);
+	expect(() => checkSetActive({ cookieValue: 'session-secret.signature', status: 403 })).toThrow(
+		'credential-disclosure',
+	);
 });
 
-it('entitles the accepted invitation’s organization only on a successful accept', (): void => {
-	const invitedOrganizationId = '019a3dce-2000-7000-8000-000000000005';
-	const acceptFixture: DisclosureFixture = { ...fixture, invitedOrganizationId };
-	const acceptPath = '/api/auth/organization/accept-invitation';
+const acceptPath = '/api/auth/organization/accept-invitation';
+const invitedOrganizationId = '019a3dce-2000-7000-8000-000000000005';
+const invitationId = '019a3dce-2000-7000-8000-000000000004';
+const acceptFixture: DisclosureFixture = { ...fixture, invitedOrganizationId };
+const acceptRequest = (id = invitationId): GeneratedRequest => ({
+	pathname: acceptPath,
+	init: { method: 'POST', body: JSON.stringify({ invitationId: id }) },
+	label: 'valid',
+	expectation: 'success-or-refusal',
+});
+const pendingBefore: RequestStorageSnapshot = {
+	invitation: [{ id: invitationId, organizationId: invitedOrganizationId, status: 'pending' }],
+	member: [],
+};
+const acceptedAfter: RequestStorageSnapshot = {
+	invitation: [{ id: invitationId, organizationId: invitedOrganizationId, status: 'accepted' }],
+	member: [{ organizationId: invitedOrganizationId, userId: personId }],
+};
+
+function checkAccept(props: {
+	readonly callerFixture?: DisclosureFixture;
+	readonly request?: GeneratedRequest;
+	readonly before?: RequestStorageSnapshot;
+	readonly after?: RequestStorageSnapshot;
+	readonly body?: unknown;
+	readonly status?: number;
+}): void {
+	assertRequestDisclosure({
+		fixture: {
+			...(props.callerFixture ?? acceptFixture),
+			foreignIdentities: [invitedOrganizationId, foreignId],
+		},
+		path: acceptPath,
+		request: props.request ?? acceptRequest(),
+		answer: answer(
+			props.body ?? { invitation: { organizationId: invitedOrganizationId } },
+			props.status ?? 200,
+		),
+		before: props.before ?? pendingBefore,
+		after: props.after ?? acceptedAfter,
+	});
+}
+
+it('entitles the invited organization only to the invitee whose submitted invitation was stored as accepted with a membership', (): void => {
+	expect(() => checkAccept({})).not.toThrow();
+	const leaks = 'identity-disclosure';
+	// Wrong builds: another invitation submitted, a caller who is not the invitee, no stored
+	// acceptance, no membership, an already-accepted or already-member before-state, a refusal,
+	// and the inviter or another organization in an otherwise entitled answer.
 	expect(() =>
-		check(answer({ invitation: { organizationId: invitedOrganizationId } }, 200), {
-			callerFixture: acceptFixture,
-			path: acceptPath,
-		}),
-	).not.toThrow();
+		checkAccept({ request: acceptRequest('019a3dce-2000-7000-8000-0000000000aa') }),
+	).toThrow(leaks);
 	expect(() =>
-		check(answer({ invitation: { organizationId: invitedOrganizationId } }, 403), {
-			callerFixture: { ...acceptFixture, foreignIdentities: [invitedOrganizationId] },
-			path: acceptPath,
-		}),
-	).toThrow('identity-disclosure');
+		checkAccept({ callerFixture: { ...acceptFixture, invitedPersonId: foreignId } }),
+	).toThrow(leaks);
+	expect(() => checkAccept({ after: pendingBefore })).toThrow(leaks);
+	expect(() => checkAccept({ after: { ...acceptedAfter, member: [] } })).toThrow(leaks);
 	expect(() =>
-		check(answer({ invitation: { organizationId: foreignId } }, 200), {
-			callerFixture: acceptFixture,
-			path: acceptPath,
+		checkAccept({
+			after: { ...acceptedAfter, member: [{ organizationId: foreignId, userId: personId }] },
 		}),
-	).toThrow('identity-disclosure');
+	).toThrow(leaks);
+	expect(() => checkAccept({ before: acceptedAfter })).toThrow(leaks);
+	expect(() => checkAccept({ status: 403 })).toThrow(leaks);
+	expect(() => checkAccept({ body: { invitation: { organizationId: foreignId } } })).toThrow(leaks);
+	expect(() =>
+		checkAccept({
+			callerFixture: { ...acceptFixture, forbiddenIdentities: ['inviter-person-id'] },
+			body: {
+				invitation: { organizationId: invitedOrganizationId, inviterId: 'inviter-person-id' },
+			},
+		}),
+	).toThrow(leaks);
 });
 
 it('parses an empty refusal or redirect but not an empty success that claims JSON', async (): Promise<void> => {

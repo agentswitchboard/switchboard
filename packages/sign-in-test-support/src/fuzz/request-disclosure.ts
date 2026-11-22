@@ -11,6 +11,7 @@ import {
 	type RequestStorageSnapshot,
 } from '#sign-in-test-support/fuzz/request-storage-snapshot';
 import type { RouteClassification } from '#sign-in-test-support/fuzz/route-classification';
+import { controlledSignInClock } from '#sign-in-test-support/test-fixtures/controlled-sign-in-clock';
 import { expectNoIssuedCredentials } from '#sign-in-test-support/test-fixtures/credential-free-refusal';
 
 export interface ObservedRequestAnswer {
@@ -67,13 +68,111 @@ function credentialFields(value: unknown, path = ''): readonly string[] {
 	);
 }
 
+/** The decoded value of the session token cookie in a Cookie header, or null. */
+function submittedSessionCookie(cookieHeader: string): string | null {
+	for (const pair of cookieHeader.split('; ')) {
+		const boundary = pair.indexOf('=');
+		if (boundary > 0 && pair.slice(0, boundary).endsWith('session_token'))
+			return decodeURIComponent(pair.slice(boundary + 1));
+	}
+	return null;
+}
+
+/**
+ * The amended S2 exception for organization/set-active: the same session's cookie re-issued for the
+ * caller's own live session (no new credential). The fixture's own session row, owned by the
+ * caller, unexpired, with the same token before and after; the re-issued value is exactly the
+ * signed cookie the request submitted (a signature is deterministic), so an unsigned or
+ * differently signed value, another session's token, or an expired session fails.
+ */
+function isOwnLiveSessionReissue(props: {
+	readonly fixture: Pick<RequestCaseFixture, 'sessionId' | 'cookie'> & {
+		readonly context: Pick<RequestFamilyContext, 'personId'>;
+	};
+	readonly value: string;
+	readonly before: RequestStorageSnapshot;
+	readonly after: RequestStorageSnapshot;
+}): boolean {
+	const { fixture, value } = props;
+	const own = (props.after.session ?? []).find((row) => row.id === fixture.sessionId);
+	const wasOwn = (props.before.session ?? []).find((row) => row.id === fixture.sessionId);
+	const submitted = submittedSessionCookie(fixture.cookie);
+	if (own === undefined || wasOwn === undefined || submitted === null) return false;
+	if (typeof own.token !== 'string' || own.token.length === 0 || own.token !== wasOwn.token)
+		return false;
+	return (
+		own.userId === fixture.context.personId &&
+		typeof own.expiresAt === 'number' &&
+		own.expiresAt > controlledSignInClock.now() &&
+		value.startsWith(`${own.token}.`) &&
+		value.length > own.token.length + 1 &&
+		value === submitted
+	);
+}
+
+/**
+ * The accept-invitation exemption: the submitted invitation is the fixture's, the caller is its
+ * invitee, and storage shows the acceptance (pending before, accepted after) and the caller's new
+ * membership in that organization. The inviter and every other identity stay forbidden.
+ */
+function invitationWasAcceptedByItsInvitee(props: {
+	readonly fixture: Pick<RequestCaseFixture, 'caller'> & {
+		readonly invitedOrganizationId: string;
+		readonly invitedPersonId: string;
+		readonly context: Pick<RequestFamilyContext, 'personId' | 'invitationId'>;
+	};
+	readonly request: GeneratedRequest;
+	readonly before: RequestStorageSnapshot;
+	readonly after: RequestStorageSnapshot;
+}): boolean {
+	const { fixture } = props;
+	const body = z
+		.object({ invitationId: z.string() })
+		.safeParse(
+			typeof props.request.init.body === 'string' ? safeJson(props.request.init.body) : null,
+		);
+	if (!body.success || body.data.invitationId !== fixture.context.invitationId) return false;
+	if (fixture.context.personId !== fixture.invitedPersonId) return false;
+	const wasPending = (props.before.invitation ?? []).some(
+		(row) => row.id === fixture.context.invitationId && row.status === 'pending',
+	);
+	const nowAccepted = (props.after.invitation ?? []).some(
+		(row) =>
+			row.id === fixture.context.invitationId &&
+			row.status === 'accepted' &&
+			row.organizationId === fixture.invitedOrganizationId,
+	);
+	const isMember = (snapshot: RequestStorageSnapshot): boolean =>
+		(snapshot.member ?? []).some(
+			(row) =>
+				row.organizationId === fixture.invitedOrganizationId &&
+				row.userId === fixture.context.personId,
+		);
+	return wasPending && nowAccepted && !isMember(props.before) && isMember(props.after);
+}
+
+function safeJson(text: string): unknown {
+	try {
+		return JSON.parse(text);
+	} catch {
+		return null;
+	}
+}
+
 /** The entitlement comes from the input fixture and release contract, never from the returned status alone. */
 export function assertRequestDisclosure(props: {
 	readonly fixture: Pick<
 		RequestCaseFixture,
-		'caller' | 'sessionId' | 'forbiddenIdentities' | 'foreignIdentities' | 'issuedCredentials'
+		| 'caller'
+		| 'sessionId'
+		| 'cookie'
+		| 'forbiddenIdentities'
+		| 'foreignIdentities'
+		| 'issuedCredentials'
 	> & {
 		readonly invitedOrganizationId: string;
+		/** The person the pending invitation is for: the only caller that may learn its organization. */
+		readonly invitedPersonId: string;
 		readonly context: Pick<
 			RequestFamilyContext,
 			| 'issuer'
@@ -155,7 +254,9 @@ export function assertRequestDisclosure(props: {
 			throw new Error('S2 credential-disclosure: invalid token release lifetime');
 	}
 	const identityExceptions =
-		path === '/api/auth/organization/accept-invitation' && !refusal
+		path === '/api/auth/organization/accept-invitation' &&
+		!refusal &&
+		invitationWasAcceptedByItsInvitee({ fixture, request: props.request, before, after })
 			? // Accepting makes the invited organization one of the caller's own memberships.
 				[fixture.context.invitationId, fixture.invitedOrganizationId]
 			: [];
@@ -179,14 +280,17 @@ export function assertRequestDisclosure(props: {
 		if (refusal) throw new Error('S2 credential-disclosure: refusal issues a cookie');
 		if (name.endsWith('session_token')) {
 			const mayIssueSession =
-				path.startsWith('/api/auth/callback/') ||
-				path === '/api/auth/two-factor/verify-totp' ||
-				// Native set-active re-sets the cookie for the same session (crud-org.mjs:403,429).
-				path === '/api/auth/organization/set-active';
+				path.startsWith('/api/auth/callback/') || path === '/api/auth/two-factor/verify-totp';
 			const session = (after.session ?? []).find(
 				(row) => typeof row.token === 'string' && value.startsWith(`${row.token}.`),
 			);
-			if (!mayIssueSession || session === undefined || session.userId !== fixture.context.personId)
+			const issuedByNativeFlow =
+				mayIssueSession && session !== undefined && session.userId === fixture.context.personId;
+			// Native set-active re-sets the same session's cookie (crud-org.mjs:403,429), and nothing else.
+			const reissuedSameSession =
+				path === '/api/auth/organization/set-active' &&
+				isOwnLiveSessionReissue({ fixture, value, before, after });
+			if (!issuedByNativeFlow && !reissuedSameSession)
 				throw new Error(
 					'S2 credential-disclosure: session cookie outside native issuance contract',
 				);

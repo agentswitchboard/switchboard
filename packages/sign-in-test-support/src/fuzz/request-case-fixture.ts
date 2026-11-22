@@ -40,6 +40,8 @@ export interface RequestCaseFixture {
 	readonly foreignIdentities: readonly string[];
 	/** The organization the pending invitation joins; the caller's own membership once accepted. */
 	readonly invitedOrganizationId: string;
+	/** The person the pending invitation is for. */
+	readonly invitedPersonId: string;
 	readonly issuedCredentials: readonly string[];
 	readonly permittedVerificationIds: readonly string[];
 }
@@ -322,6 +324,7 @@ export async function createRequestCaseFixture(props: {
 			cookie: currentCookie(),
 			sessionId: sessionValue?.session.id ?? null,
 			invitedOrganizationId: foreignOrganizationId,
+			invitedPersonId: memberId,
 			foreignIdentities: [
 				foreignEmail,
 				...organizationIdsOutsideCallerMemberships,
