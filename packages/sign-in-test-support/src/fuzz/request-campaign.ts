@@ -27,7 +27,10 @@ import type {
 	GeneratedRequest,
 	RequestFamily,
 } from '#sign-in-test-support/fuzz/request-families/index';
-import { variantKey } from '#sign-in-test-support/fuzz/request-families/request-family';
+import {
+	variantKey,
+	type VariantStep,
+} from '#sign-in-test-support/fuzz/request-families/request-family';
 import { syntheticRequestFamilyContext } from '#sign-in-test-support/fuzz/request-families/synthetic-context';
 import { assertRequestRefusalEffects } from '#sign-in-test-support/fuzz/request-refusal-effects';
 import { readRequestStorageSnapshot } from '#sign-in-test-support/fuzz/request-storage-snapshot';
@@ -60,7 +63,12 @@ export async function runRequestGroup(props: {
 	readonly observeAnswer?:
 		| ((answer: ObservedRequestAnswer, request: GeneratedRequest) => ObservedRequestAnswer)
 		| undefined;
-}): Promise<void> {
+	/**
+	 * Run only the random tail, this many cases (the coverage pass is skipped), so a test can reach
+	 * a randomly selected variant without a deep run.
+	 */
+	readonly randomCasesOnly?: number | undefined;
+}): Promise<{ readonly executedCases: number }> {
 	const { harness, family, caller, classification } = props;
 	let caseNumber = 0;
 	let planKeys: readonly string[] | undefined;
@@ -102,6 +110,7 @@ export async function runRequestGroup(props: {
 				route: routeKey(family.route),
 				caller,
 				variant: variantKey(generated.variant),
+				mode: identity.stepIndex === undefined ? 'random' : 'scheduled',
 			}),
 		);
 		const before = await readRequestStorageSnapshot(fixture.harness.database);
@@ -187,11 +196,43 @@ export async function runRequestGroup(props: {
 			);
 		const stepIndex = planKeysOf(family).indexOf(replay.variant);
 		if (stepIndex < 0) throw new Error(`The printed variant ${replay.variant} is not planned`);
-		await runCase(scriptedTestCase(replay.evidence), () => undefined, {
-			stepIndex,
-			offset: replay.offset,
+		const scripted = scriptedTestCase(replay.evidence);
+		let variantDraw = replay.mode === 'random';
+		// A random case drew its variant before its fields: that draw is replayed as the generator makes
+		// it (so the field draws stay aligned) and must be the printed variant.
+		const drawer: Pick<hegel.TestCase, 'draw'> = {
+			draw: <Value>(generator: Parameters<hegel.TestCase['draw']>[0]): Value => {
+				const value = scripted.draw(generator) as Value;
+				if (variantDraw) {
+					variantDraw = false;
+					const drawn = variantKey(value as VariantStep);
+					if (drawn !== replay.variant)
+						throw new Error(
+							`The first recorded draw is variant ${drawn}, not the printed ${replay.variant}: the draws would be misaligned`,
+						);
+				}
+				return value;
+			},
+		};
+		try {
+			await runCase(drawer, () => undefined, {
+				stepIndex: replay.mode === 'random' ? undefined : stepIndex,
+				offset: replay.offset,
+			});
+		} finally {
+			// A replay that executed nothing, or more than the one printed case, proves nothing.
+			if (caseNumber !== 1)
+				throw new Error(`The replay executed ${caseNumber} cases, not exactly one`);
+		}
+		return { executedCases: caseNumber };
+	}
+	if (props.randomCasesOnly !== undefined) {
+		await runCases({
+			stepIndex: undefined,
+			cases: props.randomCasesOnly,
+			seedOffset: planKeysOf(family).length,
 		});
-		return;
+		return { executedCases: caseNumber };
 	}
 	// The first case also reads the plan from the real context; it is the first variant family.
 	await runCases({ stepIndex: 0, cases: 1, seedOffset: 0 });
@@ -211,6 +252,27 @@ export async function runRequestGroup(props: {
 		await runCases({ stepIndex, cases: 1, seedOffset: stepIndex });
 	if (budget > planLength)
 		await runCases({ stepIndex: undefined, cases: budget - planLength, seedOffset: planLength });
+	return { executedCases: caseNumber };
+}
+
+/**
+ * A printed case names a route and a caller the campaign must actually run. Checked before any
+ * group registers: a print from an older route inventory fails loudly instead of skipping every
+ * group and reporting green with nothing replayed.
+ */
+export function assertReplayIsRegistered(
+	replay: Pick<FailureReplay, 'route' | 'caller'>,
+	families: readonly RequestFamily[],
+): void {
+	const registered = families.some(
+		(family) =>
+			routeKey(family.route) === replay.route &&
+			(family.callers as readonly string[]).includes(replay.caller),
+	);
+	if (!registered)
+		throw new Error(
+			`SIGN_IN_FUZZ_REPLAY names ${replay.route} as ${replay.caller}, which the campaign inventory does not run: nothing would be replayed`,
+		);
 }
 
 /** The variant keys the family plans for the synthetic context (the proved inventory every live case must equal). */

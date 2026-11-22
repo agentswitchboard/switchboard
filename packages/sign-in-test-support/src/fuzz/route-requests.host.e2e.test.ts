@@ -1,7 +1,10 @@
 import { afterAll, it } from 'vitest';
 
 import { failureReplayFromEnvironment } from '#sign-in-test-support/fuzz/fuzz-settings';
-import { runRequestGroup } from '#sign-in-test-support/fuzz/request-campaign';
+import {
+	assertReplayIsRegistered,
+	runRequestGroup,
+} from '#sign-in-test-support/fuzz/request-campaign';
 import { requestFamilies } from '#sign-in-test-support/fuzz/request-families/index';
 import { createCallerHarnessLanes } from '#sign-in-test-support/fuzz/request-shared-harness';
 import { routeClassification, routeKey } from '#sign-in-test-support/fuzz/route-classification';
@@ -25,7 +28,17 @@ afterAll(async () => lanes.close());
  * cases (a deep `SIGN_IN_FUZZ_CASES`) draw their variant family from the same list. The plan comes
  * from the real fixture context of the group's first case, and every later case must see the same
  * field inventory.
- */ for (const family of requestFamilies) {
+ */
+// A printed case the inventory does not run fails the whole file loudly, before any group registers.
+if (failureReplayFromEnvironment !== undefined)
+	assertReplayIsRegistered(failureReplayFromEnvironment, requestFamilies);
+let replayedCases = 0;
+afterAll(() => {
+	// A replay that executed nothing (or more than its one case) is not a replay.
+	if (failureReplayFromEnvironment !== undefined && replayedCases !== 1)
+		throw new Error(`SIGN_IN_FUZZ_REPLAY executed ${replayedCases} cases, not exactly one`);
+});
+for (const family of requestFamilies) {
 	for (const caller of family.callers) {
 		it.concurrent(`S2 ${routeKey(family.route)} as ${caller}: documented-answer, credential-disclosure, identity-disclosure, refusal-effects`, async () => {
 			// With printed evidence (SIGN_IN_FUZZ_REPLAY), only the group it names runs.
@@ -40,7 +53,7 @@ afterAll(async () => lanes.close());
 			);
 			if (classification === undefined)
 				throw new Error('S1 classification missing for request family');
-			await lanes.run(caller, async (harness) =>
+			const { executedCases } = await lanes.run(caller, async (harness) =>
 				runRequestGroup({
 					harness,
 					family,
@@ -49,6 +62,7 @@ afterAll(async () => lanes.close());
 					replay: failureReplayFromEnvironment,
 				}),
 			);
+			if (failureReplayFromEnvironment !== undefined) replayedCases += executedCases;
 		});
 	}
 }

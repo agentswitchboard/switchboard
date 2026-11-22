@@ -169,6 +169,11 @@ export interface FailureReplay {
 	readonly route: string;
 	readonly caller: string;
 	readonly variant: string;
+	/**
+	 * How the case chose its variant: `scheduled` (the coverage pass fixed the step, so the draws are
+	 * the field draws) or `random` (the first recorded draw is the variant itself, drawn before the fields).
+	 */
+	readonly mode: 'scheduled' | 'random';
 	readonly evidence: FailureEvidence;
 }
 
@@ -178,21 +183,25 @@ export function caseIdentityNote(identity: {
 	readonly route: string;
 	readonly caller: string;
 	readonly variant: string;
+	readonly mode: 'scheduled' | 'random';
 }): string {
-	return `S5 seed=${fuzzSeed}+${identity.offset}; route=${identity.route}; caller=${identity.caller}; variant=${identity.variant}`;
+	return `S5 seed=${fuzzSeed}+${identity.offset}; route=${identity.route}; caller=${identity.caller}; mode=${identity.mode}; variant=${identity.variant}`;
 }
 
 /** Read a printed failure (identity note and draws) back into the one case to replay. */
 export function parseFailureReplay(message: string): FailureReplay {
 	const identity =
-		/^S5 seed=(\d+)\+(\d+); route=(.+?); caller=(\S+); variant=(.+?)(?: \[at .*)?$/mu.exec(message);
+		/^S5 seed=(\d+)\+(\d+); route=(.+?); caller=(\S+); mode=(scheduled|random); variant=(.+?)(?: \[at .*)?$/mu.exec(
+			message,
+		);
 	if (identity === null) throw new Error('The printed failure carries no case identity note');
-	const [, seed, offset, route, caller, variant] = identity;
+	const [, seed, offset, route, caller, mode, variant] = identity;
 	if (
 		seed === undefined ||
 		offset === undefined ||
 		route === undefined ||
 		caller === undefined ||
+		(mode !== 'scheduled' && mode !== 'random') ||
 		variant === undefined
 	)
 		throw new Error('The printed case identity is incomplete');
@@ -202,6 +211,7 @@ export function parseFailureReplay(message: string): FailureReplay {
 		route,
 		caller,
 		variant,
+		mode,
 		evidence: parseFailureEvidence(message),
 	};
 }

@@ -7,6 +7,8 @@ import {
 	requestFamilies,
 	type GeneratedRequest,
 } from '#sign-in-test-support/fuzz/request-families/index';
+import { variantKey } from '#sign-in-test-support/fuzz/request-families/request-family';
+import { syntheticRequestFamilyContext } from '#sign-in-test-support/fuzz/request-families/synthetic-context';
 import { createCallerHarnessLanes } from '#sign-in-test-support/fuzz/request-shared-harness';
 import { routeClassification, routeKey } from '#sign-in-test-support/fuzz/route-classification';
 import { useControlledSignInClock } from '#sign-in-test-support/test-fixtures/controlled-node-test-clock';
@@ -26,9 +28,12 @@ const namedProperty = 'S2 no-server-error: generated input without injected stor
  */
 const plantedMinimumLength = 5;
 
-function plantServerError(bodies: string[]) {
+function plantServerError(bodies: string[], onlyField?: string) {
 	return (answer: ObservedRequestAnswer, request: GeneratedRequest): ObservedRequestAnswer => {
-		if (request.variant.field !== 'callbackURL' || request.variant.mutation !== 'boundary')
+		if (
+			request.variant.mutation !== 'boundary' ||
+			(onlyField !== undefined && request.variant.field !== onlyField)
+		)
 			return answer;
 		// The issuer port differs between hosts; the drawn content is what a replay must reproduce.
 		const body = (typeof request.init.body === 'string' ? request.init.body : '').replaceAll(
@@ -63,7 +68,11 @@ it('replays a failed host case from its printed evidence and fails the same name
 	// 1. The failing run: the campaign group with the planted failure. Its error message is the print.
 	const printed = await lanes
 		.run('signed-out', async (harness) =>
-			runRequestGroup({ ...group, harness, observeAnswer: plantServerError(failedBodies) }),
+			runRequestGroup({
+				...group,
+				harness,
+				observeAnswer: plantServerError(failedBodies, 'callbackURL'),
+			}),
 		)
 		.then(
 			() => {
@@ -80,6 +89,7 @@ it('replays a failed host case from its printed evidence and fails the same name
 	expect(replay.route).toBe(routeKey(family.route));
 	expect(replay.caller).toBe('signed-out');
 	expect(replay.variant.endsWith('|callbackURL|boundary')).toBe(true);
+	expect(replay.mode).toBe('scheduled');
 	expect(replay.evidence.complete).toBe(true);
 	// One draw, the drawn length: the latest executed failure (the shrink is bounded, so not the minimum).
 	expect(replay.evidence.draws).toHaveLength(1);
@@ -90,7 +100,7 @@ it('replays a failed host case from its printed evidence and fails the same name
 			runRequestGroup({
 				...group,
 				harness,
-				observeAnswer: plantServerError(replayedBodies),
+				observeAnswer: plantServerError(replayedBodies, 'callbackURL'),
 				replay,
 			}),
 		)
@@ -148,3 +158,73 @@ it('the host campaign fails a permitted caller that got a credential-free 200 fo
 	expect(seen.length).toBeGreaterThan(0);
 	expect(message).toContain('S2 documented-answer');
 }, 600_000);
+
+/**
+ * The optional random tail draws its variant before its fields. A randomly selected string-boundary
+ * variant fails (a stub again), prints its mode and both draws, replays to the same request body and
+ * the same named property, and passes without the plant. A print whose variant draw does not match
+ * the printed variant is refused instead of misaligning the field draws.
+ */
+it('replays a randomly selected string-boundary variant from its printed variant draw and field draw', async () => {
+	if (family === undefined || classification === undefined)
+		throw new Error('the social sign-in family is missing');
+	const group = { family, caller: 'signed-out', classification } as const;
+	const failedBodies: string[] = [];
+	const replayedBodies: string[] = [];
+	const printed = await lanes
+		.run('signed-out', async (harness) =>
+			runRequestGroup({
+				...group,
+				harness,
+				observeAnswer: plantServerError(failedBodies),
+				randomCasesOnly: 60,
+			}),
+		)
+		.then(
+			() => {
+				throw new Error('the planted failure did not fail the random tail');
+			},
+			(error: unknown) => (error instanceof Error ? error.message : String(error)),
+		);
+	expect(printed).toContain(namedProperty);
+	const replay = parseFailureReplay(printed);
+	expect(replay.mode).toBe('random');
+	expect(replay.variant.endsWith('|boundary')).toBe(true);
+	expect(replay.evidence.complete).toBe(true);
+	// Two draws: the variant itself, then the drawn length.
+	expect(replay.evidence.draws).toHaveLength(2);
+	expect(replay.evidence.draws[0]).toMatchObject({ mutation: 'boundary' });
+	expect(replay.evidence.draws[1]).toBeGreaterThan(plantedMinimumLength);
+	const replayed = await lanes
+		.run('signed-out', async (harness) =>
+			runRequestGroup({
+				...group,
+				harness,
+				observeAnswer: plantServerError(replayedBodies),
+				replay,
+			}),
+		)
+		.then(
+			() => {
+				throw new Error('the replay of the printed random case did not fail');
+			},
+			(error: unknown) => (error instanceof Error ? error.message : String(error)),
+		);
+	expect(replayed).toContain(namedProperty);
+	expect(replayedBodies).toEqual([failedBodies.at(-1)]);
+	// Without the plant the printed case passes, and it executes exactly one case.
+	await expect(
+		lanes.run('signed-out', async (harness) => runRequestGroup({ ...group, harness, replay })),
+	).resolves.toEqual({ executedCases: 1 });
+	// A print whose variant draw is not the printed variant is refused (the field draws would be misaligned).
+	const otherVariant = family
+		.variantSteps(syntheticRequestFamilyContext)
+		.map(variantKey)
+		.find((key) => key !== replay.variant);
+	if (otherVariant === undefined) throw new Error('the family plans a single variant');
+	await expect(
+		lanes.run('signed-out', async (harness) =>
+			runRequestGroup({ ...group, harness, replay: { ...replay, variant: otherVariant } }),
+		),
+	).rejects.toThrow(/misaligned/u);
+}, 900_000);
