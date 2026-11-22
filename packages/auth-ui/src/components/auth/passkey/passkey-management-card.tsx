@@ -13,7 +13,11 @@ export function PasskeyListSkeleton(): React.ReactElement {
 	return <Skeleton aria-hidden="true" className="h-12 w-full" />;
 }
 
-export function PasskeyManagementCard(props: {
+export function PasskeyManagementCard({
+	addAction,
+	children,
+	listRegionRef,
+}: {
 	readonly addAction: React.ReactNode;
 	readonly children: React.ReactNode;
 	readonly listRegionRef?: React.Ref<HTMLDivElement>;
@@ -27,16 +31,16 @@ export function PasskeyManagementCard(props: {
 				<CardDescription>
 					Add a passkey before replacing your app. You must always keep one working app or passkey.
 				</CardDescription>
-				<CardAction>{props.addAction}</CardAction>
+				<CardAction>{addAction}</CardAction>
 			</CardHeader>
 			<CardContent
-				ref={props.listRegionRef}
+				ref={listRegionRef}
 				className="h-40 overflow-y-auto overscroll-contain sm:h-36"
 				role="region"
 				aria-label="Passkey list"
 				tabIndex={0}
 			>
-				{props.children}
+				{children}
 			</CardContent>
 		</Card>
 	);
