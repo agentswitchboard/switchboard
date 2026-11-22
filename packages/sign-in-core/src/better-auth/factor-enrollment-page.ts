@@ -20,6 +20,7 @@ export async function renderFactorFormResponse(props: {
 	readonly crypto: SignInCrypto;
 	/** The handler validates this before native effects. */
 	readonly resume?: string | null;
+	readonly deviceUserCode?: string | undefined;
 }): Promise<Response> {
 	if (props.request.method !== 'POST') return props.response;
 	const path = new URL(props.request.url).pathname;
@@ -58,12 +59,13 @@ export async function renderFactorFormResponse(props: {
 		const result = enrollmentSchema.pick({ backupCodes: true }).parse(await props.response.json());
 		content = { kind: 'recovery-codes', ...result };
 	} else {
-		headers.set('location', ownerReadyLocation(resume));
+		headers.set('location', ownerReadyLocation(resume, props.deviceUserCode));
 		return new Response(null, { status: 303, headers });
 	}
 	return renderFactorPage({
 		content,
 		resume,
+		deviceUserCode: props.deviceUserCode,
 		headers,
 		status: props.response.status,
 		nonce: mintPageNonce(props.crypto),

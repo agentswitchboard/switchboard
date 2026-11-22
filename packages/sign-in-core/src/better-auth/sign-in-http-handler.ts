@@ -283,9 +283,26 @@ export function createSignInHttpHandler(
 					platform: configuration.platform,
 					machineLoginEnabled: machineLogin !== undefined,
 				});
+			const factorRoute = url.pathname.startsWith('/api/auth/two-factor/');
+			const ownerPage =
+				request.method === 'GET' && ['/sign-in', '/owner-ready'].includes(url.pathname);
+			const deviceRequest =
+				machineLogin !== undefined && (factorRoute || ownerPage)
+					? url.searchParams.get('device')
+					: null;
+			const deviceUserCode = parseDeviceUserCode(deviceRequest);
+			if (
+				deviceRequest !== null &&
+				(deviceUserCode === null ||
+					url.searchParams.has('authorize') ||
+					(ownerPage && url.searchParams.has('client_id')) ||
+					url.searchParams.getAll('device').length !== 1)
+			)
+				return invalidRequestResponse();
+
 			// Validate continuation before any native factor mutation, not after
 			// confirmation has already rotated the browser's session cookie.
-			const factorContinuation = url.pathname.startsWith('/api/auth/two-factor/')
+			const factorContinuation = factorRoute
 				? ownerAuthorizationResume(url.searchParams.get('authorize'), configuration.configuration)
 				: null;
 			if (factorContinuation?.kind === 'refused') return invalidRequestResponse();
@@ -304,7 +321,7 @@ export function createSignInHttpHandler(
 				)
 					return Response.json({ error: 'redirect-linking-required' }, { status: 400 });
 			}
-			if (request.method === 'GET' && ['/sign-in', '/owner-ready'].includes(url.pathname)) {
+			if (ownerPage) {
 				const resumedAuthorization = new URL(
 					'/api/auth/oauth2/authorize',
 					configuration.configuration.issuer,
@@ -317,15 +334,6 @@ export function createSignInHttpHandler(
 					configuration.configuration,
 				);
 				if (pageContinuation.kind === 'refused') return invalidRequestResponse();
-				const deviceRequest = machineLogin === undefined ? null : url.searchParams.get('device');
-				const deviceUserCode = parseDeviceUserCode(deviceRequest);
-				if (
-					deviceRequest !== null &&
-					(deviceUserCode === null ||
-						pageContinuation.kind !== 'absent' ||
-						url.searchParams.getAll('device').length !== 1)
-				)
-					return invalidRequestResponse();
 				let createOrganization = false;
 				let organizationSetup:
 					| { readonly organizationId: string; readonly state: OrganizationFleetState }
@@ -481,6 +489,7 @@ export function createSignInHttpHandler(
 					request,
 					crypto: configuration.platform.crypto,
 					resume: factorResume,
+					deviceUserCode: factorRoute ? (deviceUserCode ?? undefined) : undefined,
 					response: providerLimitedResponse({
 						response,
 						requestClass: admission.requestClass,
@@ -538,6 +547,7 @@ export function createSignInHttpHandler(
 				response,
 				crypto: configuration.platform.crypto,
 				resume: factorResume,
+				deviceUserCode: factorRoute ? (deviceUserCode ?? undefined) : undefined,
 			});
 		} catch {
 			await Promise.allSettled(

@@ -25,12 +25,18 @@ import {
 } from '#sign-in-core/pages/factor-management-cards';
 import { IslandRoot } from '#sign-in-core/pages/page-document';
 
-function ConfirmationForm({ resume }: { readonly resume: string | null }): React.ReactElement {
+function ConfirmationForm({
+	resume,
+	deviceUserCode,
+}: {
+	readonly resume: string | null;
+	readonly deviceUserCode?: string | undefined;
+}): React.ReactElement {
 	return (
 		<form
 			data-factor-form
 			method="post"
-			action={factorAction('verify-totp', resume)}
+			action={factorAction('verify-totp', resume, deviceUserCode)}
 			className="flex flex-col gap-4"
 		>
 			<Field>
@@ -90,9 +96,11 @@ export type FactorPageContent =
 export function FactorResponseContent({
 	content,
 	resume,
+	deviceUserCode,
 }: {
 	readonly content: FactorPageContent;
 	readonly resume: string | null;
+	readonly deviceUserCode?: string | undefined;
 }): React.ReactElement {
 	switch (content.kind) {
 		case 'enrollment':
@@ -137,7 +145,7 @@ export function FactorResponseContent({
 							</CardTitle>
 						</CardHeader>
 						<CardContent>
-							<ConfirmationForm resume={resume} />
+							<ConfirmationForm resume={resume} deviceUserCode={deviceUserCode} />
 						</CardContent>
 					</Card>
 				</>
@@ -148,21 +156,23 @@ export function FactorResponseContent({
 					state={{
 						kind: 'recovery-codes',
 						codes: [...content.backupCodes],
-						ownerReadyLocation: ownerReadyLocation(resume),
+						ownerReadyLocation: ownerReadyLocation(resume, deviceUserCode),
 					}}
 					fallback={<RecoveryCodes codes={content.backupCodes} />}
 				/>
 			);
 		case 'refused':
 			return (
-				<FactorRefusalCard resume={resume}>
+				<FactorRefusalCard resume={resume} deviceUserCode={deviceUserCode}>
 					The change was refused. Confirm with your current app, passkey or a recovery code, then
 					try again.
 				</FactorRefusalCard>
 			);
 		case 'limited':
 			return (
-				<FactorRefusalCard resume={resume}>Wait a minute before trying again.</FactorRefusalCard>
+				<FactorRefusalCard resume={resume} deviceUserCode={deviceUserCode}>
+					Wait a minute before trying again.
+				</FactorRefusalCard>
 			);
 		default:
 			return content satisfies never;
@@ -173,6 +183,7 @@ export function FactorResponseContent({
  * pending CLI authorization. The page heading names the problem. */
 function FactorRefusalCard(props: {
 	readonly resume: string | null;
+	readonly deviceUserCode?: string | undefined;
 	readonly children: React.ReactNode;
 }): React.ReactElement {
 	return (
@@ -186,7 +197,7 @@ function FactorRefusalCard(props: {
 				<Button
 					className="w-full"
 					nativeButton={false}
-					render={<a href={ownerReadyLocation(props.resume)} />}
+					render={<a href={ownerReadyLocation(props.resume, props.deviceUserCode)} />}
 				>
 					Back to your sign-in
 				</Button>
@@ -214,9 +225,11 @@ export function factorResponseTitle(content: FactorPageContent): string {
 export function FactorControls({
 	state,
 	resume,
+	deviceUserCode,
 }: {
 	readonly state: FactorPageState;
 	readonly resume: string | null;
+	readonly deviceUserCode?: string | undefined;
 }): React.ReactElement | null {
 	if (state === 'hidden') return null;
 	if (state === 'enroll-app')
@@ -226,13 +239,13 @@ export function FactorControls({
 					<IslandRoot
 						state={{
 							kind: 'second-factor-enrollment',
-							ownerReadyLocation: ownerReadyLocation(resume),
+							ownerReadyLocation: ownerReadyLocation(resume, deviceUserCode),
 						}}
 						fallback={
 							<form
 								data-factor-form
 								method="post"
-								action={factorAction('enable', resume)}
+								action={factorAction('enable', resume, deviceUserCode)}
 								className="flex flex-col gap-4"
 							>
 								<p className="text-sm text-muted-foreground">
@@ -249,7 +262,8 @@ export function FactorControls({
 				</CardContent>
 			</Card>
 		);
-	if (state === 'confirm') return <ConfirmSecondFactorCard resume={resume} />;
+	if (state === 'confirm')
+		return <ConfirmSecondFactorCard resume={resume} deviceUserCode={deviceUserCode} />;
 	return <SecurityManagement resume={resume} />;
 }
 
@@ -257,8 +271,10 @@ export function FactorControls({
  * passkey are the alternatives. */
 function ConfirmSecondFactorCard({
 	resume,
+	deviceUserCode,
 }: {
 	readonly resume: string | null;
+	readonly deviceUserCode?: string | undefined;
 }): React.ReactElement {
 	return (
 		<Card>
@@ -266,7 +282,7 @@ function ConfirmSecondFactorCard({
 				<IslandRoot
 					state={{
 						kind: 'second-factor-confirmation',
-						ownerReadyLocation: ownerReadyLocation(resume),
+						ownerReadyLocation: ownerReadyLocation(resume, deviceUserCode),
 					}}
 					fallback={
 						<div className="flex flex-col gap-4">
@@ -274,12 +290,12 @@ function ConfirmSecondFactorCard({
 								Enter the code from your authenticator app to confirm it's you before making a
 								change.
 							</p>
-							<ConfirmationForm resume={resume} />
+							<ConfirmationForm resume={resume} deviceUserCode={deviceUserCode} />
 							<p className="text-center text-xs text-muted-foreground">or</p>
 							<form
 								data-factor-form
 								method="post"
-								action={factorAction('verify-backup-code', resume)}
+								action={factorAction('verify-backup-code', resume, deviceUserCode)}
 								className="flex flex-col gap-2"
 							>
 								<Field>
