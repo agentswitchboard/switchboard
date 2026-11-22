@@ -48,9 +48,7 @@ export async function projectMachineDeviceResponse(
 	pathname: string,
 	response: Response,
 ): Promise<Response> {
-	const headers = new Headers(response.headers);
-	headers.delete('content-length');
-	headers.set('cache-control', 'no-store');
+	const headers = machineResponseHeaders(response);
 	if (!response.ok) {
 		const parsed = deviceErrorBody.safeParse(await response.json().catch(() => null));
 		const error = response.status >= 500 ? 'temporarily_unavailable' : 'invalid_request';
@@ -66,6 +64,14 @@ export async function projectMachineDeviceResponse(
 	return parsed.success
 		? Response.json(parsed.data, { status: response.status, headers })
 		: Response.json({ error: 'temporarily_unavailable' }, { status: 503, headers });
+}
+
+/** Only protocol cache and retry headers cross from the native handler. */
+export function machineResponseHeaders(response: Response): Headers {
+	const headers = new Headers({ 'cache-control': 'no-store', pragma: 'no-cache' });
+	const retry = response.headers.get('retry-after');
+	if (retry !== null && /^\d+$/u.test(retry)) headers.set('retry-after', retry);
+	return headers;
 }
 
 function machineResponseSchema(pathname: string): z.ZodType | null {

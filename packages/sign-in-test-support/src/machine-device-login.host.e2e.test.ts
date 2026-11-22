@@ -20,7 +20,10 @@ import { expect, it } from 'vitest';
 import { z } from 'zod';
 
 import { useControlledSignInClock } from '#sign-in-test-support/test-fixtures/controlled-node-test-clock';
-import { controlledSignInClock } from '#sign-in-test-support/test-fixtures/controlled-sign-in-clock';
+import {
+	controlledSignInClock,
+	controlledSignInIds,
+} from '#sign-in-test-support/test-fixtures/controlled-sign-in-clock';
 import { startLocalAuthHarness } from '#sign-in-test-support/test-fixtures/local-auth-harness';
 import { installOrganizationBrowserCookie } from '#sign-in-test-support/test-fixtures/organization-browser-transport';
 import {
@@ -207,10 +210,34 @@ it('the real host approves one machine ID, presents active workspaces and releas
 		expect(html).toContain('data-device-page-state="review"');
 		expect(html).toContain('Active workspace');
 		expect(html).not.toContain('Archived workspace');
+		const [eligible] = await harness.database
+			.select()
+			.from(deviceCode)
+			.where(eq(deviceCode.deviceCode, code.device_code));
+		if (eligible === undefined) throw new Error('Owner verification did not leave a pending row');
+		const otherId = controlledSignInIds.nextId();
+		const filtered = [
+			['wrong-organization', { organizationId: otherId }],
+			['wrong-approver', { userId: otherId }],
+			['wrong-client', { clientId: otherId }],
+			['denied-code', { status: 'denied' }],
+			['expired-code', { expiresAt: new Date(controlledSignInClock.now()) }],
+		] as const satisfies readonly (readonly [string, Partial<typeof deviceCode.$inferInsert>])[];
+		await harness.database.insert(deviceCode).values(
+			filtered.map(([label, delta]) => ({
+				...eligible,
+				...delta,
+				id: controlledSignInIds.nextId(),
+				deviceCode: `proof-polling-${label}`,
+				userCode: `PROOF-${label.toUpperCase()}`,
+				machineLabel: label,
+			})),
+		);
 		const pending = await (await harness.auth('/device')).text();
 		expect(pending).toContain('Waiting for approval');
 		expect(pending).toContain('Proof Mac');
 		expect(pending.includes(code.device_code)).toBe(false);
+		for (const [label] of filtered) expect(pending.includes(label), label).toBe(false);
 		expect(harness.centralAdmin.arrivals).toContainEqual(
 			expect.objectContaining({
 				route: 'ListWorkspaces',
@@ -230,6 +257,8 @@ it('the real host approves one machine ID, presents active workspaces and releas
 			});
 		const approval = await decide([workspaceId]);
 		expect(approval.status).toBe(200);
+		expect(approval.headers.has('set-cookie')).toBe(false);
+		expect(approval.headers.has('authorization')).toBe(false);
 		expect(await approval.json()).toEqual({
 			enrollmentId,
 			label: 'Proof Mac',
@@ -284,6 +313,8 @@ it('the real host approves one machine ID, presents active workspaces and releas
 		).toEqual([200, 400]);
 		const winner = polled.find((response) => response.ok);
 		if (winner === undefined) throw new Error('No poller received a token');
+		expect(winner.headers.has('set-cookie')).toBe(false);
+		expect(winner.headers.has('authorization')).toBe(false);
 		const tokens = machineTokenResponseSchema.strict().parse(await winner.json());
 		const claims = machineTokenClaimsSchema.parse(decodeJwt(tokens.access_token));
 		expect(claims.principal).toEqual({

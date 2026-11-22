@@ -48,7 +48,16 @@ it('releases the machine credential only before the exact grant deadline', async
 	};
 	const releaseAt = (milliseconds: number): Promise<Response> =>
 		releaseMachineTokenResponse({
-			response: Response.json({ ...nativeBody, id_token: 'unexpected-token' }),
+			response: Response.json(
+				{ ...nativeBody, id_token: 'unexpected-token' },
+				{
+					headers: {
+						'set-cookie': 'synthetic_session=fixture',
+						authorization: 'Bearer fixture',
+						dpop: 'fixture-proof',
+					},
+				},
+			),
 			configuration,
 			issuer,
 			now: () => milliseconds,
@@ -64,6 +73,8 @@ it('releases the machine credential only before the exact grant deadline', async
 		});
 	const prior = await releaseAt(grantExpiresAt * 1000 - 1);
 	expect(prior.status).toBe(200);
+	for (const credentialHeader of ['set-cookie', 'authorization', 'dpop'])
+		expect(prior.headers.has(credentialHeader), credentialHeader).toBe(false);
 	const projected: unknown = await prior.json();
 	expect(projected).not.toHaveProperty('id_token');
 	const exact = await releaseAt(grantExpiresAt * 1000);

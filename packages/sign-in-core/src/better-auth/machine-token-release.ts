@@ -6,7 +6,10 @@ import {
 	machineTokenResponseSchema,
 	type MachineLoginConfiguration,
 } from '#sign-in-core/machine-login/machine-login-contracts';
-import { projectMachineDeviceResponse } from '#sign-in-core/response-release/machine-device-response';
+import {
+	machineResponseHeaders,
+	projectMachineDeviceResponse,
+} from '#sign-in-core/response-release/machine-device-response';
 
 /** Signing may await work after central decided. Recheck its fixed 60-second
  * redemption window at the response boundary; a delayed mint extends nothing. */
@@ -49,9 +52,7 @@ export async function releaseMachineTokenResponse(props: {
 			Object.hasOwn(claims, 'workspace_id')
 		)
 			throw new Error('Machine response does not match decision');
-		const headers = new Headers(props.response.headers);
-		headers.delete('content-length');
-		headers.set('cache-control', 'no-store');
+		const headers = machineResponseHeaders(props.response);
 		return Response.json(body, { status: props.response.status, headers });
 	} catch {
 		return Response.json(
