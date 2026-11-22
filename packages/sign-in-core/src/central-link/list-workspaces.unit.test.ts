@@ -4,16 +4,17 @@ import {
 	collectWorkspacePages,
 	type ListWorkspacesPageResult,
 } from '#sign-in-core/central-link/list-workspaces';
+import { uuid7Schema } from '#sign-in-core/contracts/sign-in-platform';
 
 const firstWorkspace = {
-	workspaceId: '019a3dce-2000-7000-8000-000000000001',
+	workspaceId: uuid7Schema.parse('019a3dce-2000-7000-8000-000000000001'),
 	name: 'First workspace',
 	description: '',
 	state: 'active',
 } as const;
 const secondWorkspace = {
 	...firstWorkspace,
-	workspaceId: '019a3dce-2000-7000-8000-000000000002',
+	workspaceId: uuid7Schema.parse('019a3dce-2000-7000-8000-000000000002'),
 	name: 'Second workspace',
 } as const;
 

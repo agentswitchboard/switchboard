@@ -89,6 +89,39 @@ async function signedIn(fixture: FleetFixture): Promise<FleetCliSession> {
 	});
 }
 
+it('relay: an engine-only refusal is upstream unavailable after the verified request reaches Central', async (): Promise<void> => {
+	const fixture = await setupFleetCli();
+	const { harness, target } = fixture;
+	try {
+		const session = await signedIn(fixture);
+		const body = { organizationId: target.organizationId, after: null, limit: 10 };
+		const records: FleetAdminRequest = { operation: 'ReadChangeRecords', ...body };
+		harness.centralAdmin.scriptNextRawAnswer(records.operation, {
+			result: 'refused',
+			reason: 'notRetired',
+		});
+		const response = await relay({
+			fixture,
+			operation: records.operation,
+			body: JSON.stringify(body),
+			headers: {
+				authorization: `DPoP ${session.accessToken}`,
+				dpop: await proofFor({ fixture, session, signedFor: records }),
+			},
+		});
+		expect(harness.centralAdmin.arrivals.at(-1)).toMatchObject({
+			route: records.operation,
+			outcome: { kind: 'scripted-raw' },
+		});
+		expect([response.status, await response.json()]).toEqual([
+			503,
+			{ error: 'central-unavailable' },
+		]);
+	} finally {
+		await harness.close();
+	}
+});
+
 it('relay: non-canonical JSON reaches central byte for byte on all three routes, and each verifies', async () => {
 	// Arrange
 	const fixture = await setupFleetCli();

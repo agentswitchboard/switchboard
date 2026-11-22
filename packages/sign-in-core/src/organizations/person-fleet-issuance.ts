@@ -2,6 +2,7 @@ import {
 	personFleetApplicationClaimsSchema,
 	personFleetSnapshotWindowMaximumMilliseconds,
 	type PersonFleetApplicationClaims,
+	type PersonFleetJwtInputClaims,
 } from '#sign-in-core/contracts/person-fleet-token';
 import type { EpochMilliseconds } from '#sign-in-core/contracts/sign-in-platform';
 import type { FleetPermission } from '#sign-in-core/organizations/fleet-permission';
@@ -78,6 +79,7 @@ export function decidePersonFleetIssuance(props: {
 		return refused('policy-mismatch');
 	const permissions = props.permissionsForRole(snapshot.memberRole);
 	if (permissions === null) return refused('unknown-role');
+	const { second_factor_at, second_factor_method } = secondFactorTokenClaims(snapshot.confirmation);
 	const claims = personFleetApplicationClaimsSchema.safeParse({
 		token_profile: 'person-fleet',
 		organization_id: snapshot.organizationId,
@@ -90,8 +92,9 @@ export function decidePersonFleetIssuance(props: {
 		authorization_snapshot_at_ms: snapshotAt,
 		authorization_snapshot_valid_until_ms: snapshotAt + props.tokenLifetimeMilliseconds,
 		// The original confirmation time, never S: a new token is not a fresh factor.
-		...secondFactorTokenClaims(snapshot.confirmation),
-	});
+		...(second_factor_at === undefined ? {} : { second_factor_at }),
+		...(second_factor_method === undefined ? {} : { second_factor_method }),
+	} satisfies PersonFleetJwtInputClaims);
 	return claims.success ? { kind: 'issue', claims: claims.data } : refused('invalid-window');
 }
 

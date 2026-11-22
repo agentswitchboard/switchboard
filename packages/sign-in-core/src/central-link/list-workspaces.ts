@@ -1,8 +1,6 @@
-import type { z } from 'zod';
+import type { ListWorkspacesReply } from '#sign-in-core/central-link/fleet-admin-client';
+import type { Uuid7 } from '#sign-in-core/contracts/sign-in-platform';
 
-import type { listWorkspacesReplySchema } from '#sign-in-core/contracts/fleet-admin-wire';
-
-type ListWorkspacesReply = z.infer<typeof listWorkspacesReplySchema>;
 type WorkspacePage = Extract<ListWorkspacesReply, { readonly result: 'workspaces' }>;
 export type ListWorkspacesPageResult = ListWorkspacesReply | { readonly result: 'unavailable' };
 
@@ -23,10 +21,10 @@ export type ListWorkspaces = (props: {
  * or refusal on a later page must never look like a complete partial list.
  */
 export async function collectWorkspacePages(
-	readPage: (after: string | undefined) => Promise<ListWorkspacesPageResult>,
+	readPage: (after: Uuid7 | undefined) => Promise<ListWorkspacesPageResult>,
 ): Promise<ListWorkspacesResult> {
 	const workspaces: WorkspacePage['workspaces'] = [];
-	let after: string | undefined;
+	let after: Uuid7 | undefined;
 	for (;;) {
 		const page = await readPage(after);
 		if (page.result !== 'workspaces') return page;

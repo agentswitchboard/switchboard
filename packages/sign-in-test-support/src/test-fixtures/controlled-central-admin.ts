@@ -4,7 +4,7 @@ import {
 	fleetAdminRequestSchema,
 	fleetAdminRoutePaths,
 	type FleetAdminRequest,
-	type FleetAdminResult,
+	type fleetAdminResultSchemas,
 } from '@agent-collaboration/sign-in-core';
 import {
 	calculateJwkThumbprint,
@@ -54,12 +54,17 @@ export type AdminVerificationFailure =
 	| 'proof-key-binding'
 	| 'organization'
 	| 'intent';
+type FixtureAdminReply = z.input<
+	(typeof fleetAdminResultSchemas)[keyof typeof fleetAdminResultSchemas]
+>;
+
 export interface AdminArrival {
 	readonly route: AdminRouteName;
 	readonly outcome:
 		| { readonly kind: 'refused-unauthenticated'; readonly failure: AdminVerificationFailure }
 		| { readonly kind: 'bad-request' }
-		| { readonly kind: 'answered'; readonly result: FleetAdminResult };
+		| { readonly kind: 'scripted-raw' }
+		| { readonly kind: 'answered'; readonly result: FixtureAdminReply };
 	/** The verified binding, kept to prove each request used its own key and token. */
 	readonly proofKeyThumbprint: string | null;
 	readonly accessTokenHash: string | null;
@@ -100,8 +105,9 @@ export interface ControlledCentralAdmin {
 	 */
 	readonly scriptNextAnswer: (
 		route: AdminRouteName,
-		answer: (request: FleetAdminRequest) => FleetAdminResult,
+		answer: (request: FleetAdminRequest) => FixtureAdminReply,
 	) => void;
+	readonly scriptNextRawAnswer: (route: AdminRouteName, body: object) => void;
 }
 
 const proofClaimsSchema = z.strictObject({
@@ -207,8 +213,17 @@ export function createControlledCentralAdmin(props: {
 	const receivedCredentials: { readonly authorization: string; readonly proof: string }[] = [];
 	const workspaces: AdminWorkspace[] = [];
 	const usedRequestIds = new Set<string>();
-	const ledger = new Map<string, { readonly intent: string; readonly result: FleetAdminResult }>();
-	const scripted = new Map<AdminRouteName, ((request: FleetAdminRequest) => FleetAdminResult)[]>();
+	const ledger = new Map<string, { readonly intent: string; readonly result: FixtureAdminReply }>();
+	const scripted = new Map<
+		AdminRouteName,
+		(
+			| {
+					readonly kind: 'typed';
+					readonly answer: (request: FleetAdminRequest) => FixtureAdminReply;
+			  }
+			| { readonly kind: 'raw'; readonly body: object }
+		)[]
+	>();
 	const records: {
 		readonly id: string;
 		readonly requestId: string;
@@ -304,7 +319,7 @@ export function createControlledCentralAdmin(props: {
 		route: AdminRouteName,
 		claims: z.infer<typeof tokenClaimsSchema>,
 		requestId: string,
-	): FleetAdminResult | null {
+	): FixtureAdminReply | null {
 		if (props.now() >= claims.exp * 1000) return { result: 'refused', reason: 'expired' };
 		if (!props.hasFloors(claims.organization_id, claims.sub))
 			return { result: 'refused', reason: 'authorizationSyncRequired' };
@@ -325,7 +340,7 @@ export function createControlledCentralAdmin(props: {
 		body: FleetAdminRequest,
 		claims: z.infer<typeof tokenClaimsSchema>,
 		intent: string,
-	): FleetAdminResult {
+	): FixtureAdminReply {
 		switch (body.operation) {
 			case 'CreateWorkspace': {
 				const prior = ledger.get(body.operationId);
@@ -351,7 +366,7 @@ export function createControlledCentralAdmin(props: {
 					targetId: workspace.workspaceId,
 					createdAtMillis: props.now(),
 				});
-				const result: FleetAdminResult = { result: 'applied', workspace };
+				const result: FixtureAdminReply = { result: 'applied', workspace };
 				ledger.set(body.operationId, { intent, result });
 				return result;
 			}
@@ -389,7 +404,10 @@ export function createControlledCentralAdmin(props: {
 		workspaces,
 		changeRecords: records,
 		scriptNextAnswer(route, answer): void {
-			scripted.set(route, [...(scripted.get(route) ?? []), answer]);
+			scripted.set(route, [...(scripted.get(route) ?? []), { kind: 'typed', answer }]);
+		},
+		scriptNextRawAnswer(route, body): void {
+			scripted.set(route, [...(scripted.get(route) ?? []), { kind: 'raw', body }]);
 		},
 		async fetch(request, route): Promise<Response> {
 			const authorization = request.headers.get('authorization');
@@ -446,11 +464,15 @@ export function createControlledCentralAdmin(props: {
 			const scripts = refused === null ? scripted.get(route) : undefined;
 			const script = scripts?.shift();
 			if (scripts?.length === 0) scripted.delete(route);
+			if (script?.kind === 'raw') {
+				arrivals.push({ route, outcome: { kind: 'scripted-raw' }, ...facts });
+				return Response.json(script.body);
+			}
 			const result =
 				refused ??
 				(script === undefined
 					? apply(parsed.data, verified.claims, verified.intent)
-					: script(parsed.data));
+					: script.answer(parsed.data));
 			arrivals.push({ route, outcome: { kind: 'answered', result }, ...facts });
 			return Response.json(result);
 		},

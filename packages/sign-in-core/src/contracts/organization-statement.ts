@@ -1,5 +1,6 @@
 import { z } from 'zod';
 
+import type { OrganizationStampClaims_Deserialize } from '#sign-in-core/central-link/generated/central-sign-in.gen';
 import { organizationIdSchema } from '#sign-in-core/storage/models/sign-in-store';
 
 export const organizationStatementType = 'fleet-organization-stamp+jwt';
@@ -29,4 +30,4 @@ export const organizationStatementClaimsSchema = z
 		replaces: organizationStatementDigestSchema.optional(),
 	})
 	.refine((claims) => claims.sub === claims.organization_id && claims.exp > claims.iat);
-export type OrganizationStatementClaims = z.infer<typeof organizationStatementClaimsSchema>;
+export type OrganizationStatementClaims = OrganizationStampClaims_Deserialize;

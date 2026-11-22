@@ -1,3 +1,7 @@
+import type {
+	OrganizationStatementDigestReply,
+	ProvisionOrganization,
+} from '#sign-in-core/central-link/generated/central-sign-in.gen';
 import type { OrganizationStatementSigningRequest } from '#sign-in-core/contracts/organization-statement';
 import type { OrganizationStampRecords } from '#sign-in-core/organizations/organization-stamp-renewal';
 import type {
@@ -17,12 +21,7 @@ export type ProvisionOrganizationAnswer =
 	| { readonly kind: 'unknown'; readonly reason: CentralLinkUncertainty };
 /** Central's verified facts about its stored stamp; the statement bytes never cross the link. */
 export type OrganizationStatementDigestAnswer =
-	| {
-			readonly kind: 'current';
-			readonly digest: string;
-			readonly expiresAt: number;
-			readonly signingKeyId: string;
-	  }
+	| ({ readonly kind: 'current' } & Readonly<OrganizationStatementDigestReply>)
 	| { readonly kind: 'none' }
 	| { readonly kind: 'unavailable'; readonly reason: CentralLinkUncertainty };
 
@@ -37,7 +36,7 @@ export interface OrganizationProvisioningClient {
 	/** `signal` aborts the in-flight link request at the caller's deadline (D7). */
 	readonly provisionOrganization: (request: {
 		readonly organizationId: OrganizationId;
-		readonly organizationStatement: string;
+		readonly organizationStatement: ProvisionOrganization['organizationStatement'];
 		readonly signal?: AbortSignal;
 	}) => Promise<ProvisionOrganizationAnswer>;
 	readonly readStatementDigest: (
@@ -74,7 +73,7 @@ export async function ensureOrganizationProvisioned(props: {
 	if (state.kind === 'store-unavailable') return state;
 	if (state.value === null) return { kind: 'not-found' };
 	if (state.value === 'ready') return { kind: 'ready' };
-	let organizationStatement: string;
+	let organizationStatement: ProvisionOrganization['organizationStatement'];
 	try {
 		// Setup never names a predecessor; only renewal replaces a stored stamp.
 		organizationStatement = await props.signStatement({ organizationId: props.organizationId });

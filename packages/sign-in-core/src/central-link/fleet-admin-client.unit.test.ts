@@ -3,12 +3,12 @@ import { readFile } from 'node:fs/promises';
 import { expect, it } from 'vitest';
 import { z } from 'zod';
 
-import { createFleetAdminLinkClient } from '#sign-in-core/central-link/fleet-admin-client';
 import {
-	fleetAdminRequestBody,
-	fleetAdminRoutePaths,
-	type FleetAdminRequest,
-} from '#sign-in-core/organizations/fleet-admin-operation';
+	createFleetAdminLinkClient,
+	fleetAdminResultSchemas,
+} from '#sign-in-core/central-link/fleet-admin-client';
+import { organizationChangeFixtures } from '#sign-in-core/central-link/generated/organization-change-fixtures';
+import type { FleetAdminRequest } from '#sign-in-core/organizations/fleet-admin-operation';
 
 const organizationId = '019a3dce-2000-7000-8000-000000000001';
 const create: FleetAdminRequest = {
@@ -128,9 +128,94 @@ async function producerResults(kind: 'fixtures' | 'negatives'): Promise<readonly
 const resultFixtures = await producerResults('fixtures');
 const resultNegatives = await producerResults('negatives');
 
-it.each(Object.values(operations))(
-	'$operation is sent to its own route with its closed body',
-	async (operation): Promise<void> => {
+const engineOnlyRefusals = [
+	'notFound',
+	'notRetired',
+	'discardUnsupported',
+	'stale',
+	'subjectUnreadable',
+] as const;
+
+it.each(engineOnlyRefusals)(
+	'treats engine-only refusal %s as malformed on every Sign-in admin route',
+	async (reason): Promise<void> => {
+		for (const operation of Object.values(operations)) {
+			const transport = scripted(async () => Response.json({ result: 'refused', reason }));
+			await expect(
+				createFleetAdminLinkClient(transport).sendFleetAdminRequest({
+					operation,
+					accessToken: 'token',
+					proof: 'proof',
+				}),
+			).resolves.toEqual({ kind: 'unknown', reason: 'malformed-reply' });
+		}
+	},
+);
+
+it.each(
+	organizationChangeFixtures.map(
+		(record) =>
+			[
+				record.kind === 'machineAllowanceChanged' ? `${record.kind} ${record.state}` : record.kind,
+				record,
+			] as const,
+	),
+)('reads the Central change record fixture for %s', (_label, record): void => {
+	const reply = { result: 'records', records: [record] };
+	expect(fleetAdminResultSchemas.ReadChangeRecords.parse(reply)).toEqual(reply);
+	const invalidKind = { ...reply, records: [{ ...record, kind: 'unrecognized-change-kind' }] };
+	expect(fleetAdminResultSchemas.ReadChangeRecords.safeParse(invalidKind).success).toBe(false);
+	const invalidOrigin = {
+		...reply,
+		records: [{ ...record, origin: { kind: 'unrecognized-origin' } }],
+	};
+	expect(fleetAdminResultSchemas.ReadChangeRecords.safeParse(invalidOrigin).success).toBe(false);
+	const wrongFields =
+		record.kind === 'machineAllowanceChanged'
+			? { ...record, targetId: record.workspaceId }
+			: { ...record, workspaceId: record.targetId };
+	expect(
+		fleetAdminResultSchemas.ReadChangeRecords.safeParse({ ...reply, records: [wrongFields] })
+			.success,
+	).toBe(false);
+	if (record.kind === 'machineAllowanceChanged') {
+		const invalidState = { ...record, state: 'unrecognized-allowance-state' };
+		expect(
+			fleetAdminResultSchemas.ReadChangeRecords.safeParse({ ...reply, records: [invalidState] })
+				.success,
+		).toBe(false);
+	}
+});
+
+it.each([
+	{
+		operation: operations.CreateWorkspace,
+		path: '/organization-admin/v1/create-workspace',
+		body: `{"organizationId":"${organizationId}","operationId":"${create.operationId}","name":"research","description":""}`,
+	},
+	{
+		operation: operations.WorkspaceLookup,
+		path: '/organization-admin/v1/workspace-lookup',
+		body: `{"organizationId":"${organizationId}","workspaceId":"${workspace.workspaceId}"}`,
+	},
+	{
+		operation: operations.ReadChangeRecords,
+		path: '/organization-admin/v1/change-records',
+		body: `{"organizationId":"${organizationId}","after":null,"limit":10}`,
+	},
+	{
+		operation: {
+			operation: 'ReadChangeRecords',
+			organizationId,
+			after: create.operationId,
+			limit: 10,
+		} satisfies FleetAdminRequest,
+		path: '/organization-admin/v1/change-records',
+		body: `{"organizationId":"${organizationId}","after":"${create.operationId}","limit":10}`,
+	},
+])(
+	'sends $path with the literal expected bytes $body',
+	async ({ operation, path, body }): Promise<void> => {
 		const transport = scripted(async () => new Response(null, { status: 503 }));
 		await createFleetAdminLinkClient(transport).sendFleetAdminRequest({
 			operation,
@@ -139,8 +224,8 @@ it.each(Object.values(operations))(
 		});
 		const request = transport.sent[0];
 		if (request === undefined) throw new Error('No admin request sent');
-		expect(new URL(request.url).pathname).toBe(fleetAdminRoutePaths[operation.operation]);
-		expect(await request.json()).toEqual(fleetAdminRequestBody(operation));
+		expect(new URL(request.url).pathname).toBe(path);
+		expect(await request.text()).toBe(body);
 	},
 );
 
