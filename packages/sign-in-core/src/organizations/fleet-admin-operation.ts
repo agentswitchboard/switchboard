@@ -1,5 +1,12 @@
 import { z } from 'zod';
 
+import type {
+	CreateWorkspaceRequest_Deserialize,
+	OrganizationAdminIntent_Serialize,
+	ReadChangeRecordsRequest_Deserialize,
+	WorkspaceLookupRequest,
+} from '#sign-in-core/central-link/generated/central-sign-in.gen';
+import type { AssertWireType, WireTypesEqual } from '#sign-in-core/central-link/wire-type-equality';
 import { canonicalJson, type CanonicalJsonValue } from '#sign-in-core/contracts/canonical-json';
 import type { SignInCrypto } from '#sign-in-core/contracts/sign-in-platform';
 
@@ -53,7 +60,19 @@ export const fleetAdminRequestSchema = z.discriminatedUnion('operation', [
 		limit: z.number().int().min(1).max(100),
 	}),
 ]);
-export type FleetAdminRequest = z.infer<typeof fleetAdminRequestSchema>;
+type FleetAdminRequestBodies = {
+	CreateWorkspace: CreateWorkspaceRequest_Deserialize;
+	WorkspaceLookup: WorkspaceLookupRequest;
+	ReadChangeRecords: Required<ReadChangeRecordsRequest_Deserialize>;
+};
+export type FleetAdminRequest = {
+	[Operation in keyof FleetAdminRequestBodies]: {
+		operation: Operation;
+	} & FleetAdminRequestBodies[Operation];
+}[keyof FleetAdminRequestBodies];
+export type FleetAdminRequestWireType = AssertWireType<
+	WireTypesEqual<z.output<typeof fleetAdminRequestSchema>, FleetAdminRequest>
+>;
 
 function utf8ByteLength(text: string): number {
 	return new TextEncoder().encode(text).length;
@@ -74,22 +93,27 @@ export function fleetAdminRequestBody(operation: FleetAdminRequest): CanonicalJs
 				operationId: operation.operationId,
 				name: operation.name,
 				description: operation.description,
-			};
+			} satisfies CreateWorkspaceRequest_Deserialize;
 		case 'WorkspaceLookup':
-			return { organizationId: operation.organizationId, workspaceId: operation.workspaceId };
+			return {
+				organizationId: operation.organizationId,
+				workspaceId: operation.workspaceId,
+			} satisfies WorkspaceLookupRequest;
 		case 'ReadChangeRecords':
 			return {
 				organizationId: operation.organizationId,
 				after: operation.after,
 				limit: operation.limit,
-			};
+			} satisfies ReadChangeRecordsRequest_Deserialize;
 		default:
 			return unreachableOperation(operation);
 	}
 }
 
 /** T06: `{v:1, operation, organization, target, operationId, params}`, params holding every effect field. */
-export function fleetAdminIntent(operation: FleetAdminRequest): CanonicalJsonValue {
+export function fleetAdminIntent(
+	operation: FleetAdminRequest,
+): Extract<OrganizationAdminIntent_Serialize, { operation: FleetAdminRequest['operation'] }> {
 	const organization = operation.organizationId;
 	switch (operation.operation) {
 		case 'CreateWorkspace':
@@ -100,7 +124,7 @@ export function fleetAdminIntent(operation: FleetAdminRequest): CanonicalJsonVal
 				target: organization,
 				operationId: operation.operationId,
 				params: { name: operation.name, description: operation.description },
-			};
+			} satisfies OrganizationAdminIntent_Serialize;
 		case 'WorkspaceLookup':
 			return {
 				v: 1,
@@ -109,7 +133,7 @@ export function fleetAdminIntent(operation: FleetAdminRequest): CanonicalJsonVal
 				target: operation.workspaceId,
 				operationId: null,
 				params: {},
-			};
+			} satisfies OrganizationAdminIntent_Serialize;
 		case 'ReadChangeRecords':
 			return {
 				v: 1,
@@ -118,7 +142,7 @@ export function fleetAdminIntent(operation: FleetAdminRequest): CanonicalJsonVal
 				target: organization,
 				operationId: null,
 				params: { after: operation.after, limit: operation.limit },
-			};
+			} satisfies OrganizationAdminIntent_Serialize;
 		default:
 			return unreachableOperation(operation);
 	}

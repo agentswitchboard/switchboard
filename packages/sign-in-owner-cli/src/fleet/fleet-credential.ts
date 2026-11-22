@@ -4,6 +4,7 @@ import {
 	fleetAdminProofKeyThumbprint,
 	signFleetAdminProof,
 	type FleetAdminProofKey,
+	type PersonFleetTokenClaims,
 	type SignInCrypto,
 } from '@agent-collaboration/sign-in-core';
 import { z } from 'zod';
@@ -47,7 +48,7 @@ const issuedClaimsSchema = z.looseObject({
 	client_id: z.string(),
 	token_profile: z.literal('person-fleet'),
 	cnf: z.looseObject({ jkt: z.string() }),
-});
+}) satisfies z.ZodType<Pick<PersonFleetTokenClaims, 'aud' | 'token_profile' | 'cnf'>>;
 
 function decodePayload(token: string): unknown {
 	const encoded = token.split('.')[1];

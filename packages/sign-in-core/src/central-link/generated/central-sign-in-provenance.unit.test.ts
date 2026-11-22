@@ -3,7 +3,7 @@ import { readFile } from 'node:fs/promises';
 
 import { expect, it } from 'vitest';
 
-import { centralSignInWireProvenance } from '#sign-in-core/central-link/generated/provenance';
+import { centralSignInWireProvenance } from '#sign-in-core/central-link/generated/central-sign-in-provenance';
 
 it('pins the generated Central wire file byte-for-byte to its producer', async (): Promise<void> => {
 	const vendored = await readFile(new URL('./central-sign-in.gen.ts', import.meta.url));

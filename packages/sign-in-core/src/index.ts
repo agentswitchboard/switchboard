@@ -56,3 +56,4 @@ export * from '#sign-in-core/central-link/fleet-admin-client';
 export * from '#sign-in-core/central-link/fleet-admin-proof';
 export * from '#sign-in-core/organizations/fleet-admin-create-words';
 export * from '#sign-in-core/organizations/fleet-admin-operation';
+export type { PersonFleetTokenClaims } from '#sign-in-core/contracts/person-fleet-token';

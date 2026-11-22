@@ -45,6 +45,7 @@ import {
 	workspaceResourcePorts,
 	requireStoredValue,
 } from '#sign-in-core/better-auth/store-result-adapters';
+import type { PersonTokenHeader_Deserialize } from '#sign-in-core/central-link/generated/central-sign-in.gen';
 import { isSignedInNavigationPath } from '#sign-in-core/contracts/sign-in-navigation';
 import { runAuthorizationRevisionDrain } from '#sign-in-core/organizations/authorization-revision-drainer';
 import type { OrganizationFleetState } from '#sign-in-core/organizations/organization-provisioning';
@@ -334,8 +335,11 @@ export function createSignInHttpHandler(
 				accessTokenSeconds: configuration.configuration.accessTokenSeconds,
 				now: configuration.platform.clock.now,
 				inspectSignedToken: (token) => {
-					if (decodeProtectedHeader(token).typ !== 'at+jwt')
-						throw new Error('Wrong signed access token type');
+					const { typ } = decodeProtectedHeader(token) satisfies Pick<
+						PersonTokenHeader_Deserialize,
+						'typ'
+					>;
+					if (typ !== 'at+jwt') throw new Error('Wrong signed access token type');
 					return accessTokenReleaseClaimsSchema.parse(decodeJwt(token));
 				},
 				readAgent: agents.read,

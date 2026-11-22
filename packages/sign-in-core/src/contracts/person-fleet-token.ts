@@ -1,5 +1,6 @@
 import { z } from 'zod';
 
+import type { PersonClaims_Deserialize } from '#sign-in-core/central-link/generated/central-sign-in.gen';
 import { fleetPermissionSchema } from '#sign-in-core/organizations/fleet-permission';
 import { secondFactorMethodSchema } from '#sign-in-core/second-factors/second-factor-step-up';
 
@@ -44,6 +45,11 @@ export const personFleetApplicationClaimsSchema = z
 		'The snapshot deadline must follow S by at most the person token lifetime',
 	);
 export type PersonFleetApplicationClaims = z.infer<typeof personFleetApplicationClaimsSchema>;
+/** Claims contributed by Sign-in before the native issuer adds its JWT fields. */
+export type PersonFleetJwtInputClaims = Omit<
+	PersonClaims_Deserialize,
+	'iss' | 'aud' | 'sub' | 'sid' | 'iat' | 'exp' | 'cnf'
+>;
 
 /** A signed person-fleet token as the release fence reads it: the application claims plus native ones. */
 export const personFleetTokenClaimsSchema = z.looseObject({
@@ -58,4 +64,4 @@ export const personFleetTokenClaimsSchema = z.looseObject({
 	exp: z.number().int(),
 	cnf: z.looseObject({ jkt: z.string().min(1) }),
 });
-export type PersonFleetTokenClaims = z.infer<typeof personFleetTokenClaimsSchema>;
+export type PersonFleetTokenClaims = PersonClaims_Deserialize;
