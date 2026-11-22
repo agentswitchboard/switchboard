@@ -541,4 +541,44 @@ describe('B1 closure 2: the static method and path inventory is the coverage aut
 			),
 		).toThrow(/Unsupported route predicate form/u);
 	});
+
+	// Closure 5: a helper that checks a route table and also reads the method.
+	const tableHelper = (methodCheck: string, table: 'object' | 'array'): string =>
+		table === 'object'
+			? `const routes = { '/api/a': true } as const;\nfunction served(pathname: string, method: string): boolean { return Object.hasOwn(routes, pathname) && ${methodCheck}; }`
+			: `const routes = [{ path: '/api/a' }] as const;\nfunction served(pathname: string, method: string): boolean { return routes.some((route) => route.path === pathname) && ${methodCheck}; }`;
+
+	it('fails closed on a route-table helper that also reads the method in an opaque form, after an earlier branch gave evidence', (): void => {
+		for (const table of ['object', 'array'] as const)
+			for (const methodCheck of [
+				`['PUT', 'PATCH'].includes(method)`,
+				`method.toUpperCase() === 'PUT'`,
+				`other(method)`,
+			])
+				expect(
+					() =>
+						staticServed(
+							helperHandler(
+								`${tableHelper(methodCheck, table)}\nfunction other(value: string): boolean { return value === 'PUT'; }`,
+								'served(url.pathname, request.method)',
+							),
+							'/api/a',
+						),
+					`${table}: ${methodCheck}`,
+				).toThrow(/Unsupported route predicate form/u);
+	});
+
+	it('still reads a route-table helper that compares the method with a literal', (): void => {
+		for (const table of ['object', 'array'] as const)
+			expect(
+				staticServed(
+					helperHandler(
+						tableHelper(`method === 'PUT'`, table),
+						'served(url.pathname, request.method)',
+					),
+					'/api/a',
+				).map((route) => route.method),
+				table,
+			).toEqual(['GET', 'PUT']);
+	});
 });

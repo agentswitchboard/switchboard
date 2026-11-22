@@ -177,21 +177,22 @@ function analyze(expression: ts.Expression, path: string, checker: ts.TypeChecke
 		if (ts.isIdentifier(callee)) {
 			const target = resolveDeclaration(callee, checker);
 			if (target !== undefined && ts.isFunctionDeclaration(target)) {
-				const table = tablePathsOfDeclaration(target, checker);
-				if (table !== undefined && current.arguments.some(isPathname))
-					return { path: table.includes(path), methods: [] };
 				// The route admission itself (isPublicSignInRoute) is evaluated by the static admission, so it
-				// is no dispatch evidence here. Any other helper that takes the pathname and the method is read
-				// like every helper below, and fails closed when it cannot be.
+				// is no dispatch evidence here. Any other helper that takes the method is read like every
+				// helper, and fails closed when it cannot be.
 				if (isRouteAdmissionCall(current, checker)) return { path: undefined, methods: [] };
-				// A helper that compares its method parameter (isSameOriginSignInPost(method, ...)).
+				// The method-bearing uses are read first, so a helper that also checks a route table cannot
+				// hide an opaque method check behind its table (isSameOriginSignInPost(method, ...) compares).
 				const argumentIndex = current.arguments.findIndex(isMethodReference);
 				const parameter = argumentIndex < 0 ? undefined : target.parameters[argumentIndex];
-				if (parameter !== undefined && target.body !== undefined)
-					return {
-						path: undefined,
-						methods: methodsComparedTo(parameter.name.getText(), target.body, checker),
-					};
+				const methods =
+					parameter !== undefined && target.body !== undefined
+						? methodsComparedTo(parameter.name.getText(), target.body, checker)
+						: undefined;
+				const table = tablePathsOfDeclaration(target, checker);
+				if (table !== undefined && current.arguments.some(isPathname))
+					return { path: table.includes(path), methods: methods ?? [] };
+				if (methods !== undefined) return { path: undefined, methods };
 			}
 		}
 	}
