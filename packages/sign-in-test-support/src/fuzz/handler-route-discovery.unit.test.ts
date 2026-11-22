@@ -4,6 +4,7 @@ import { expect, it } from 'vitest';
 import {
 	discoverHandlerRoutes,
 	discoverRoutesInSource,
+	probedHttpMethods,
 	reachableOuterRoutes,
 	unclassifiedHandlerRoutes,
 	unclassifiedOuterRoutes,
@@ -152,11 +153,13 @@ it('the signed-in shell pages are classified and have a request family, and the 
 	const reachable = actualOuterRoutes(routeClassification.map((row) => row.path));
 	expect(reachable).toContainEqual({ method: 'GET', path: '/me' });
 	expect(reachable).toContainEqual({ method: 'GET', path: '/people' });
-	expect(
-		unclassifiedOuterRoutes(reachable, routeClassification).filter(
-			(route) => route.method === 'PUT' && route.path.startsWith('/api/auth/'),
-		),
-	).toEqual([]);
+	// Where the predicate names the method itself (a path admitted under only some methods), each
+	// pair is exact and must be classified.
+	const methodSpecific = reachable.filter(
+		(route) =>
+			reachable.filter((other) => other.path === route.path).length < probedHttpMethods.length,
+	);
+	expect(unclassifiedOuterRoutes(methodSpecific, routeClassification)).toEqual([]);
 });
 
 it('a new HTTP method on a known path, or a new shell page, is unclassified until classified', () => {
