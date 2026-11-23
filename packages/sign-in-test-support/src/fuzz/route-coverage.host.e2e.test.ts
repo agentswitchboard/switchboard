@@ -1,6 +1,6 @@
 import { afterAll, beforeAll, expect, it } from 'vitest';
 
-import { fuzzMachineOptions } from '#sign-in-test-support/fuzz/machine-login-fixture';
+import { createFuzzMachineOptions } from '#sign-in-test-support/fuzz/machine-login-fixture';
 import {
 	actualOuterRoutes,
 	ambiguousMethodMismatches,
@@ -25,7 +25,7 @@ useControlledSignInClock();
 
 let harness: Awaited<ReturnType<typeof startLocalAuthHarness>>;
 beforeAll(async () => {
-	harness = await startLocalAuthHarness(fuzzMachineOptions);
+	harness = await startLocalAuthHarness(createFuzzMachineOptions());
 });
 afterAll(async () => {
 	await harness?.close();

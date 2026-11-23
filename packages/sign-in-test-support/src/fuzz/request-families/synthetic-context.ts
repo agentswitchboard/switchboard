@@ -28,4 +28,5 @@ export const syntheticRequestFamilyContext: RequestFamilyContext = {
 	machineEnrollmentId: 'machine-enrollment',
 	machineUserCode: 'ABCDEFGH',
 	machineDeviceCode: 'device-code',
+	machineRefreshToken: 'unissued-machine-refresh-token',
 };

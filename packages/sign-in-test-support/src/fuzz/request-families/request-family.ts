@@ -31,6 +31,7 @@ export interface RequestFamilyContext {
 	readonly machineEnrollmentId: string;
 	readonly machineUserCode: string;
 	readonly machineDeviceCode: string;
+	readonly machineRefreshToken: string;
 }
 
 /** One variant family, kept structural: how the request is encoded, which field is changed, and how. */

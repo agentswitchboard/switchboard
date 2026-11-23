@@ -21,7 +21,7 @@ export function forwardWorkerMachineLink(
 	const organization = uuid7Schema.safeParse(address.pathname.slice(publicLinkPrefix.length));
 	if (!organization.success) return undefined;
 	if (!/^Bearer [^\s]+$/iu.test(request.headers.get('authorization') ?? ''))
-		return new Response(null, { status: 401 });
+		return Promise.resolve(new Response(null, { status: 401 }));
 	const headers = new Headers({ connection: 'Upgrade', upgrade: 'websocket' });
 	for (const name of machineLinkHandshakeHeaders) {
 		const value = request.headers.get(name);

@@ -357,7 +357,7 @@ const reachableRouteGroups: readonly ReachableRouteGroup[] = [
 	{
 		method: 'POST',
 		paths: ['/api/auth/oauth2/token'],
-		exposure: ['cli'],
+		exposure: ['cli', 'machine'],
 		requestParts: ['form', 'json'],
 		documentedAnswers: [200, 400, 401, 403, 415, 429],
 		disclosure:

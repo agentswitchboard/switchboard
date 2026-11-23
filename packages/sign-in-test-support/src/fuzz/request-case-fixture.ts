@@ -6,7 +6,7 @@ import { z } from 'zod';
 
 import {
 	fuzzMachineLogin,
-	fuzzMachineOptions,
+	createFuzzMachineOptions,
 	prepareMachineCode,
 } from '#sign-in-test-support/fuzz/machine-login-fixture';
 import type { RequestFamilyContext } from '#sign-in-test-support/fuzz/request-families/index';
@@ -74,8 +74,10 @@ export async function createRequestCaseFixture(props: {
 	readonly caller: RequestCaller;
 	readonly path: string;
 	readonly existingHarness?: Harness;
+	readonly machineRefreshVariant?: boolean;
 }): Promise<RequestCaseFixture> {
-	const ownedHarness = props.existingHarness ?? (await startLocalAuthHarness(fuzzMachineOptions));
+	const ownedHarness =
+		props.existingHarness ?? (await startLocalAuthHarness(createFuzzMachineOptions()));
 	const caseId = controlledSignInIds.nextId();
 	let browserKey = `${caseId}:setup`;
 	const harness: Harness = {
@@ -193,6 +195,7 @@ export async function createRequestCaseFixture(props: {
 			machineEnrollmentId: controlledSignInIds.nextId(),
 			machineUserCode: 'ABCDEFGH',
 			machineDeviceCode: 'unissued-fixture-device-code',
+			machineRefreshToken: 'unissued-machine-refresh-token',
 			passkeyRegistrationResponse: {},
 			passkeyAuthenticationResponse: {},
 			totpCode: await harness.totpAuthenticator.currentCode(callerEmail),
@@ -204,10 +207,18 @@ export async function createRequestCaseFixture(props: {
 			}),
 			callbackQuery: {},
 		};
-		context = await prepareMachineCode({ path: props.path, harness, ownerCookie, context });
+		context = await prepareMachineCode({
+			path: props.path,
+			harness,
+			ownerCookie,
+			context,
+			machineRefreshVariant: props.machineRefreshVariant === true,
+		});
 		const issuedCredentials: string[] = [context.backupCode];
 		if (context.machineDeviceCode !== 'unissued-fixture-device-code')
 			issuedCredentials.push(context.machineDeviceCode);
+		if (context.machineRefreshToken !== 'unissued-machine-refresh-token')
+			issuedCredentials.push(context.machineRefreshToken);
 		if (props.path.startsWith('/api/auth/passkey/') && props.caller !== 'signed-out') {
 			const authenticator = await createSoftwarePasskeyAuthenticator();
 			const registered = await registerBrowserPasskey({

@@ -1,6 +1,11 @@
-import { decodeJwt } from 'jose';
+import {
+	machineTokenClaimsSchema,
+	machineTokenResponseSchema,
+} from '@agent-collaboration/sign-in-core/better-auth';
+import { decodeJwt, decodeProtectedHeader } from 'jose';
 import { z } from 'zod';
 
+import { fuzzMachineLogin } from '#sign-in-test-support/fuzz/machine-login-fixture';
 import type { RequestCaseFixture } from '#sign-in-test-support/fuzz/request-case-fixture';
 import type {
 	GeneratedRequest,
@@ -94,6 +99,94 @@ const deviceCodeRelease = z.strictObject({
 	expires_in: z.number().int().positive(),
 	interval: z.number().int().positive(),
 });
+
+type MachineRefreshContext = Pick<
+	RequestFamilyContext,
+	'machineEnrollmentId' | 'machineId' | 'machineRefreshToken' | 'organizationId'
+>;
+
+export function isBoundMachineRefresh(
+	context: Partial<MachineRefreshContext>,
+	request: GeneratedRequest,
+): boolean {
+	const headers = new Headers(request.init.headers);
+	if (
+		request.pathname !== '/api/auth/oauth2/token' ||
+		headers.get('content-type') !== 'application/x-www-form-urlencoded' ||
+		headers.has('authorization') ||
+		typeof request.init.body !== 'string' ||
+		!context.machineRefreshToken
+	)
+		return false;
+	const form = new URLSearchParams(request.init.body);
+	return (
+		Array.from(form).length === 3 &&
+		form.get('grant_type') === 'refresh_token' &&
+		form.get('client_id') === context.machineEnrollmentId &&
+		form.get('refresh_token') === context.machineRefreshToken
+	);
+}
+
+function redactedMachineRefresh(props: {
+	readonly context: { readonly issuer: string } & Partial<MachineRefreshContext>;
+	readonly request: GeneratedRequest;
+	readonly answer: ObservedRequestAnswer;
+	readonly before: RequestStorageSnapshot;
+	readonly after: RequestStorageSnapshot;
+}): string {
+	const { context, request, answer, before, after } = props;
+	if (!isBoundMachineRefresh(context, request))
+		throw new Error('S2 credential-disclosure: machine refresh outside the input entitlement');
+	const parsed = machineTokenResponseSchema.strict().safeParse(answer.body);
+	if (!parsed.success) throw new Error('S2 credential-disclosure: unexpected machine token body');
+	const { access_token, refresh_token, ...publicFields } = parsed.data;
+	const claims = machineTokenClaimsSchema.safeParse(decodeJwt(access_token));
+	if (
+		!claims.success ||
+		decodeProtectedHeader(access_token).typ !== 'at+jwt' ||
+		claims.data.iss !== context.issuer ||
+		claims.data.aud !== fuzzMachineLogin.machineAudience ||
+		claims.data.client_id !== context.machineEnrollmentId ||
+		claims.data.azp !== context.machineEnrollmentId ||
+		claims.data.principal.machine_id !== context.machineId ||
+		claims.data.principal.enrollment_id !== context.machineEnrollmentId ||
+		claims.data.organization_id !== context.organizationId ||
+		publicFields.machine_client_id !== context.machineEnrollmentId ||
+		claims.data.exp <= claims.data.iat ||
+		claims.data.exp - claims.data.iat > 3600 ||
+		(claims.data.sid !== undefined && claims.data.sid !== null) ||
+		Object.hasOwn(claims.data, 'workspace_id') ||
+		refresh_token === context.machineRefreshToken ||
+		answer.headers.has('set-cookie')
+	)
+		throw new Error('S2 credential-disclosure: machine refresh escaped its bound enrollment');
+	const original = (before.oauthRefreshToken ?? []).filter(
+		(row) =>
+			row.clientId === context.machineEnrollmentId &&
+			row.rotatedAt === null &&
+			row.revoked === null,
+	);
+	const retained = (after.oauthRefreshToken ?? []).find((row) => row.id === original[0]?.id);
+	const added = rowsAdded({
+		before: before.oauthRefreshToken ?? [],
+		after: after.oauthRefreshToken ?? [],
+	});
+	const replacesCredential = added.filter(
+		(row) =>
+			row.clientId === context.machineEnrollmentId &&
+			row.rotatedAt === null &&
+			row.revoked === null,
+	);
+	if (
+		original.length !== 1 ||
+		(retained !== undefined && retained.rotatedAt === null && retained.revoked === null) ||
+		replacesCredential.length !== 1
+	)
+		throw new Error(
+			'S2 refusal-effects: machine refresh did not replace its single live credential',
+		);
+	return JSON.stringify(publicFields);
+}
 
 function deviceIssuanceWithoutCredential(
 	body: unknown,
@@ -238,7 +331,8 @@ export function assertRequestDisclosure(props: {
 			| 'oauthResource'
 			| 'oauthRedirectUri'
 			| 'invitationId'
-		>;
+		> &
+			Partial<MachineRefreshContext>;
 	};
 	readonly path: string;
 	readonly request: GeneratedRequest;
@@ -250,17 +344,25 @@ export function assertRequestDisclosure(props: {
 	const refusal =
 		answer.status >= 400 || (answer.headers.get('location')?.includes('error=') ?? false);
 	const tokenSuccess = path === '/api/auth/oauth2/token' && answer.status === 200;
+	const machineRefreshSuccess = tokenSuccess && props.request.variant.flow === 'machine-refresh';
 	const deviceCodeSuccess = path === '/api/auth/device/code' && answer.status === 200;
 	const credentials = [
 		...storedCredentials(before),
 		...storedCredentials(after),
 		...fixture.issuedCredentials,
 	];
-	forbid(
-		deviceCodeSuccess ? deviceIssuanceWithoutCredential(answer.body, before, after) : answer.text,
-		credentials,
-		'S2 credential-disclosure: body contains a stored credential',
-	);
+	const releasedBody = machineRefreshSuccess
+		? redactedMachineRefresh({
+				context: fixture.context,
+				request: props.request,
+				answer,
+				before,
+				after,
+			})
+		: deviceCodeSuccess
+			? deviceIssuanceWithoutCredential(answer.body, before, after)
+			: answer.text;
+	forbid(releasedBody, credentials, 'S2 credential-disclosure: body contains a stored credential');
 	for (const [name, value] of answer.headers) {
 		if (name !== 'set-cookie')
 			forbid(value, credentials, 'S2 credential-disclosure: header contains a stored credential');
@@ -273,11 +375,17 @@ export function assertRequestDisclosure(props: {
 			throw new Error('S2 credential-disclosure: credential field in refusal');
 	} else {
 		const fields = credentialFields(answer.body);
-		const allowed = tokenSuccess ? ['/access_token'] : deviceCodeSuccess ? ['/device_code'] : [];
+		const allowed = machineRefreshSuccess
+			? ['/access_token', '/refresh_token']
+			: tokenSuccess
+				? ['/access_token']
+				: deviceCodeSuccess
+					? ['/device_code']
+					: [];
 		if (fields.some((field) => !allowed.includes(field)))
 			throw new Error('S2 credential-disclosure: output outside route entitlement');
 	}
-	if (tokenSuccess) {
+	if (tokenSuccess && !machineRefreshSuccess) {
 		if (fixture.caller !== 'owner' || fixture.context.oauthCode === 'unissued-fixture-code')
 			throw new Error('S2 credential-disclosure: token issued outside caller entitlement');
 		const input = new URLSearchParams(

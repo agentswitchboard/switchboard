@@ -38,7 +38,7 @@ export const machineLoginFamilies = [
 		'/api/auth/oauth2/revoke',
 		(context) => ({
 			client_id: context.machineEnrollmentId,
-			token: 'unissued-machine-token',
+			token: context.machineRefreshToken,
 			token_type_hint: 'refresh_token',
 		}),
 		true,

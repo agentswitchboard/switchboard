@@ -21,6 +21,7 @@ import {
 	assertDocumentedErrorBody,
 	assertGenericRefusalBody,
 	assertRequestDisclosure,
+	isBoundMachineRefresh,
 	observeRequestAnswer,
 	type ObservedRequestAnswer,
 } from '#sign-in-test-support/fuzz/request-disclosure';
@@ -102,6 +103,10 @@ export async function runRequestGroup(props: {
 			caller,
 			path: family.route.path,
 			existingHarness: harness,
+			machineRefreshVariant:
+				family.route.path === '/api/auth/oauth2/token' &&
+				(identity.stepIndex === undefined ||
+					expectedPlanKeys[identity.stepIndex]?.endsWith('|machine-refresh') === true),
 		});
 		const steps = family.variantSteps(fixture.context);
 		const keys = steps.map(variantKey);
@@ -134,6 +139,19 @@ export async function runRequestGroup(props: {
 		});
 		const observed = await observeRequestAnswer(response);
 		const answer = props.observeAnswer?.(observed, generated) ?? observed;
+		if (
+			generated.variant.encoding === 'form' &&
+			generated.variant.mutation === 'valid' &&
+			generated.variant.field === null
+		) {
+			if (generated.variant.flow === 'machine-refresh')
+				expect(answer.status, 'S2 registered machine refresh succeeds').toBe(200);
+			if (family.route.path === '/api/auth/oauth2/revoke')
+				expect(
+					[answer.status, answer.body],
+					'S2 registered machine refresh credential cannot be revoked here',
+				).toEqual([403, { error: 'machine_revocation_forbidden' }]);
+		}
 		await fixture.harness.settleDeferredWork();
 		const after = await readRequestStorageSnapshot(fixture.harness.database);
 		expect(
@@ -145,6 +163,7 @@ export async function runRequestGroup(props: {
 			caller,
 			request: generated,
 			status: answer.status,
+			boundMachineRefresh: isBoundMachineRefresh(fixture.context, generated),
 		});
 		assertDocumentedErrorBody({
 			documentedErrorBodies: classification.documentedErrorBodies,

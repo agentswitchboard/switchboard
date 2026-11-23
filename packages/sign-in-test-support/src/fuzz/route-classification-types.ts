@@ -65,12 +65,16 @@ export function documentedAnswersFor(
 	>,
 	caller: RouteCaller,
 	request?: Pick<GeneratedRequest, 'variant'>,
+	boundMachineRefresh = false,
 ): readonly number[] {
 	const answers =
 		classification.documentedAnswersByCaller?.[caller] ?? classification.documentedAnswers;
 	const exposed =
 		classification.exposure.includes(caller) ||
-		(caller === 'owner' && classification.exposure.includes('cli'));
+		(caller === 'owner' && classification.exposure.includes('cli')) ||
+		(boundMachineRefresh &&
+			classification.exposure.includes('machine') &&
+			request?.variant.flow === 'machine-refresh');
 	const bodyUnreadable =
 		request !== undefined &&
 		['malformed', 'wrong-content-type'].includes(request.variant.encoding) &&

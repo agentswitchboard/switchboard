@@ -24,7 +24,7 @@ const machineToken = {
 		(context) => ({
 			grant_type: 'refresh_token',
 			client_id: context.machineEnrollmentId,
-			refresh_token: 'unissued-machine-refresh-token',
+			refresh_token: context.machineRefreshToken,
 		}),
 		true,
 	),
