@@ -14,7 +14,7 @@ export const organizationAccessControl = createAccessControl({
 export const organizationRoles = {
 	owner: organizationAccessControl.newRole({
 		...ownerAc.statements,
-		organization: [...ownerAc.statements.organization, 'view', 'readAudit'],
+		organization: [...ownerAc.statements.organization, 'view', 'readAudit', 'repairWork'],
 		machine: ['enroll', 'revoke', 'setTokenLifetime'],
 		workspace: ['create'],
 		workspaceAdmin: ['allowMachine', 'withdrawMachine', 'removeSession'],

@@ -119,6 +119,7 @@ describe('fresh organization permission checks in a native endpoint context', ()
 		['organization:view', { organization: ['view'] }],
 		['organization:readAudit', { organization: ['readAudit'] }],
 		['approval:decide', { approval: ['decide'] }],
+		['organization:repairWork', { organization: ['repairWork'] }],
 	] as const)('grants the owner and refuses a member for %s', async (permission, permissions) => {
 		// Arrange
 		let role = 'owner';

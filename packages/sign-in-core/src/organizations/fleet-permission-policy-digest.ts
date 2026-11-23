@@ -6,4 +6,4 @@
  * stop/resume with a new digest.
  */
 export const fleetPermissionPolicyDigest =
-	'e51bacbfa4924d46bc2381bbafaf9cb35b9dd452a5c5ded2dfa77a931004a3cb';
+	'88fe6f138c24f3e2d18accacf2077a12339076905e1c85bc76dd18632cab6054';

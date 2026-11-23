@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
+import { fleetPermissionsForRole } from '#sign-in-core/better-auth/fleet-permission-policy';
 import {
 	organizationAccessControl,
 	organizationRoles,
@@ -28,12 +29,26 @@ describe('organization roles on the native plugin statement', () => {
 		expect(organizationRoles.owner.authorize({ organization: ['view', 'readAudit'] }).success).toBe(
 			true,
 		);
-		// C3: `approval:decide` is the owner's alone.
+		// C3: `approval:decide` and `organization:repairWork` are the owner's alone.
 		expect(organizationRoles.owner.authorize({ approval: ['decide'] }).success).toBe(true);
+		expect(organizationRoles.owner.authorize({ organization: ['repairWork'] }).success).toBe(true);
 		for (const [resource, actions] of Object.entries(statements))
 			for (const action of actions)
 				expect(organizationRoles.member.authorize({ [resource]: [action] }).success).toBe(false);
 		expect(Object.keys(organizationRoles).toSorted()).toEqual(['member', 'owner']);
+	});
+
+	it('member holds neither approval:decide nor organization:repairWork', () => {
+		// Arrange: the owner refused the member grant on 23 Nov; workspace isolation comes first.
+		const ownerOnly = [{ approval: ['decide'] }, { organization: ['repairWork'] }] as const;
+		// Act
+		const memberGrants = ownerOnly.map(
+			(request) => organizationRoles.member.authorize(request).success,
+		);
+		// Assert
+		expect(memberGrants).toEqual([false, false]);
+		expect(fleetPermissionsForRole('member')).not.toContain('approval:decide');
+		expect(fleetPermissionsForRole('member')).not.toContain('organization:repairWork');
 	});
 });
 

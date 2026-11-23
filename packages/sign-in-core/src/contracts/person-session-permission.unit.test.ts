@@ -24,8 +24,9 @@ describe('K5 names the permission checked for this request', () => {
 		'organization:view',
 		'organization:readAudit',
 		'approval:decide',
+		'organization:repairWork',
 	])('carries the checked permission %s', (permission) => {
-		// Arrange / Act: the literal set is the Program Design's route permissions plus C3's approval:decide.
+		// Arrange / Act: the literal set is the Program Design's route permissions plus C3's approval:decide and organization:repairWork.
 		const confirmation = personSessionConfirmationSchema.parse({ ...activeSession, permission });
 		// Assert
 		expect(confirmation).toMatchObject({ ...activeSession, permission });
