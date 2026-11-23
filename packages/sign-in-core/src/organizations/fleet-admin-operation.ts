@@ -1,6 +1,7 @@
 import { z } from 'zod';
 
 import type {
+	ApprovalIntent_Serialize,
 	CreateWorkspaceRequest_Deserialize,
 	ListWorkspacesRequest_Deserialize,
 	ListWorkspacesRequest_Serialize,
@@ -184,12 +185,40 @@ export function fleetAdminIntent(
 	}
 }
 
+/** Every intent a person's proof signs for central: the admin operations and C3's approvals. */
+export type CentralSignedIntent = OrganizationAdminIntent_Serialize | ApprovalIntent_Serialize;
+/** T06's frame, which C3 reuses: `{v:1, operation, organization, target, operationId, params}`. */
+interface CentralSignedIntentFrame {
+	readonly v: 1;
+	readonly operation: string;
+	readonly organization: string;
+	readonly target: string;
+	readonly operationId: string | null;
+	readonly params: CanonicalJsonValue;
+}
+/** Per arm: it fits the frame and carries no field beyond it. */
+type IntentArmFitsFrame<Arm> = Arm extends CentralSignedIntentFrame
+	? [Exclude<keyof Arm, keyof CentralSignedIntentFrame>] extends [never]
+		? true
+		: false
+	: false;
+export type CentralSignedIntentFrameCheck = AssertWireType<
+	false extends IntentArmFitsFrame<CentralSignedIntent> ? false : true
+>;
+
 /** The proof's `intent` claim: base64url(SHA-256(RFC 8785 JCS(intent))). */
+export async function centralSignedIntentDigest(
+	crypto: SignInCrypto,
+	intent: CentralSignedIntent,
+): Promise<string> {
+	return base64UrlSha256(crypto, canonicalJson(intent));
+}
+
 export async function fleetAdminIntentDigest(
 	crypto: SignInCrypto,
 	operation: FleetAdminRequest,
 ): Promise<string> {
-	return base64UrlSha256(crypto, canonicalJson(fleetAdminIntent(operation)));
+	return centralSignedIntentDigest(crypto, fleetAdminIntent(operation));
 }
 
 /** base64url without padding, as central's `sha256_url`. */
