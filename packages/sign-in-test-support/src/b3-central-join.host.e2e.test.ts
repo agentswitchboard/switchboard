@@ -35,10 +35,13 @@ const pendingMachineId = '019f0000-0000-7000-8000-00000000d208';
 const issuer = 'https://sign-in.example.invalid';
 const { publicOrigin, audience, adminAudience, machineAudience } = b3CentralTrust(issuer);
 const keyId = 'b3-joint-fixture';
+const revokedLinkCode = 4101;
+const machineTokenSkewSeconds = 60;
 const welcomeSchema = z.strictObject({
 	kind: z.literal('welcome'),
 	machineId: z.literal(machineId),
 	centralTime: z.iso.datetime({ offset: true }),
+	effectiveExpiresAt: z.iso.datetime({ offset: true }),
 });
 const upgradeHeaders = {
 	connection: 'Upgrade',
@@ -121,6 +124,7 @@ interface MachineLinkProof {
 	readonly legacyMachineBearer: string;
 	readonly pendingEnrollment: string;
 	readonly enrollmentId: string;
+	readonly effectiveExpirySeconds: number;
 	readonly personToken: (secondFactorAt: number) => Promise<string>;
 	readonly revoke: (target: string, accessToken: string) => Promise<unknown>;
 }
@@ -215,12 +219,13 @@ async function prepareMachineLinkProof(
 				clientId: enrollmentId,
 			}),
 		);
+	const accessExpirySeconds = now + 600;
 	const machineBearer = await signFixture(
 		{
 			iss: issuer,
 			aud: machineAudience,
 			iat: now,
-			exp: now + 600,
+			exp: accessExpirySeconds,
 			grant_expires_at: grant.grantExpiresAt,
 			organization_id: organizationId,
 			client_id: enrollmentId,
@@ -280,7 +285,7 @@ async function prepareMachineLinkProof(
 			iss: issuer,
 			aud: machineAudience,
 			iat: now,
-			exp: now + 600,
+			exp: accessExpirySeconds,
 			grant_expires_at: grant.grantExpiresAt,
 			organization_id: organizationId,
 			client_id: enrollmentId,
@@ -294,6 +299,10 @@ async function prepareMachineLinkProof(
 		legacyMachineBearer,
 		pendingEnrollment,
 		enrollmentId,
+		effectiveExpirySeconds: Math.min(
+			accessExpirySeconds + machineTokenSkewSeconds,
+			grant.grantExpiresAt,
+		),
 		personToken,
 		revoke,
 	};
@@ -334,6 +343,7 @@ it.runIf(centralExecutable !== undefined && process.env.SIGN_IN_TEST_HOST !== 'c
 				legacyMachineBearer,
 				pendingEnrollment,
 				enrollmentId,
+				effectiveExpirySeconds,
 				personToken,
 				revoke,
 			} = await prepareMachineLinkProof(privateLink, privateKey, now);
@@ -348,7 +358,8 @@ it.runIf(centralExecutable !== undefined && process.env.SIGN_IN_TEST_HOST !== 'c
 			socket = openedLink.socket;
 			const welcome = await readServerFrame(socket, openedLink.head);
 			expect(welcome.opcode).toBe(1);
-			welcomeSchema.parse(JSON.parse(welcome.payload.toString('utf8')));
+			const welcomeBody = welcomeSchema.parse(JSON.parse(welcome.payload.toString('utf8')));
+			expect(Date.parse(welcomeBody.effectiveExpiresAt)).toBe(effectiveExpirySeconds * 1000);
 			const owner = await personToken(now - 60);
 			expect(await openCentralLink(tcp, owner)).toEqual({
 				kind: 'refused',
@@ -371,15 +382,22 @@ it.runIf(centralExecutable !== undefined && process.env.SIGN_IN_TEST_HOST !== 'c
 				kind: 'answered',
 				result: { result: 'revoked' },
 			});
-			expect((await readServerFrame(socket, pong.remainder)).opcode).toBe(8);
+			const revoked = await readServerFrame(socket, pong.remainder);
+			expect(revoked.opcode).toBe(8);
+			expect(revoked.payload.readUInt16BE()).toBe(revokedLinkCode);
 			expect(await revoke(enrollmentId, owner)).toEqual({
 				kind: 'answered',
 				result: { result: 'alreadyEnded' },
 			});
-			expect(await openCentralLink(tcp, machineBearer)).toEqual({
-				kind: 'refused',
-				status: 401,
-			});
+			const reconnect = await openCentralLink(tcp, machineBearer);
+			if (reconnect.kind !== 'connected') throw new Error('Expected a terminal carrier upgrade');
+			try {
+				const firstFrame = await readServerFrame(reconnect.socket, reconnect.head);
+				expect(firstFrame.opcode).toBe(8);
+				expect(firstFrame.payload.readUInt16BE()).toBe(revokedLinkCode);
+			} finally {
+				reconnect.socket.destroy();
+			}
 		} finally {
 			socket?.destroy();
 			try {
@@ -407,6 +425,21 @@ function nextWorkerFrame(socket: WorkerWebSocket): Promise<string> {
 			},
 			{ once: true },
 		);
+	});
+}
+
+function nextWorkerCloseCode(socket: WorkerWebSocket): Promise<number> {
+	return new Promise((resolveClose, rejectClose): void => {
+		function receivedMessage(): void {
+			socket.removeEventListener('close', closed);
+			rejectClose(new Error('Expected the machine link to close before sending a message'));
+		}
+		function closed(event: { readonly code: number }): void {
+			socket.removeEventListener('message', receivedMessage);
+			resolveClose(event.code);
+		}
+		socket.addEventListener('close', closed, { once: true });
+		socket.addEventListener('message', receivedMessage, { once: true });
 	});
 }
 
@@ -462,19 +495,28 @@ it.runIf(centralWorkerSource !== undefined && process.env.SIGN_IN_TEST_HOST === 
 			if (socket === null) throw new Error('The service binding did not return a WebSocket');
 			const welcome = nextWorkerFrame(socket);
 			socket.accept();
-			welcomeSchema.parse(JSON.parse(await welcome));
+			const welcomeBody = welcomeSchema.parse(JSON.parse(await welcome));
+			expect(Date.parse(welcomeBody.effectiveExpiresAt)).toBe(proof.effectiveExpirySeconds * 1000);
 			const pong = nextWorkerFrame(socket);
 			socket.send('ping');
 			expect(await pong).toBe('pong');
-			const closed = new Promise<void>((resolveClose): void => {
-				socket?.addEventListener('close', () => resolveClose(), { once: true });
-			});
+			const closed = nextWorkerCloseCode(socket);
 			expect(await proof.revoke(proof.enrollmentId, await proof.personToken(now - 60))).toEqual({
 				kind: 'answered',
 				result: { result: 'revoked' },
 			});
-			await closed;
-			expect((await open(proof.machineBearer)).status).toBe(401);
+			expect(await closed).toBe(revokedLinkCode);
+			const rejoined = await open(proof.machineBearer);
+			expect(rejoined.status).toBe(101);
+			const terminalSocket = rejoined.webSocket;
+			if (terminalSocket === null) throw new Error('Expected a terminal carrier upgrade');
+			try {
+				const terminalCode = nextWorkerCloseCode(terminalSocket);
+				terminalSocket.accept();
+				expect(await terminalCode).toBe(revokedLinkCode);
+			} finally {
+				terminalSocket.close();
+			}
 		} finally {
 			socket?.close();
 			await harness.close();
