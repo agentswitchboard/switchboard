@@ -60,6 +60,18 @@ type ReadView = Extract<
 	{ readonly kind: 'request' }
 >['view'];
 type ListedRequest = ApprovalPersonReplyFor<'ApprovalList'>['items'][number];
+type ProviderApprovalOffer = Extract<ReadView, { readonly kind: 'providerApproval' }>['offer'];
+type QuestionOffer = Extract<ReadView, { readonly kind: 'providerQuestion' }>['offer'];
+type DecideAnswer = z.output<(typeof approvalPersonRequestBodySchemas)['ApprovalDecide']>['answer'];
+type InvalidAnswer = Extract<
+	Extract<DecideReply, { readonly kind: 'invalid' }>['reason'],
+	{ readonly kind: 'invalidAnswer' }
+>['reason'];
+/** What a seeded request offers: an unproven call (central's vector), an approval, a question. */
+type StoredOffer =
+	| { readonly kind: 'unprovenCall' }
+	| { readonly kind: 'providerApproval'; readonly offer: ProviderApprovalOffer }
+	| { readonly kind: 'providerQuestion'; readonly offer: QuestionOffer };
 type DecideReply = ApprovalPersonReplyFor<'ApprovalDecide'>;
 type CentralReply = ApprovalPersonReplyFor<ApprovalPersonOperationName>;
 type AdminRefusal = { readonly result: 'refused'; readonly reason: string };
@@ -82,12 +94,13 @@ interface StoredRequest {
 	readonly organizationId: string;
 	readonly requestId: string;
 	readonly raisedAtMillis: number;
+	readonly offer: StoredOffer;
 	ending:
 		| null
 		| {
 				readonly kind: 'decided';
 				readonly personId: string;
-				readonly decision: 'allow' | 'decline';
+				readonly answer: DecideAnswer;
 				readonly atMillis: number;
 		  }
 		| { readonly kind: 'timedOut'; readonly atMillis: number };
@@ -100,6 +113,20 @@ export interface ControlledCentralApprovals {
 		readonly organizationId: string;
 		readonly requestId: string;
 		readonly raisedAtMillis: number;
+	}) => void;
+	/** A waiting provider approval offering `offer`'s options. */
+	readonly seedProviderApproval: (props: {
+		readonly organizationId: string;
+		readonly requestId: string;
+		readonly raisedAtMillis: number;
+		readonly offer: ProviderApprovalOffer;
+	}) => void;
+	/** A waiting provider question asking `offer`'s fields. */
+	readonly seedQuestion: (props: {
+		readonly organizationId: string;
+		readonly requestId: string;
+		readonly raisedAtMillis: number;
+		readonly offer: QuestionOffer;
 	}) => void;
 	readonly setPageSize: (size: number) => void;
 	/**
@@ -128,6 +155,55 @@ const approvalPermission = 'approval:decide';
 function centralTime(milliseconds: number): string {
 	const iso = new Date(milliseconds).toISOString();
 	return iso.endsWith('.000Z') ? `${iso.slice(0, -5)}Z` : iso;
+}
+
+/** Central's `check_answer` (approval-request-protocol answer_validation.rs), restated. */
+function checkAnswer(offer: StoredOffer, answer: DecideAnswer): InvalidAnswer | null {
+	if (offer.kind === 'unprovenCall')
+		return answer.kind === 'unprovenCall' ? null : { kind: 'wrongKind' };
+	if (offer.kind === 'providerApproval') {
+		if (answer.kind !== 'approval') return { kind: 'wrongKind' };
+		return offer.offer.options.some((option) => option.id === answer.optionId)
+			? null
+			: { kind: 'unofferedOption', optionId: answer.optionId };
+	}
+	if (answer.kind !== 'question') return { kind: 'wrongKind' };
+	if (answer.answer.kind === 'declined') return null;
+	const answered = new Set<number>();
+	for (const { fieldId, value } of answer.answer.fields) {
+		if (answered.has(fieldId)) return { kind: 'repeatedField', fieldId };
+		answered.add(fieldId);
+		const field = offer.offer.fields.find((candidate) => candidate.fieldId === fieldId);
+		if (field === undefined) return { kind: 'unofferedField', fieldId };
+		const choices =
+			field.kind === 'singleChoice'
+				? { options: field.options, min: 1, max: 1 }
+				: field.kind === 'multiChoice'
+					? {
+							options: field.selection.options,
+							min: field.selection.min ?? 0,
+							max: field.selection.max ?? field.selection.options.length,
+						}
+					: null;
+		if (choices === null) {
+			if (value.kind !== field.kind) return { kind: 'wrongValueType', fieldId };
+			continue;
+		}
+		if (value.kind !== 'selectedOptions') return { kind: 'wrongValueType', fieldId };
+		const selected = new Set<number>();
+		for (const optionId of value.selectedOptionIds) {
+			if (selected.has(optionId)) return { kind: 'repeatedSelection', fieldId, optionId };
+			selected.add(optionId);
+			if (!choices.options.some((option) => option.optionId === optionId))
+				return { kind: 'unofferedOption', optionId };
+		}
+		if (selected.size < choices.min || selected.size > choices.max)
+			return { kind: 'wrongSelectionCount', fieldId };
+	}
+	const missing = offer.offer.fields.find(
+		(field) => field.required && !answered.has(field.fieldId),
+	);
+	return missing === undefined ? null : { kind: 'missingRequiredField', fieldId: missing.fieldId };
 }
 
 /** Central's `ApprovalPersonOperation::intent`, restated from its committed intent vectors. */
@@ -193,29 +269,60 @@ export function createControlledCentralApprovals(
 		};
 	}
 
+	/** A parked call's state for an unproven call; a destination state for the provider kinds. */
+	function state(stored: StoredRequest): object {
+		const { ending } = stored;
+		if (stored.offer.kind === 'unprovenCall') {
+			if (ending === null) return { kind: 'waiting' };
+			return {
+				kind: 'ended',
+				ending:
+					ending.kind === 'timedOut'
+						? { kind: 'timedOut' }
+						: {
+								kind: 'giver',
+								decision:
+									ending.answer.kind === 'unprovenCall' ? ending.answer.decision : 'decline',
+								personId: ending.personId,
+							},
+				endedAt: centralTime(ending.atMillis),
+				delivery: { kind: 'owed' },
+			};
+		}
+		if (ending === null) return { kind: 'waiting', status: 'pending' };
+		const accepted =
+			ending.kind === 'timedOut'
+				? null
+				: ending.answer.kind === 'approval'
+					? ending.answer.optionId
+					: ending.answer.kind === 'question'
+						? ending.answer.answer
+						: null;
+		return {
+			kind: 'ended',
+			ending:
+				ending.kind === 'timedOut' || accepted === null
+					? { kind: 'standing', ending: { kind: 'timedOut' } }
+					: {
+							kind: 'giver',
+							decision: { by: { kind: 'person', personId: ending.personId }, answer: accepted },
+						},
+			endedAt: centralTime(ending.atMillis),
+			delivery: { kind: 'owed' },
+		};
+	}
+
 	function view(stored: StoredRequest): ReadView {
-		const state =
-			stored.ending === null
-				? { kind: 'waiting' }
-				: {
-						kind: 'ended',
-						ending:
-							stored.ending.kind === 'timedOut'
-								? { kind: 'timedOut' }
-								: {
-										kind: 'giver',
-										decision: stored.ending.decision,
-										personId: stored.ending.personId,
-									},
-						endedAt: centralTime(stored.ending.atMillis),
-						delivery: { kind: 'owed' },
-					};
+		const shape =
+			stored.offer.kind === 'unprovenCall'
+				? unprovenCallViewTemplate
+				: { kind: stored.offer.kind, offer: stored.offer.offer };
 		const read = approvalPersonReplySchemas.ApprovalRead.parse({
 			kind: 'request',
 			view: {
-				...unprovenCallViewTemplate,
+				...shape,
 				requestId: stored.requestId,
-				state,
+				state: state(stored),
 				window: window(stored),
 			},
 		});
@@ -226,7 +333,7 @@ export function createControlledCentralApprovals(
 	function summary(stored: StoredRequest): ListedRequest {
 		return {
 			requestId: stored.requestId,
-			kind: 'unprovenCall',
+			kind: stored.offer.kind,
 			state:
 				stored.ending === null
 					? { kind: 'waiting' }
@@ -301,27 +408,27 @@ export function createControlledCentralApprovals(
 				by: { kind: 'person', personId: stored.ending.personId },
 				at: centralTime(stored.ending.atMillis),
 			};
-		const answer = z
-			.object({ kind: z.literal('unprovenCall'), decision: z.enum(['allow', 'decline']) })
-			.safeParse(body.answer);
-		if (!answer.success)
-			return { kind: 'invalid', reason: { kind: 'invalidAnswer', reason: { kind: 'wrongKind' } } };
-		stored.ending = {
-			kind: 'decided',
-			personId: claims.sub,
-			decision: answer.data.decision,
-			atMillis: props.now(),
-		};
+		const answer = approvalPersonRequestBodySchemas.ApprovalDecide.shape.answer.parse(body.answer);
+		const invalid = checkAnswer(stored.offer, answer);
+		if (invalid !== null)
+			return { kind: 'invalid', reason: { kind: 'invalidAnswer', reason: invalid } };
+		stored.ending = { kind: 'decided', personId: claims.sub, answer, atMillis: props.now() };
 		return {
 			kind: 'savedDecision',
-			decision: { by: { kind: 'person', personId: claims.sub }, answer: answer.data },
+			decision: { by: { kind: 'person', personId: claims.sub }, answer },
 		};
 	}
 
 	return {
 		arrivals,
 		seedUnprovenCall(seed): void {
-			requests.push({ ...seed, ending: null });
+			requests.push({ ...seed, offer: { kind: 'unprovenCall' }, ending: null });
+		},
+		seedProviderApproval({ offer, ...seed }): void {
+			requests.push({ ...seed, offer: { kind: 'providerApproval', offer }, ending: null });
+		},
+		seedQuestion({ offer, ...seed }): void {
+			requests.push({ ...seed, offer: { kind: 'providerQuestion', offer }, ending: null });
 		},
 		setPageSize(size): void {
 			pageSize = size;

@@ -1,6 +1,9 @@
+import { writeFile } from 'node:fs/promises';
+import path from 'node:path';
+
 import {
 	createMemoryProofKeyStore,
-	runApprovalsCommand,
+	runOwnerCli,
 	type ApprovalsCommandOptions,
 	type FleetCliIo,
 } from '@agent-collaboration/sign-in-owner-cli';
@@ -26,9 +29,21 @@ useControlledSignInClock();
 const ids = createWebSignInCapabilities().ids;
 const minute = 60_000;
 
+/** The command-line flags for `options`, as a person types them. */
+function flagsFor(options: ApprovalsCommandOptions): readonly string[] {
+	return [
+		...(options.all === true ? ['--all'] : []),
+		...(options.cursor === undefined ? [] : ['--cursor', options.cursor]),
+		...(options.option === undefined ? [] : ['--option', options.option]),
+		...(options['operation-id'] === undefined ? [] : ['--operation-id', options['operation-id']]),
+		...(options.field ?? []).flatMap((field) => ['--field', field]),
+	];
+}
+
 /**
- * One `approvals` command through the owner CLI's real entry, with this person's fleet
- * credential, against the running sign-in host and its central stand-in.
+ * One `approvals` command through the owner CLI's real entry (`runOwnerCli`: its argument
+ * parsing, target file and dispatch), with this person's fleet credential, against the running
+ * sign-in host and its central stand-in.
  */
 function approvalsCli(props: {
 	readonly fixture: FleetFixture;
@@ -39,13 +54,23 @@ function approvalsCli(props: {
 	options?: ApprovalsCommandOptions,
 ) => Promise<{ readonly exitCode: number; readonly lines: readonly string[] }> {
 	const store = createMemoryProofKeyStore(webSignInCrypto);
+	const { harness } = props.fixture;
+	const targetFile = path.join(
+		path.dirname(harness.target.tokenCachePath),
+		'approvals-cli-target.json',
+	);
 	return async (args, options = {}) => {
+		await writeFile(
+			targetFile,
+			JSON.stringify({ ...harness.target, organizationId: props.organizationId }),
+			{
+				mode: 0o600,
+			},
+		);
 		const lines: string[] = [];
-		const exitCode = await runApprovalsCommand({
-			arguments: args,
-			target: { ...props.fixture.harness.target, organizationId: props.organizationId },
-			options,
-			environment: {
+		const exitCode = await runOwnerCli(
+			['--target', targetFile, 'approvals', ...args, ...flagsFor(options)],
+			{
 				io: props.io,
 				store: () => store,
 				confirmSecondFactor: async () => {
@@ -53,7 +78,7 @@ function approvalsCli(props: {
 				},
 				write: (line) => lines.push(line),
 			},
-		});
+		);
 		return { exitCode, lines };
 	};
 }
@@ -231,6 +256,185 @@ it('approvals: a member, who holds no approval:decide, is refused by central on 
 		expect(arrivals.some((arrival) => arrival.permissions?.includes('approval:decide'))).toBe(
 			false,
 		);
+	} finally {
+		await harness.close();
+	}
+});
+
+it('approvals: provider approvals resolve one option or refuse locally; questions take typed fields or refuse locally', async () => {
+	// Arrange: two single-option approvals, one with two allow options, and a question.
+	const fixture = await setupFleetCli();
+	const { harness, target } = fixture;
+	try {
+		const organizationId = target.organizationId;
+		const raisedAtMillis = initialTime - minute;
+		const allowOnce = {
+			id: 1,
+			label: 'Allow once',
+			effect: 'allow',
+			lasts: { kind: 'thisRequest' },
+		} as const;
+		const decline = {
+			id: 2,
+			label: 'Decline',
+			effect: 'decline',
+			lasts: { kind: 'thisRequest' },
+		} as const;
+		const alwaysAllow = {
+			id: 4,
+			label: 'Always allow',
+			effect: 'allow',
+			lasts: { kind: 'keptUntilChanged', kept: 'agentSettingsFile' },
+		} as const;
+		const single = {
+			title: 'Run the migration',
+			description: null,
+			subject: null,
+			options: [allowOnce, decline],
+		};
+		const ambiguous = { ...single, options: [allowOnce, alwaysAllow, decline] };
+		const [approveOne, denyOne, choose, asked] = [
+			ids.nextId(),
+			ids.nextId(),
+			ids.nextId(),
+			ids.nextId(),
+		];
+		const seed = { organizationId, raisedAtMillis };
+		harness.centralApprovals.seedProviderApproval({
+			...seed,
+			requestId: approveOne,
+			offer: single,
+		});
+		harness.centralApprovals.seedProviderApproval({ ...seed, requestId: denyOne, offer: single });
+		harness.centralApprovals.seedProviderApproval({ ...seed, requestId: choose, offer: ambiguous });
+		harness.centralApprovals.seedQuestion({
+			...seed,
+			requestId: asked,
+			offer: {
+				prompt: 'Why and where?',
+				fields: [
+					{ kind: 'text', fieldId: 1, label: 'Reason', description: null, required: true },
+					{
+						kind: 'singleChoice',
+						fieldId: 2,
+						label: 'Region',
+						description: null,
+						required: false,
+						options: [
+							{ optionId: 1, label: 'East' },
+							{ optionId: 2, label: 'West' },
+						],
+					},
+				],
+			},
+		});
+		const approvals = approvalsCli({ fixture, io: fixture.io, organizationId });
+		const decides = (): readonly unknown[] =>
+			harness.centralApprovals.arrivals.filter((arrival) => arrival.route === 'ApprovalDecide');
+		const ambiguousOptions = [
+			'Options:',
+			'  option 1  allow  this request only  Allow once',
+			'  option 4  allow  kept until changed (in the agent settings file)  Always allow',
+			'  option 2  decline  this request only  Decline',
+		];
+
+		// Act / Assert: the single allow and the single decline option.
+		expect(await approvals(['approve', approveOne])).toEqual({
+			exitCode: 0,
+			lines: ['Decision saved: option 1.'],
+		});
+		expect(await approvals(['deny', denyOne])).toEqual({
+			exitCode: 0,
+			lines: ['Decision saved: option 2.'],
+		});
+		// show lists every option; an ambiguous approve is refused before anything is sent.
+		const shown = await approvals(['show', choose]);
+		expect(shown.lines.slice(1, 6)).toEqual(['Title: Run the migration', ...ambiguousOptions]);
+		const decidesBefore = decides().length;
+		expect(await approvals(['approve', choose])).toEqual({
+			exitCode: 2,
+			lines: [
+				'More than one option is an allow; choose one with --option. Nothing was sent.',
+				...ambiguousOptions,
+			],
+		});
+		expect(decides()).toHaveLength(decidesBefore);
+		// --option names one explicitly.
+		expect(await approvals(['approve', choose], { option: '4' })).toEqual({
+			exitCode: 0,
+			lines: ['Decision saved: option 4.'],
+		});
+
+		// A bad field is refused before anything is sent, listing the fields.
+		const beforeQuestion = decides().length;
+		expect(await approvals(['answer', asked], { field: ['1=latency', '2=North'] })).toEqual({
+			exitCode: 2,
+			lines: [
+				'The value for field 2 does not fit that field. Nothing was sent.',
+				'Fields:',
+				'  field 1  text  required  Reason',
+				'  field 2  one option id  optional  Region',
+				'    option 1  East',
+				'    option 2  West',
+			],
+		});
+		expect(decides()).toHaveLength(beforeQuestion);
+		// Fields that fit are answered; repeated --field flags reach the answer in order.
+		expect(await approvals(['answer', asked], { field: ['2=2', '1=latency'] })).toEqual({
+			exitCode: 0,
+			lines: ['Decision saved: answered.'],
+		});
+
+		// Central (the stand-in, with central's answer checks) received exactly these answers.
+		expect(
+			harness.centralApprovals.arrivals
+				.filter((arrival) => arrival.route === 'ApprovalDecide')
+				.map((arrival) => arrival.outcome),
+		).toEqual([
+			{
+				kind: 'replied',
+				delivered: true,
+				reply: expect.objectContaining({
+					kind: 'savedDecision',
+					decision: expect.objectContaining({ answer: { kind: 'approval', optionId: 1 } }),
+				}),
+			},
+			{
+				kind: 'replied',
+				delivered: true,
+				reply: expect.objectContaining({
+					kind: 'savedDecision',
+					decision: expect.objectContaining({ answer: { kind: 'approval', optionId: 2 } }),
+				}),
+			},
+			{
+				kind: 'replied',
+				delivered: true,
+				reply: expect.objectContaining({
+					kind: 'savedDecision',
+					decision: expect.objectContaining({ answer: { kind: 'approval', optionId: 4 } }),
+				}),
+			},
+			{
+				kind: 'replied',
+				delivered: true,
+				reply: expect.objectContaining({
+					kind: 'savedDecision',
+					decision: expect.objectContaining({
+						answer: {
+							kind: 'question',
+							answer: {
+								kind: 'answered',
+								fields: [
+									{ fieldId: 2, value: { kind: 'selectedOptions', selectedOptionIds: [2] } },
+									{ fieldId: 1, value: { kind: 'text', value: 'latency' } },
+								],
+							},
+						},
+					}),
+				}),
+			},
+		]);
 	} finally {
 		await harness.close();
 	}
