@@ -8,42 +8,43 @@ import { observeCancelledHoldProof } from '#sign-in-test-support/test-fixtures/s
 useControlledSignInClock();
 
 const hosts = ['node', 'cloudflare'] as const;
+const sessionPath = '/api/auth/get-session';
 
 it.each(hosts)(
-	'sign-in navigation N8 ends its cancelled-hold navigation only after the Me page session request is over on %s',
+	'sign-in navigation N8 cancelled-hold navigation is not over while its Me document session request is held, and returns once it is released on %s',
 	async (host): Promise<void> => {
 		await runProofBrowserScenario((signal) =>
 			withNavigationBrowser({
 				host,
 				signal,
 				exercise: async (browser): Promise<void> => {
-					const { harness, proof } = browser;
-					const events: string[] = [];
-					// The next session request the proof server sees is the Me island's, issued after the
-					// document's DOMContentLoaded; holding its response keeps that request open.
-					const sessionHold = harness.httpResponseHolds.armNextGetResponse(
-						'/api/auth/get-session',
+					// The next session request the proof server sees is the Me island's own: nothing else
+					// is open on this page. Holding its response keeps that request open.
+					const sessionHold = browser.harness.httpResponseHolds.armNextGetResponse(
+						sessionPath,
 						browser.signal,
 					);
+					const blockedOnHeldSession = Promise.withResolvers<void>();
+					void blockedOnHeldSession.promise.catch(() => undefined);
 					try {
-						const tail = observeCancelledHoldProof(browser).then((): void => {
-							events.push('tail-returned');
+						const tail = observeCancelledHoldProof(browser, {
+							onBlocked: (block): void => {
+								if (block.openPaths.includes(sessionPath)) blockedOnHeldSession.resolve();
+							},
 						});
 						void tail.catch(() => undefined);
-						await Promise.race([
-							sessionHold.entered,
-							tail.then(() => new Promise<never>(() => {})),
+						// Release only on the explicit observation that the returned journey's wait is blocked on
+						// the held request. A journey that returns without waiting never makes it, so it loses
+						// this race whatever order the browser reports its events in.
+						const first = await Promise.race([
+							Promise.all([sessionHold.entered, blockedOnHeldSession.promise]).then(
+								() => 'blocked-on-held-session' as const,
+							),
+							tail.then(() => 'returned-without-waiting' as const),
 						]);
-						// The session request is open at the server. Make sure the document has also reached
-						// DOMContentLoaded, the event the old ending returned on, and let every waiter on that
-						// one event run, so a tail that ignores the open request has already returned.
-						await proof.page.waitForLoadState('domcontentloaded');
-						await new Promise<void>((resolve) => setImmediate(resolve));
-						expect(events).toEqual([]);
-						events.push('released');
+						expect(first).toBe('blocked-on-held-session');
 						sessionHold.release();
 						await tail;
-						expect(events).toEqual(['released', 'tail-returned']);
 					} finally {
 						sessionHold.release();
 					}

@@ -4,7 +4,9 @@ import type { Route } from 'playwright';
 import { expect } from 'vitest';
 import { z } from 'zod';
 
+import { holdCommittedDocumentReply } from '#sign-in-test-support/test-fixtures/committed-document-reply-hold';
 import { controlledSignInIds } from '#sign-in-test-support/test-fixtures/controlled-sign-in-clock';
+import type { MePageWaitBlock } from '#sign-in-test-support/test-fixtures/me-page-request-tracker';
 import { withNativeBrowserCleanup } from '#sign-in-test-support/test-fixtures/native-browser-cleanup';
 import {
 	bootstrapNavigationAdmin,
@@ -151,10 +153,18 @@ export async function observePasskeyLayout(browser: NavigationBrowser): Promise<
 	await runNavigationSteps([0, 1, 4], async (count): Promise<void> => {
 		await runNavigationSteps([400, 1280], async (width): Promise<void> => {
 			await proof.page.setViewportSize({ width, height: 844 });
-			const asset = await holdBrowserReply(browser, pageIsland);
+			const asset = await holdCommittedDocumentReply(proof, {
+				urlPattern: '*/assets/sign-in-pages-*.js',
+				matches: pageIsland,
+				signal: browser.signal,
+			});
 			await withNativeBrowserCleanup(
 				async (): Promise<void> => {
-					const list = await holdBrowserReply(browser, passkeyList);
+					const list = await holdCommittedDocumentReply(proof, {
+						urlPattern: '*/api/auth/passkey/list-user-passkeys*',
+						matches: passkeyList,
+						signal: browser.signal,
+					});
 					await withNativeBrowserCleanup(
 						// The visit ends on the Me island's own requests, so the session request that is not
 						// held cannot still be open when the next visit or the harness close comes.
@@ -271,7 +281,10 @@ export async function observePasskeyLayout(browser: NavigationBrowser): Promise<
 }
 
 /** Navigates to a Me document whose hold is cancelled before its request arrives. */
-export async function observeCancelledHoldProof(browser: NavigationBrowser): Promise<void> {
+export async function observeCancelledHoldProof(
+	browser: NavigationBrowser,
+	options: { readonly onBlocked?: (block: MePageWaitBlock) => void } = {},
+): Promise<void> {
 	const { proof, harness } = browser;
 	const cancelled = new AbortController();
 	const absent = await holdBrowserReply(
@@ -284,10 +297,14 @@ export async function observeCancelledHoldProof(browser: NavigationBrowser): Pro
 		absent.release();
 		// The navigation ends on the Me island's own requests, not at DOMContentLoaded, so none is
 		// still open in the proof server when the harness closes.
-		await awaitMePageRequestsAfter(browser, async (): Promise<void> => {
-			await proof.navigate(`${harness.issuer}/me?hold-cancel-proof=1`);
-			await expect(absent.status).rejects.toThrow('Held request cancelled before arrival');
-		});
+		await awaitMePageRequestsAfter(
+			browser,
+			async (): Promise<void> => {
+				await proof.navigate(`${harness.issuer}/me?hold-cancel-proof=1`);
+				await expect(absent.status).rejects.toThrow('Held request cancelled before arrival');
+			},
+			options,
+		);
 	} finally {
 		await absent.close();
 	}

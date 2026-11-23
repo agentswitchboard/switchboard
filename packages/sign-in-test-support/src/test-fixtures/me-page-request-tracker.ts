@@ -1,47 +1,183 @@
 export type MePageRequestOutcome = 'finished' | 'failed';
 
+/** Why a Me page wait ended without every startup request ending. Each is an observed event, not elapsed time. */
+export type MePageWaitFailure =
+	| { readonly kind: 'pageLost'; readonly reason: string }
+	| { readonly kind: 'documentLeft'; readonly loaderId: string }
+	| { readonly kind: 'mountFailed'; readonly detail: string }
+	| { readonly kind: 'startupWithoutRequest'; readonly missingPaths: readonly string[] };
+
+export class MePageWaitError extends Error {
+	constructor(readonly failure: MePageWaitFailure) {
+		super(`Me page wait failed: ${failure.kind}`);
+		this.name = 'MePageWaitError';
+	}
+}
+
+/** What a wait that has not ended is waiting for. */
+export interface MePageWaitBlock {
+	/** Startup requests the document issued that have no terminal event yet. */
+	readonly openPaths: readonly string[];
+	/** Startup requests the document has not issued yet. */
+	readonly missingPaths: readonly string[];
+}
+
 /**
- * Follows the named requests that one Me document issues. A request counts only if it was issued
- * while Me was the requesting document, and its own terminal event is what ends it: a ready-page
- * request that finishes or fails after Me has committed belongs to the old document and never
- * settles anything here. A request that fails after its headers has arrived ends in `failed`.
+ * Follows the startup requests of one committed Me document, told apart from every other
+ * document by its loader id, which Chromium gives each document it commits in the main frame.
+ *
+ * - The document is the first main-frame commit at `/me` after the tracker exists. A later
+ *   main-frame commit ends the wait with `documentLeft`.
+ * - Startup admission is per named path and closes when the document has issued that path once:
+ *   later requests of the path belong to a user action, and that action's own journey awaits them.
+ *   Requests of any other loader, whatever their pathname, are never admitted.
+ * - The wait resolves when every named path was admitted and has a terminal event.
+ * - It rejects with a `MePageWaitError` when the page is lost, a script of the document fails or
+ *   throws (the island cannot mount), another document commits first, or the island has rendered
+ *   its final content while a named path was never requested.
  */
-export function createMePageRequestTracker(props: {
+export function createMePageDocumentTracker(props: {
 	readonly origin: string;
 	readonly paths: readonly string[];
+	/** Called each time the journey has returned and the wait is still pending, with what it waits for. */
+	readonly onBlocked?: (block: MePageWaitBlock) => void;
 }): {
-	readonly observeIssued: (
-		request: object,
-		issued: { readonly method: string; readonly url: string; readonly documentPathname: string },
-	) => void;
-	readonly observeTerminal: (request: object, outcome: MePageRequestOutcome) => void;
-	/** Resolves, never rejects, once every named path has one request that reached a terminal event. */
+	readonly observeMainFrameCommitted: (commit: {
+		readonly loaderId: string;
+		readonly pathname: string;
+	}) => void;
+	readonly observeRequestIssued: (request: {
+		readonly requestId: string;
+		readonly loaderId: string;
+		readonly method: string;
+		readonly url: string;
+		readonly resourceType: string;
+	}) => void;
+	readonly observeRequestTerminal: (terminal: {
+		readonly requestId: string;
+		readonly outcome: MePageRequestOutcome;
+		readonly cancelled: boolean;
+	}) => void;
+	/** The claimed document's island has mounted and shows no loading skeleton. */
+	readonly observeStartupRendered: () => void;
+	readonly observeScriptError: (detail: string) => void;
+	readonly observePageLost: (reason: string) => void;
+	/** The journey that reaches Me has returned; from now on blocking is reported. */
+	readonly observeJourneyReturned: () => void;
+	/** Settles once every named path ended, or rejects with a `MePageWaitError`. */
 	readonly settled: Promise<ReadonlyMap<string, MePageRequestOutcome>>;
 } {
-	const pathOfRequest = new Map<object, string>();
-	const claimedPaths = new Set<string>();
+	interface IssuedRequest {
+		readonly loaderId: string;
+		readonly path: string | null;
+		readonly isScript: boolean;
+	}
+	const requests = new Map<string, IssuedRequest>();
+	const admittedByPath = new Map<string, string>();
 	const outcomes = new Map<string, MePageRequestOutcome>();
-	const everyPathSettled = Promise.withResolvers<ReadonlyMap<string, MePageRequestOutcome>>();
+	const settled = Promise.withResolvers<ReadonlyMap<string, MePageRequestOutcome>>();
+	void settled.promise.catch(() => undefined);
+	let claimedLoaderId: string | null = null;
+	let journeyReturned = false;
+	let ended = false;
+
+	function fail(failure: MePageWaitFailure): void {
+		if (ended) return;
+		ended = true;
+		settled.reject(new MePageWaitError(failure));
+	}
+	function missingPaths(): string[] {
+		return props.paths.filter((path) => !admittedByPath.has(path));
+	}
+	function evaluate(): void {
+		if (ended || claimedLoaderId === null) return;
+		const missing = missingPaths();
+		if (missing.length === 0 && outcomes.size === props.paths.length) {
+			ended = true;
+			settled.resolve(outcomes);
+			return;
+		}
+		if (journeyReturned)
+			props.onBlocked?.({
+				openPaths: props.paths.filter((path) => admittedByPath.has(path) && !outcomes.has(path)),
+				missingPaths: missing,
+			});
+	}
+	function admitted(requestId: string): string | null {
+		const request = requests.get(requestId);
+		return request?.path !== null &&
+			request?.path !== undefined &&
+			request.loaderId === claimedLoaderId &&
+			admittedByPath.get(request.path) === requestId
+			? request.path
+			: null;
+	}
 	return {
-		observeIssued(request, issued): void {
-			const url = new URL(issued.url);
-			if (
-				issued.method !== 'GET' ||
-				issued.documentPathname !== '/me' ||
-				url.origin !== props.origin ||
-				!props.paths.includes(url.pathname) ||
-				claimedPaths.has(url.pathname)
-			)
+		observeMainFrameCommitted(commit): void {
+			if (ended) return;
+			if (claimedLoaderId !== null) {
+				if (commit.loaderId !== claimedLoaderId)
+					fail({ kind: 'documentLeft', loaderId: commit.loaderId });
 				return;
-			claimedPaths.add(url.pathname);
-			pathOfRequest.set(request, url.pathname);
+			}
+			if (commit.pathname !== '/me') return;
+			claimedLoaderId = commit.loaderId;
+			// Requests the document issued before the commit event reached this observer.
+			for (const [requestId, request] of requests) {
+				if (
+					request.loaderId === commit.loaderId &&
+					request.path !== null &&
+					!admittedByPath.has(request.path)
+				)
+					admittedByPath.set(request.path, requestId);
+			}
+			evaluate();
 		},
-		observeTerminal(request, outcome): void {
-			const path = pathOfRequest.get(request);
-			if (path === undefined || outcomes.has(path)) return;
-			outcomes.set(path, outcome);
-			if (outcomes.size === props.paths.length) everyPathSettled.resolve(outcomes);
+		observeRequestIssued(request): void {
+			const url = new URL(request.url);
+			const path =
+				request.method === 'GET' &&
+				url.origin === props.origin &&
+				props.paths.includes(url.pathname)
+					? url.pathname
+					: null;
+			requests.set(request.requestId, {
+				loaderId: request.loaderId,
+				path,
+				isScript: request.resourceType === 'Script',
+			});
+			if (path !== null && request.loaderId === claimedLoaderId && !admittedByPath.has(path))
+				admittedByPath.set(path, request.requestId);
+			evaluate();
 		},
-		settled: everyPathSettled.promise,
+		observeRequestTerminal(terminal): void {
+			if (ended) return;
+			const request = requests.get(terminal.requestId);
+			if (request === undefined || request.loaderId !== claimedLoaderId) return;
+			if (request.isScript && terminal.outcome === 'failed' && !terminal.cancelled) {
+				fail({ kind: 'mountFailed', detail: 'a script of the document failed to load' });
+				return;
+			}
+			const path = admitted(terminal.requestId);
+			if (path === null || outcomes.has(path)) return;
+			outcomes.set(path, terminal.outcome);
+			evaluate();
+		},
+		observeStartupRendered(): void {
+			if (ended || claimedLoaderId === null) return;
+			const missing = missingPaths();
+			if (missing.length > 0) fail({ kind: 'startupWithoutRequest', missingPaths: missing });
+		},
+		observeScriptError(detail): void {
+			if (claimedLoaderId !== null) fail({ kind: 'mountFailed', detail });
+		},
+		observePageLost(reason): void {
+			fail({ kind: 'pageLost', reason });
+		},
+		observeJourneyReturned(): void {
+			journeyReturned = true;
+			evaluate();
+		},
+		settled: settled.promise,
 	};
 }
