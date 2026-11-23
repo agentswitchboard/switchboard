@@ -36,23 +36,20 @@ export const presentedMachineSchema = z.strictObject({ machineId: machineIdSchem
 export type PresentedMachine = z.infer<typeof presentedMachineSchema>;
 
 const organizationPlaceholder = '{organization_id}';
-const linkUrlTemplateSchema = z.string().refine((template): boolean => {
-	if (
-		!/^https:\/\/[^/\\?#\s]+\//iu.test(template) ||
-		/[\\\p{White_Space}\p{Cc}]/u.test(template) ||
-		template.split(organizationPlaceholder).length !== 2
-	)
-		return false;
-	const url = URL.parse(template);
-	return (
-		url !== null &&
-		url.protocol === 'https:' &&
-		url.username === '' &&
-		url.password === '' &&
-		url.hash === '' &&
-		url.pathname.split('/').includes(encodeURIComponent(organizationPlaceholder))
+const organizationLinkPattern =
+	/^(?!.*\{organization_id\}.*\{organization_id\})[Hh][Tt][Tt][Pp][Ss]:\/\/[^/\\?#@\s\x00-\x1f\x7f-\x9f]+(?:\/[^/\\?#\s\x00-\x1f\x7f-\x9f]*)*\/\{organization_id\}(?:\/[^/\\?#\s\x00-\x1f\x7f-\x9f]*)*(?:\?[^#\\\s\x00-\x1f\x7f-\x9f]*)?$/u;
+const linkUrlTemplateSchema = z
+	.string()
+	.regex(organizationLinkPattern)
+	.refine((template): boolean => {
+		const url = URL.parse(template);
+		return (
+			url !== null && url.pathname.split('/').includes(encodeURIComponent(organizationPlaceholder))
+		);
+	}, 'Expected an absolute HTTPS link with one {organization_id} path segment')
+	.describe(
+		'Absolute HTTPS template with one literal {organization_id} path segment. The runtime also checks URL parser acceptance and that the placeholder survives path normalization.',
 	);
-}, 'Expected an absolute HTTPS link with one {organization_id} path segment');
 
 export const fleetLoginDiscoveryResponseSchema = z.strictObject({
 	client_id: uuid7Schema,
