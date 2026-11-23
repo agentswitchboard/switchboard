@@ -20,6 +20,7 @@ const nativePermissionRequests = {
 	'machine:setTokenLifetime': { machine: ['setTokenLifetime'] },
 	'organization:view': { organization: ['view'] },
 	'organization:readAudit': { organization: ['readAudit'] },
+	'approval:decide': { approval: ['decide'] },
 } satisfies Readonly<
 	Record<FleetPermission, Parameters<typeof organizationRoles.owner.authorize>[0]>
 >;

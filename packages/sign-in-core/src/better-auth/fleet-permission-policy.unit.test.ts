@@ -13,9 +13,11 @@ it('the pinned digest is the SHA-256 of the canonical policy, so a changed mappi
 	);
 });
 
-it('owners hold all nine Fleet permissions and members hold none', (): void => {
-	// Expected sets come from PD 2530c3a3's nine route permissions and B2's "a member holds no permissions".
+it('owners hold all ten Fleet permissions and members hold none', (): void => {
+	// Expected sets come from PD 2530c3a3's route permissions, C3's owner-only `approval:decide`, and
+	// B2's "a member holds no permissions".
 	expect(fleetPermissionsForRole('owner')).toEqual([
+		'approval:decide',
 		'machine:enroll',
 		'machine:revoke',
 		'machine:setTokenLifetime',

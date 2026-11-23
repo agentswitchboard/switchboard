@@ -8,6 +8,7 @@ export const organizationAccessControl = createAccessControl({
 	machine: ['enroll', 'revoke', 'setTokenLifetime'],
 	workspace: ['create'],
 	workspaceAdmin: ['allowMachine', 'withdrawMachine', 'removeSession'],
+	approval: ['decide'],
 });
 
 export const organizationRoles = {
@@ -17,6 +18,7 @@ export const organizationRoles = {
 		machine: ['enroll', 'revoke', 'setTokenLifetime'],
 		workspace: ['create'],
 		workspaceAdmin: ['allowMachine', 'withdrawMachine', 'removeSession'],
+		approval: ['decide'],
 	}),
 	member: organizationAccessControl.newRole({}),
 };

@@ -28,6 +28,8 @@ describe('organization roles on the native plugin statement', () => {
 		expect(organizationRoles.owner.authorize({ organization: ['view', 'readAudit'] }).success).toBe(
 			true,
 		);
+		// C3: `approval:decide` is the owner's alone.
+		expect(organizationRoles.owner.authorize({ approval: ['decide'] }).success).toBe(true);
 		for (const [resource, actions] of Object.entries(statements))
 			for (const action of actions)
 				expect(organizationRoles.member.authorize({ [resource]: [action] }).success).toBe(false);
