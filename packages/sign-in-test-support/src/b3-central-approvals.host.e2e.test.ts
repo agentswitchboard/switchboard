@@ -10,6 +10,7 @@ import {
 	type FleetCliIo,
 } from '@agent-collaboration/sign-in-owner-cli';
 import { createWebSignInCapabilities } from '@agent-collaboration/sign-in-platform-web';
+import { decodeJwt } from 'jose';
 import { expect, it } from 'vitest';
 import { z } from 'zod';
 
@@ -35,7 +36,8 @@ useControlledSignInClock();
  * second approve alreadyDecided against real central; both stay proven against the stand-in on
  * both hosts (approval-person-relay.host.e2e.test.ts). What runs here is everything that needs no
  * raised request: list, read and decide notVisible, the retained retry, operationConflict, and a
- * member's notPermitted.
+ * member's notPermitted, and two controls of central's order: a contract-invalid body behind a bad
+ * proof is 401, and a token behind the person's revision is refreshRequired.
  */
 
 /** Central main 1ede5c1b9's native build (c3CentralProofPin), started as the Tokio pair's central. */
@@ -201,6 +203,56 @@ it.runIf(centralExecutable !== undefined && tokioPair)(
 					"Not permitted: answering approvals needs the organization owner's approval:decide.",
 				],
 			});
+
+			// Central's order (approval_person_admission.rs:368-395): it reads only the address,
+			// verifies the proof, then decodes the body, so a contract-invalid body behind a bad
+			// proof is 401, not 400.
+			const unsigned = await fetch(
+				new URL('/api/auth/organization-admin/v1/approval-list', harness.issuer),
+				{
+					method: 'POST',
+					headers: {
+						'content-type': 'application/json',
+						authorization: 'DPoP not-a-token',
+						dpop: 'not-a-proof',
+					},
+					body: JSON.stringify({ organization: organizationId, filter: 'bogus' }),
+				},
+			);
+			process.stdout.write(
+				`${JSON.stringify({ event: 'c3-live-approvals', command: 'invalid body behind a bad proof', status: unsigned.status })}\n`,
+			);
+			expect(unsigned.status).toBe(401);
+
+			// A token behind the person's current revision (admission.rs:168-172): the owner's role
+			// changes through the production fenced adapter, which pushes the new floor to central.
+			const roleChanged = await harness.auth('/__auth-proof/authorization-fence', {
+				method: 'POST',
+				headers: { 'content-type': 'application/json', cookie: ownerCookie },
+				body: JSON.stringify({
+					kind: 'update',
+					model: 'member',
+					where: [{ field: 'userId', value: decodeJwt(session.accessToken).sub }],
+					update: { role: 'member' },
+				}),
+			});
+			expect(roleChanged.status).toBe(200);
+			await harness.settleDeferredWork();
+			const stale = await sendApprovalOperation({
+				target: fleetTarget,
+				session,
+				io: ownerIo,
+				operation: {
+					operation: 'ApprovalList',
+					organization: organizationId,
+					filter: 'waiting',
+					cursor: null,
+				},
+			});
+			process.stdout.write(
+				`${JSON.stringify({ event: 'c3-live-approvals', command: 'list with the token from before the revision bump', answer: stale })}\n`,
+			);
+			expect(stale).toEqual({ kind: 'refused', reason: 'refreshRequired' });
 		} finally {
 			await harness.close();
 		}
