@@ -1,6 +1,6 @@
 import { createHash, generateKeyPairSync, sign } from 'node:crypto';
 
-import { passkey, user } from '@agent-collaboration/sign-in-core';
+import { passkey, user, verification } from '@agent-collaboration/sign-in-core';
 import { encodeCBOR, type CBORType } from '@levischuck/tiny-cbor';
 import type { RegistrationResponseJSON } from '@simplewebauthn/server';
 import { decodeAttestationObject } from '@simplewebauthn/server/helpers';
@@ -9,8 +9,12 @@ import { expect, it } from 'vitest';
 import { z } from 'zod';
 
 import { useControlledSignInClock } from '#sign-in-test-support/test-fixtures/controlled-node-test-clock';
+import { controlledSignInIds } from '#sign-in-test-support/test-fixtures/controlled-sign-in-clock';
 import { startLocalAuthHarness } from '#sign-in-test-support/test-fixtures/local-auth-harness';
-import { registerBrowserPasskey } from '#sign-in-test-support/test-fixtures/passkey-browser-ceremonies';
+import {
+	passkeyPost,
+	registerBrowserPasskey,
+} from '#sign-in-test-support/test-fixtures/passkey-browser-ceremonies';
 import { signInConfirmedPeopleBrowser } from '#sign-in-test-support/test-fixtures/people-browser-login';
 import { createSoftwarePasskeyAuthenticator } from '#sign-in-test-support/test-fixtures/software-passkey-authenticator';
 
@@ -211,6 +215,119 @@ it('passkey registration: a storage failure after a passed verification is still
 			(await harness.database.select({ id: user.id }).from(user).where(eq(user.email, ownerEmail)))
 				.length,
 		).toBe(1);
+	} finally {
+		await harness.close();
+	}
+});
+
+type Harness = Awaited<ReturnType<typeof startLocalAuthHarness>>;
+
+/** Native registration options: the live challenge the browser cookie now names, and the RP ID. */
+async function issueRegistrationChallenge(
+	harness: Harness,
+): Promise<{ readonly challenge: string; readonly rpId: string }> {
+	const options = z
+		.object({ challenge: z.string().min(1), rp: z.object({ id: z.string().min(1) }) })
+		.parse(await (await harness.auth('/api/auth/passkey/generate-register-options')).json());
+	return { challenge: options.challenge, rpId: options.rp.id };
+}
+function postRegistration(harness: Harness, response: RegistrationResponseJSON): Promise<Response> {
+	return passkeyPost(harness, 'verify-registration', { name: 'Controlled test passkey', response });
+}
+async function verificationRows(harness: Harness): Promise<readonly unknown[]> {
+	return harness.database.select().from(verification).orderBy(verification.id);
+}
+async function registrationChallengeRows(
+	harness: Harness,
+): Promise<readonly (typeof verification.$inferSelect)[]> {
+	return (await harness.database.select().from(verification)).filter(
+		(row) => z.object({ type: z.literal('registration') }).safeParse(JSON.parse(row.value)).success,
+	);
+}
+const tamperChallenge = faultCases[0];
+if (tamperChallenge?.reason !== 'challenge')
+	throw new Error('The first fault case is the tampered challenge');
+
+it('passkey registration: a refused fault deletes no verification row, not even an unrelated expired one', async () => {
+	const harness = await startLocalAuthHarness();
+	try {
+		await signInConfirmedPeopleBrowser({ harness, email: ownerEmail });
+		const authenticator = await createSoftwarePasskeyAuthenticator();
+		const issued = await issueRegistrationChallenge(harness);
+		// An unrelated verification row that expired long ago: Better Auth's findVerificationValue
+		// would delete it as a side effect of the lookup.
+		await harness.database.insert(verification).values({
+			id: controlledSignInIds.nextId(),
+			identifier: 'unrelated-expired-witness',
+			value: '{}',
+			expiresAt: new Date(0),
+			createdAt: new Date(0),
+			updatedAt: new Date(0),
+		});
+		const before = await verificationRows(harness);
+		expect(before).toHaveLength(2);
+		const response = await postRegistration(
+			harness,
+			tamperChallenge.alter(
+				authenticator.registrationResponse({ ...issued, origin: harness.issuer }),
+			),
+		);
+		expect(response.status).toBe(400);
+		expect(await response.json()).toMatchObject({ error: 'invalid_request', reason: 'challenge' });
+		expect(await verificationRows(harness)).toEqual(before);
+		expect(await storedPasskeyCount(harness)).toBe(0);
+	} finally {
+		await harness.close();
+	}
+});
+
+it("passkey registration: an expired challenge reaches the plugin's own not-found answer and is never verified here", async () => {
+	const harness = await startLocalAuthHarness();
+	try {
+		await signInConfirmedPeopleBrowser({ harness, email: ownerEmail });
+		const authenticator = await createSoftwarePasskeyAuthenticator();
+		const issued = await issueRegistrationChallenge(harness);
+		const [challengeRow] = await registrationChallengeRows(harness);
+		if (challengeRow === undefined) throw new Error('No registration challenge was stored');
+		// Expired before it was created: expired for any clock reading.
+		await harness.database
+			.update(verification)
+			.set({ expiresAt: new Date(challengeRow.createdAt.getTime() - 1) })
+			.where(eq(verification.id, challengeRow.id));
+		// A tampered challenge: had the boundary verified it, the answer would name reason 'challenge'.
+		const response = await postRegistration(
+			harness,
+			tamperChallenge.alter(
+				authenticator.registrationResponse({ ...issued, origin: harness.issuer }),
+			),
+		);
+		expect(response.status).toBe(400);
+		const body: unknown = await response.json();
+		expect(body).toMatchObject({ code: 'CHALLENGE_NOT_FOUND' });
+		expect(body).not.toHaveProperty('reason');
+		expect(await storedPasskeyCount(harness)).toBe(0);
+	} finally {
+		await harness.close();
+	}
+});
+
+it('passkey registration: a WebCrypto failure in verification is a server error that consumes nothing', async () => {
+	const harness = await startLocalAuthHarness();
+	try {
+		await signInConfirmedPeopleBrowser({ harness, email: ownerEmail });
+		const authenticator = await createSoftwarePasskeyAuthenticator();
+		const issued = await issueRegistrationChallenge(harness);
+		const valid = authenticator.registrationResponse({ ...issued, origin: harness.issuer });
+		// The verifier's client data hash is the first digest of exactly these bytes.
+		await harness.failNextWebCryptoDigestOf(
+			Buffer.from(valid.response.clientDataJSON, 'base64url'),
+		);
+		const before = await verificationRows(harness);
+		const response = await postRegistration(harness, valid);
+		expect(response.status).toBe(500);
+		expect(await harness.webCryptoDigestFailureState()).toBe('fired');
+		expect(await verificationRows(harness)).toEqual(before);
+		expect(await storedPasskeyCount(harness)).toBe(0);
 	} finally {
 		await harness.close();
 	}
