@@ -1,0 +1,178 @@
+import { z } from 'zod';
+
+import type {
+	Answer,
+	ApprovalWindow,
+	DecidedBy,
+	QuestionAnswer,
+	QuestionAnswerValue,
+	QuestionFieldAnswer,
+	SessionCallDecision,
+} from '#sign-in-core/central-link/generated/central-sign-in.gen';
+import type { AssertWireType, WireTypesEqual } from '#sign-in-core/central-link/wire-type-equality';
+import { centralUuid7Schema } from '#sign-in-core/contracts/fleet-admin-wire';
+
+// The value rules of central's `approval-request-protocol` and `workspace-ids` crates
+// (codex-router main 24e387993, `approval_values.rs`, `workspace-ids/src/lib.rs`). The shapes
+// come from the generated wire file; these schemas add the scalar rules central's decoders hold.
+
+/** ApprovalRequestId, CentralSessionId, PersonId and RequestId: canonical lowercase UUIDv7. */
+export const approvalRequestIdSchema = centralUuid7Schema;
+export const centralSessionIdSchema = centralUuid7Schema;
+export const centralPersonIdSchema = centralUuid7Schema;
+export const approvalOperationIdSchema = centralUuid7Schema;
+
+const centralTimePattern =
+	/^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(\.\d{3}|\.\d{6}|\.\d{9})?Z$/u;
+
+/** Whole seconds since the epoch and the fraction digits exactly as spelled. */
+interface CentralTimeParts {
+	readonly epochSeconds: number;
+	readonly fraction: string;
+}
+
+/**
+ * CentralTime is chrono's `DateTime<Utc>`, which serializes as RFC 3339 in UTC with `Z` and a
+ * fraction of 0, 3, 6 or 9 digits (central's fixtures use 0, 3 and 9). Any other offset or
+ * fraction width, and any date that is not on the calendar, is refused.
+ */
+function centralTimeParts(text: string): CentralTimeParts | null {
+	const match = centralTimePattern.exec(text);
+	if (match === null) return null;
+	const [, ...spelled] = match;
+	const [year = 0, month = 0, day = 0, hour = 0, minute = 0, second = 0] = spelled
+		.slice(0, 6)
+		.map(Number);
+	const fraction = spelled[6] ?? '';
+	const millis = Date.UTC(year, month - 1, day, hour, minute, second);
+	const date = new Date(millis);
+	// Date.UTC rolls an out-of-range field into the next one; a round trip exposes it.
+	if (
+		year < 1 ||
+		date.getUTCFullYear() !== year ||
+		date.getUTCMonth() !== month - 1 ||
+		date.getUTCDate() !== day ||
+		date.getUTCHours() !== hour ||
+		date.getUTCMinutes() !== minute ||
+		date.getUTCSeconds() !== second
+	)
+		return null;
+	return { epochSeconds: millis / 1000, fraction };
+}
+
+export const centralTimeSchema = z
+	.string()
+	.refine((text) => centralTimeParts(text) !== null, 'Not an RFC 3339 CentralTime in UTC');
+
+/** The immutable first-save time and its deadline exactly one hour later, to the nanosecond. */
+export const approvalWindowSchema = z
+	.strictObject({ raisedAt: centralTimeSchema, deadline: centralTimeSchema })
+	.refine((window) => {
+		const raised = centralTimeParts(window.raisedAt);
+		const deadline = centralTimeParts(window.deadline);
+		return (
+			raised !== null &&
+			deadline !== null &&
+			deadline.epochSeconds - raised.epochSeconds === 3600 &&
+			deadline.fraction === raised.fraction
+		);
+	}, 'The approval deadline must be exactly one hour after first save');
+
+/** Rust's `chars().count()` for well-formed text: every UTF-16 unit except a pair's low half. */
+function unicodeScalarCount(text: string): number {
+	let count = 0;
+	for (let index = 0; index < text.length; index += 1) {
+		const unit = text.charCodeAt(index);
+		if (unit < 0xdc00 || unit > 0xdfff) count += 1;
+	}
+	return count;
+}
+
+/** Rust strings hold Unicode scalar values; a lone surrogate never comes from central. */
+function approvalTextSchema(props: {
+	readonly maximumCharacters: number;
+	readonly nonEmpty: boolean;
+}): z.ZodString {
+	return z
+		.string()
+		.refine((text) => text.isWellFormed(), 'Text must be well-formed Unicode')
+		.refine((text) => !props.nonEmpty || text.length > 0, 'Text cannot be empty')
+		.refine(
+			(text) => unicodeScalarCount(text) <= props.maximumCharacters,
+			`Text exceeds ${props.maximumCharacters} characters`,
+		);
+}
+
+export const approvalTitleSchema = approvalTextSchema({ maximumCharacters: 200, nonEmpty: false });
+export const approvalDescriptionSchema = approvalTextSchema({
+	maximumCharacters: 2000,
+	nonEmpty: false,
+});
+export const approvalSubjectSchema = approvalTextSchema({
+	maximumCharacters: 500,
+	nonEmpty: false,
+});
+export const approvalLabelSchema = approvalTextSchema({ maximumCharacters: 200, nonEmpty: false });
+export const sessionCallFolderSchema = approvalTextSchema({
+	maximumCharacters: 2000,
+	nonEmpty: true,
+});
+export const sessionCallModeSchema = approvalTextSchema({ maximumCharacters: 200, nonEmpty: true });
+export const sessionCallWorkFolderSchema = approvalTextSchema({
+	maximumCharacters: 500,
+	nonEmpty: true,
+});
+
+/** Offered option ordinals run 1..=16 and question field ordinals 1..=32. */
+export const offeredOptionIdSchema = z.number().int().min(1).max(16);
+export const questionFieldIdSchema = z.number().int().min(1).max(32);
+
+/** An exact ASCII decimal spelling of at most 40 characters, never `-0` or a leading zero. */
+export const questionNumberSchema = z
+	.string()
+	.max(40)
+	.regex(/^-?(?:0|[1-9]\d*)(?:\.\d+)?$/u)
+	.refine((spelling) => spelling !== '-0', 'Not an approved decimal spelling');
+
+export const sessionCallDecisionSchema = z.enum(['allow', 'decline']);
+
+export const questionAnswerValueSchema = z.discriminatedUnion('kind', [
+	z.strictObject({
+		kind: z.literal('selectedOptions'),
+		selectedOptionIds: z.array(offeredOptionIdSchema),
+	}),
+	z.strictObject({ kind: z.literal('text'), value: z.string() }),
+	z.strictObject({ kind: z.literal('number'), value: questionNumberSchema }),
+	z.strictObject({ kind: z.literal('boolean'), value: z.boolean() }),
+]);
+export const questionFieldAnswerSchema = z.strictObject({
+	fieldId: questionFieldIdSchema,
+	value: questionAnswerValueSchema,
+});
+export const questionAnswerSchema = z.discriminatedUnion('kind', [
+	z.strictObject({ kind: z.literal('answered'), fields: z.array(questionFieldAnswerSchema) }),
+	z.strictObject({ kind: z.literal('declined') }),
+]);
+
+/** The one answer a person gives: an offered option, a question's answer, or a call decision. */
+export const approvalAnswerSchema = z.discriminatedUnion('kind', [
+	z.strictObject({ kind: z.literal('approval'), optionId: offeredOptionIdSchema }),
+	z.strictObject({ kind: z.literal('question'), answer: questionAnswerSchema }),
+	z.strictObject({ kind: z.literal('unprovenCall'), decision: sessionCallDecisionSchema }),
+]);
+
+export const decidedBySchema = z.discriminatedUnion('kind', [
+	z.strictObject({ kind: z.literal('person'), personId: centralPersonIdSchema }),
+	z.strictObject({ kind: z.literal('session'), session: centralSessionIdSchema }),
+]);
+
+export type ApprovalWireValueTypes = [
+	AssertWireType<WireTypesEqual<z.output<typeof approvalWindowSchema>, ApprovalWindow>>,
+	AssertWireType<WireTypesEqual<z.output<typeof sessionCallDecisionSchema>, SessionCallDecision>>,
+	AssertWireType<WireTypesEqual<z.output<typeof questionAnswerValueSchema>, QuestionAnswerValue>>,
+	AssertWireType<WireTypesEqual<z.output<typeof questionFieldAnswerSchema>, QuestionFieldAnswer>>,
+	AssertWireType<WireTypesEqual<z.output<typeof questionAnswerSchema>, QuestionAnswer>>,
+	AssertWireType<WireTypesEqual<z.output<typeof approvalAnswerSchema>, Answer>>,
+	AssertWireType<WireTypesEqual<z.input<typeof approvalAnswerSchema>, Answer>>,
+	AssertWireType<WireTypesEqual<z.output<typeof decidedBySchema>, DecidedBy>>,
+];
