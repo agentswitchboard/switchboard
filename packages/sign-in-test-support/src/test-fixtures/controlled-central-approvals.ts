@@ -1,0 +1,371 @@
+import { createHash } from 'node:crypto';
+import { readFileSync } from 'node:fs';
+
+import {
+	approvalPersonReplySchemas,
+	approvalPersonRequestBodySchemas,
+	approvalPersonRoutePaths,
+	type ApprovalPersonOperationName,
+	type ApprovalPersonReplyFor,
+} from '@agent-collaboration/sign-in-core';
+import { z } from 'zod';
+
+import {
+	base64UrlSha256,
+	sortedJson,
+	verifyCentralPersonRequest,
+	type AdminVerificationFailure,
+	type CentralPersonVerifierSettings,
+	type PersonTokenClaims,
+} from '#sign-in-test-support/test-fixtures/controlled-central-admin';
+
+/**
+ * The named stand-in for central's C3 person approval routes (central main 1ede5c1b9). It
+ * verifies each request with the same verifier steps as the admin stand-in, admits by
+ * `approval:decide`, and answers in exactly the shapes of central's committed reply vectors,
+ * seeded from them. It follows central's result matrix for list paging, notVisible, the decide
+ * results and the operation log, but earns no credit for central's store, admission or deadline
+ * settlement; only the sign-in side's sends and readings are proven here.
+ */
+export const approvalRouteByPath: Readonly<Record<string, ApprovalPersonOperationName>> = {
+	[approvalPersonRoutePaths.ApprovalList]: 'ApprovalList',
+	[approvalPersonRoutePaths.ApprovalRead]: 'ApprovalRead',
+	[approvalPersonRoutePaths.ApprovalDecide]: 'ApprovalDecide',
+};
+
+const replyVectors = z
+	.strictObject({
+		ApprovalListReply: z.array(z.string()).min(1),
+		ApprovalReadReply: z.array(z.string()).min(1),
+		ApprovalDecideReply: z.array(z.string()).min(1),
+	})
+	.parse(
+		JSON.parse(
+			readFileSync(
+				new URL(
+					'../../../sign-in-core/contract-fixtures/central-person-approvals/approval-person-reply-vectors.json',
+					import.meta.url,
+				),
+				'utf8',
+			),
+		),
+	);
+/** Central's own waiting unproven-call view: every seeded request is this view, re-addressed. */
+const unprovenCallViewTemplate = z
+	.object({ kind: z.literal('request'), view: z.looseObject({ kind: z.literal('unprovenCall') }) })
+	.parse(JSON.parse(replyVectors.ApprovalReadReply[0] ?? 'null')).view;
+
+type ReadView = Extract<
+	ApprovalPersonReplyFor<'ApprovalRead'>,
+	{ readonly kind: 'request' }
+>['view'];
+type ListedRequest = ApprovalPersonReplyFor<'ApprovalList'>['items'][number];
+type DecideReply = ApprovalPersonReplyFor<'ApprovalDecide'>;
+type CentralReply = ApprovalPersonReplyFor<ApprovalPersonOperationName>;
+type AdminRefusal = { readonly result: 'refused'; readonly reason: string };
+
+export interface ApprovalArrival {
+	readonly route: ApprovalPersonOperationName;
+	readonly outcome:
+		| { readonly kind: 'refused-unauthenticated'; readonly failure: AdminVerificationFailure }
+		| { readonly kind: 'bad-request' }
+		| { readonly kind: 'refused'; readonly reason: string }
+		| { readonly kind: 'replied'; readonly reply: CentralReply; readonly delivered: boolean };
+	readonly personId: string | null;
+	readonly permissions: readonly string[] | null;
+	readonly operationId: string | null;
+	/** SHA-256 (hex) of the exact body bytes, taken before any parsing. */
+	readonly bodySha256: string;
+}
+
+interface StoredRequest {
+	readonly organizationId: string;
+	readonly requestId: string;
+	readonly raisedAtMillis: number;
+	ending:
+		| null
+		| {
+				readonly kind: 'decided';
+				readonly personId: string;
+				readonly decision: 'allow' | 'decline';
+				readonly atMillis: number;
+		  }
+		| { readonly kind: 'timedOut'; readonly atMillis: number };
+}
+
+export interface ControlledCentralApprovals {
+	readonly arrivals: readonly ApprovalArrival[];
+	/** A waiting unproven call in `organizationId`, raised at `raisedAtMillis` (one-hour deadline). */
+	readonly seedUnprovenCall: (props: {
+		readonly organizationId: string;
+		readonly requestId: string;
+		readonly raisedAtMillis: number;
+	}) => void;
+	readonly setPageSize: (size: number) => void;
+	/**
+	 * The next admitted decide is applied and retained, but its reply is lost on the way back
+	 * (central answers 503): the "reply lost" row, recovered by an exact retry.
+	 */
+	readonly loseNextDecideReply: () => void;
+	readonly fetch: (request: Request, route: ApprovalPersonOperationName) => Promise<Response>;
+}
+
+const oneHourMillis = 3_600_000;
+const approvalPermission = 'approval:decide';
+
+/** RFC 3339 in UTC with `Z`: whole seconds, or exactly three fraction digits. */
+function centralTime(milliseconds: number): string {
+	const iso = new Date(milliseconds).toISOString();
+	return iso.endsWith('.000Z') ? `${iso.slice(0, -5)}Z` : iso;
+}
+
+/** Central's `ApprovalPersonOperation::intent`, restated from its committed intent vectors. */
+function independentApprovalIntent(
+	route: ApprovalPersonOperationName,
+	body: Readonly<Record<string, unknown>>,
+): string {
+	const organization = body['organization'];
+	const intent =
+		route === 'ApprovalList'
+			? {
+					v: 1,
+					operation: route,
+					organization,
+					target: organization,
+					operationId: null,
+					params: { filter: body['filter'], cursor: body['cursor'] ?? null },
+				}
+			: route === 'ApprovalRead'
+				? {
+						v: 1,
+						operation: route,
+						organization,
+						target: body['requestId'],
+						operationId: null,
+						params: {},
+					}
+				: {
+						v: 1,
+						operation: route,
+						organization,
+						target: body['requestId'],
+						operationId: body['operationId'],
+						params: { answer: body['answer'] },
+					};
+	return base64UrlSha256(sortedJson(intent));
+}
+
+export function createControlledCentralApprovals(
+	props: CentralPersonVerifierSettings & {
+		/** The provisioning peer's floors: central refuses a person whose floors it lacks. */
+		readonly hasFloors: (organizationId: string, personId: string) => boolean;
+	},
+): ControlledCentralApprovals {
+	const arrivals: ApprovalArrival[] = [];
+	const requests: StoredRequest[] = [];
+	const usedProofIds = new Set<string>();
+	/** Central's operation log: the first result for each person's operation id and intent. */
+	const operationLog = new Map<string, { readonly intent: string; readonly reply: DecideReply }>();
+	let pageSize = 100;
+	let loseNextDecide = false;
+
+	function settleDeadline(stored: StoredRequest): void {
+		const deadline = stored.raisedAtMillis + oneHourMillis;
+		if (stored.ending === null && props.now() >= deadline)
+			stored.ending = { kind: 'timedOut', atMillis: deadline };
+	}
+
+	function window(stored: StoredRequest): { readonly raisedAt: string; readonly deadline: string } {
+		return {
+			raisedAt: centralTime(stored.raisedAtMillis),
+			deadline: centralTime(stored.raisedAtMillis + oneHourMillis),
+		};
+	}
+
+	function view(stored: StoredRequest): ReadView {
+		const state =
+			stored.ending === null
+				? { kind: 'waiting' }
+				: {
+						kind: 'ended',
+						ending:
+							stored.ending.kind === 'timedOut'
+								? { kind: 'timedOut' }
+								: {
+										kind: 'giver',
+										decision: stored.ending.decision,
+										personId: stored.ending.personId,
+									},
+						endedAt: centralTime(stored.ending.atMillis),
+						delivery: { kind: 'owed' },
+					};
+		const read = approvalPersonReplySchemas.ApprovalRead.parse({
+			kind: 'request',
+			view: {
+				...unprovenCallViewTemplate,
+				requestId: stored.requestId,
+				state,
+				window: window(stored),
+			},
+		});
+		if (read.kind !== 'request') throw new Error('A seeded request always has a view');
+		return read.view;
+	}
+
+	function summary(stored: StoredRequest): ListedRequest {
+		return {
+			requestId: stored.requestId,
+			kind: 'unprovenCall',
+			state:
+				stored.ending === null
+					? { kind: 'waiting' }
+					: { kind: 'ended', ending: stored.ending.kind === 'timedOut' ? 'timedOut' : 'decided' },
+			...window(stored),
+		};
+	}
+
+	function admit(claims: PersonTokenClaims, proofId: string): AdminRefusal | null {
+		if (props.now() >= claims.exp * 1000) return { result: 'refused', reason: 'expired' };
+		if (!props.hasFloors(claims.organization_id, claims.sub))
+			return { result: 'refused', reason: 'authorizationSyncRequired' };
+		if (!claims.permissions.includes(approvalPermission))
+			return { result: 'refused', reason: 'notPermitted' };
+		if (usedProofIds.has(proofId)) return { result: 'refused', reason: 'requestReused' };
+		usedProofIds.add(proofId);
+		return null;
+	}
+
+	function find(organizationId: string, requestId: unknown): StoredRequest | undefined {
+		return requests.find(
+			(stored) => stored.organizationId === organizationId && stored.requestId === requestId,
+		);
+	}
+
+	function apply(
+		route: ApprovalPersonOperationName,
+		body: Readonly<Record<string, unknown>>,
+		claims: PersonTokenClaims,
+		intent: string,
+	): CentralReply {
+		const organizationId = claims.organization_id;
+		for (const stored of requests) settleDeadline(stored);
+		if (route === 'ApprovalList') {
+			const cursor = body['cursor'] ?? null;
+			const visible = requests
+				.filter((stored) => stored.organizationId === organizationId)
+				.filter((stored) => body['filter'] === 'all' || stored.ending === null)
+				.filter((stored) => cursor === null || stored.requestId < String(cursor))
+				.toSorted((left, right) => right.requestId.localeCompare(left.requestId));
+			const page = visible.slice(0, pageSize);
+			return {
+				kind: 'page',
+				items: page.map(summary),
+				next: visible.length > pageSize ? (page.at(-1)?.requestId ?? null) : null,
+			};
+		}
+		const stored = find(organizationId, body['requestId']);
+		if (route === 'ApprovalRead')
+			return stored === undefined
+				? { kind: 'notVisible' }
+				: { kind: 'request', view: view(stored) };
+		const logKey = `${claims.sub}/${String(body['operationId'])}`;
+		const prior = operationLog.get(logKey);
+		if (prior !== undefined)
+			return prior.intent === intent ? prior.reply : { kind: 'operationConflict' };
+		const reply = decide(stored, body, claims);
+		operationLog.set(logKey, { intent, reply });
+		return reply;
+	}
+
+	function decide(
+		stored: StoredRequest | undefined,
+		body: Readonly<Record<string, unknown>>,
+		claims: PersonTokenClaims,
+	): DecideReply {
+		if (stored === undefined) return { kind: 'notVisible' };
+		if (stored.ending?.kind === 'timedOut') return { kind: 'tooLate' };
+		if (stored.ending?.kind === 'decided')
+			return {
+				kind: 'alreadyDecided',
+				by: { kind: 'person', personId: stored.ending.personId },
+				at: centralTime(stored.ending.atMillis),
+			};
+		const answer = z
+			.object({ kind: z.literal('unprovenCall'), decision: z.enum(['allow', 'decline']) })
+			.safeParse(body['answer']);
+		if (!answer.success)
+			return { kind: 'invalid', reason: { kind: 'invalidAnswer', reason: { kind: 'wrongKind' } } };
+		stored.ending = {
+			kind: 'decided',
+			personId: claims.sub,
+			decision: answer.data.decision,
+			atMillis: props.now(),
+		};
+		return {
+			kind: 'savedDecision',
+			decision: { by: { kind: 'person', personId: claims.sub }, answer: answer.data },
+		};
+	}
+
+	return {
+		arrivals,
+		seedUnprovenCall(seed): void {
+			requests.push({ ...seed, ending: null });
+		},
+		setPageSize(size): void {
+			pageSize = size;
+		},
+		loseNextDecideReply(): void {
+			loseNextDecide = true;
+		},
+		async fetch(request, route): Promise<Response> {
+			const bytes = new Uint8Array(await request.arrayBuffer());
+			const bodySha256 = createHash('sha256').update(bytes).digest('hex');
+			const absent = { personId: null, permissions: null, operationId: null, bodySha256 } as const;
+			let decoded: unknown = null;
+			try {
+				decoded = JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(bytes));
+			} catch {
+				decoded = null;
+			}
+			const parsed = approvalPersonRequestBodySchemas[route].safeParse(decoded);
+			if (!parsed.success) {
+				arrivals.push({ route, outcome: { kind: 'bad-request' }, ...absent });
+				return new Response(null, { status: 400 });
+			}
+			const body = z.record(z.string(), z.unknown()).parse(parsed.data);
+			const operationId = route === 'ApprovalDecide' ? String(body['operationId']) : null;
+			const intent = independentApprovalIntent(route, body);
+			const verified = await verifyCentralPersonRequest(props, request, {
+				path: approvalPersonRoutePaths[route],
+				organization: String(body['organization']),
+				intent,
+			});
+			if (verified.kind === 'refused') {
+				arrivals.push({
+					route,
+					outcome: { kind: 'refused-unauthenticated', failure: verified.failure },
+					...absent,
+					operationId,
+				});
+				return new Response(null, { status: 401 });
+			}
+			const facts = {
+				personId: verified.claims.sub,
+				permissions: verified.claims.permissions,
+				operationId,
+				bodySha256,
+			};
+			const refused = admit(verified.claims, verified.requestId);
+			if (refused !== null) {
+				arrivals.push({ route, outcome: { kind: 'refused', reason: refused.reason }, ...facts });
+				return Response.json(refused);
+			}
+			const reply = apply(route, body, verified.claims, intent);
+			const delivered = !(route === 'ApprovalDecide' && loseNextDecide);
+			if (route === 'ApprovalDecide') loseNextDecide = false;
+			arrivals.push({ route, outcome: { kind: 'replied', reply, delivered }, ...facts });
+			return delivered ? Response.json(reply) : new Response(null, { status: 503 });
+		},
+	};
+}

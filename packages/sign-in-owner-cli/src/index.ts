@@ -2,6 +2,8 @@ export * from '#sign-in-owner-cli/auth-target';
 export * from '#sign-in-owner-cli/owner-cli-login';
 export * from '#sign-in-owner-cli/owner-cli';
 export * from '#sign-in-owner-cli/fleet/fleet-admin-command';
+export * from '#sign-in-owner-cli/fleet/approval-command';
+export * from '#sign-in-owner-cli/fleet/approvals-cli-command';
 export * from '#sign-in-owner-cli/fleet/fleet-cli-commands';
 export * from '#sign-in-owner-cli/fleet/fleet-credential';
 export * from '#sign-in-owner-cli/fleet/proof-key-store';

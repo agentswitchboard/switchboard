@@ -50,6 +50,10 @@ import {
 	type ControlledCentralAdmin,
 } from '#sign-in-test-support/test-fixtures/controlled-central-admin';
 import {
+	createControlledCentralApprovals,
+	type ControlledCentralApprovals,
+} from '#sign-in-test-support/test-fixtures/controlled-central-approvals';
+import {
 	createControlledCentralProvisioning,
 	type ControlledCentralProvisioning,
 } from '#sign-in-test-support/test-fixtures/controlled-central-provisioning';
@@ -210,6 +214,8 @@ export async function startLocalAuthHarness(
 		readonly centralProvisioning: ControlledCentralProvisioning;
 		/** The admin routes' named stand-in for central, and its clock (moved with the host's). */
 		readonly centralAdmin: ControlledCentralAdmin;
+		/** C3's approval routes' named stand-in for central, on the same clock as the admin one. */
+		readonly centralApprovals: ControlledCentralApprovals;
 		readonly setCentralAdminTime: (milliseconds: number) => void;
 		/** The production key-change re-sign (B2 rule 6) on either host; renewal itself has no
 		 * trigger, it runs inside each real Fleet call (owner, 9 Nov). */
@@ -895,6 +901,18 @@ export async function startLocalAuthHarness(
 		hasFloors: centralProvisioning.hasFloors,
 	});
 	centralProvisioning.attachAdmin(centralAdmin);
+	const centralApprovals = createControlledCentralApprovals({
+		issuer,
+		audience: configuration.centralAdminAudience,
+		publicOrigin: configuration.centralPublicOrigin,
+		readSigningKeys: async () =>
+			z
+				.object({ keys: z.array(z.looseObject({ kty: z.string() })) })
+				.parse(await (await auth('/api/auth/jwks')).json()),
+		now: () => centralAdminTime,
+		hasFloors: centralProvisioning.hasFloors,
+	});
+	centralProvisioning.attachApprovals(centralApprovals);
 	const proofClose = createLocalAuthProofClose({
 		runtime: miniflare,
 		nodeHost,
@@ -924,6 +942,7 @@ export async function startLocalAuthHarness(
 		signInHost,
 		centralProvisioning,
 		centralAdmin,
+		centralApprovals,
 		setCentralAdminTime: (milliseconds: number): void => {
 			centralAdminTime = milliseconds;
 		},

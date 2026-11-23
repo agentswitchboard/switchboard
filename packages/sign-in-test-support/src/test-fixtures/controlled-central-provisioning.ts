@@ -1,4 +1,5 @@
 import {
+	approvalPersonRoutePaths,
 	authorizationRevisionPushSchema,
 	centralProvisioningRequestSchema,
 	centralStatementDigestRequestSchema,
@@ -11,6 +12,10 @@ import {
 	adminRouteByPath,
 	type ControlledCentralAdmin,
 } from '#sign-in-test-support/test-fixtures/controlled-central-admin';
+import {
+	approvalRouteByPath,
+	type ControlledCentralApprovals,
+} from '#sign-in-test-support/test-fixtures/controlled-central-approvals';
 
 export type ControlledProvisioningReply =
 	| 'unavailable'
@@ -28,7 +33,8 @@ type ControlledCentralRoute =
 	| '/internal/device-login-decisions'
 	| '/internal/machine-token-decisions'
 	| '/organization-admin/v1/revoke-machine-enrollment'
-	| (typeof fleetAdminRoutePaths)[keyof typeof fleetAdminRoutePaths];
+	| (typeof fleetAdminRoutePaths)[keyof typeof fleetAdminRoutePaths]
+	| (typeof approvalPersonRoutePaths)[keyof typeof approvalPersonRoutePaths];
 /** acknowledge: apply and ACK; lost-reply: apply, then lose the reply; the rest refuse. */
 export type ControlledPushReply = 'acknowledge' | 'lost-reply' | 'unavailable' | 'conflict';
 export interface CentralPeerArrival {
@@ -97,6 +103,8 @@ export interface ControlledCentralProvisioning {
 	readonly hasFloors: (organizationId: string, personId: string) => boolean;
 	/** The admin routes' stand-in; until attached they answer 503, as an unconfigured central. */
 	readonly attachAdmin: (admin: ControlledCentralAdmin) => void;
+	/** C3's approval routes' stand-in; until attached they answer 503, as an unconfigured central. */
+	readonly attachApprovals: (approvals: ControlledCentralApprovals) => void;
 	readonly fetch: (request: Request) => Promise<Response>;
 }
 
@@ -122,6 +130,7 @@ export function createControlledCentralProvisioning(
 	let pushReply: ControlledPushReply = 'acknowledge';
 	const pushWaiters: { readonly count: number; readonly resolve: () => void }[] = [];
 	let admin: ControlledCentralAdmin | null = null;
+	let approvals: ControlledCentralApprovals | null = null;
 	let heldCount = 0;
 	let applySetup = true;
 	let refuseUnstamped = false;
@@ -200,11 +209,15 @@ export function createControlledCentralProvisioning(
 		attachAdmin: (attached: ControlledCentralAdmin): void => {
 			admin = attached;
 		},
+		attachApprovals: (attached: ControlledCentralApprovals): void => {
+			approvals = attached;
+		},
 		async fetch(request: Request): Promise<Response> {
 			// Count before dispatch, body parsing or authorization rejection. Unknown paths
 			// and methods are classified rather than retaining arbitrary request values.
 			const pathname = new URL(request.url).pathname;
 			const adminRoute = adminRouteByPath[pathname];
+			const approvalRoute = approvalRouteByPath[pathname];
 			const route =
 				pathname === '/internal/organization-provisioning' ||
 				pathname === '/internal/organization-statement-digest' ||
@@ -213,9 +226,11 @@ export function createControlledCentralProvisioning(
 				pathname === '/internal/machine-token-decisions' ||
 				pathname === '/organization-admin/v1/revoke-machine-enrollment'
 					? pathname
-					: adminRoute === undefined
-						? 'other'
-						: fleetAdminRoutePaths[adminRoute];
+					: adminRoute !== undefined
+						? fleetAdminRoutePaths[adminRoute]
+						: approvalRoute !== undefined
+							? approvalPersonRoutePaths[approvalRoute]
+							: 'other';
 			arrivals.push({
 				method: request.method === 'POST' ? 'POST' : 'other',
 				path: route,
@@ -265,6 +280,10 @@ export function createControlledCentralProvisioning(
 				return admin === null
 					? new Response(null, { status: 503 })
 					: admin.fetch(request, adminRoute);
+			if (approvalRoute !== undefined)
+				return approvals === null
+					? new Response(null, { status: 503 })
+					: approvals.fetch(request, approvalRoute);
 			if (request.headers.has('authorization')) return new Response(null, { status: 400 });
 			const acceptedRoute: ControlledCentralRoute = route;
 			const requestBody = await request.text();

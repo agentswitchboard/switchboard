@@ -136,7 +136,7 @@ const tokenClaimsSchema = z.looseObject({
 });
 
 /** Central's oracle, written apart from sign-in's JCS: sorted keys, then compact JSON. */
-function sortedJson(value: unknown): string {
+export function sortedJson(value: unknown): string {
 	if (Array.isArray(value)) return `[${value.map(sortedJson).join(',')}]`;
 	if (value !== null && typeof value === 'object')
 		return `{${Object.keys(value)
@@ -145,7 +145,7 @@ function sortedJson(value: unknown): string {
 			.join(',')}}`;
 	return JSON.stringify(value);
 }
-function base64UrlSha256(text: string): string {
+export function base64UrlSha256(text: string): string {
 	return createHash('sha256').update(text).digest('base64url');
 }
 /** Central's `AdminOperation::intent`, restated from its published vectors. */
@@ -198,6 +198,108 @@ function inRequestWindow(atMilliseconds: number, nowMilliseconds: number): boole
 	return atMilliseconds > nowMilliseconds - 65_000 && atMilliseconds <= nowMilliseconds + 5_000;
 }
 
+/** What central's verifier needs to know about itself: the issuer it trusts and its origin. */
+export interface CentralPersonVerifierSettings {
+	readonly issuer: string;
+	readonly audience: string;
+	/** Central's CENTRAL_PUBLIC_ORIGIN; every proof's `htu` must start with exactly this. */
+	readonly publicOrigin: string;
+	readonly readSigningKeys: () => Promise<JSONWebKeySet>;
+	readonly now: () => number;
+}
+type CentralPersonRequestFacts = Partial<
+	Pick<AdminArrival, 'proofKeyThumbprint' | 'accessTokenHash' | 'proofJwkMembers'>
+>;
+export type PersonTokenClaims = z.infer<typeof tokenClaimsSchema>;
+export type CentralPersonVerification =
+	| {
+			readonly kind: 'refused';
+			readonly failure: AdminVerificationFailure;
+			readonly facts: CentralPersonRequestFacts;
+	  }
+	| {
+			readonly kind: 'verified';
+			readonly claims: PersonTokenClaims;
+			readonly requestId: string;
+			readonly intent: string;
+			readonly facts: CentralPersonRequestFacts;
+	  };
+
+/**
+ * Central's verifier steps for one person request on any organization-admin route, admin or
+ * C3: the token, the DPoP proof (header, signature, method, `htu`, `ath`, time, key binding),
+ * the organization and the signed intent, given the route's path, body organization and the
+ * intent digest computed independently of sign-in's builder.
+ */
+export async function verifyCentralPersonRequest(
+	settings: CentralPersonVerifierSettings,
+	request: Request,
+	target: { readonly path: string; readonly organization: string; readonly intent: string },
+): Promise<CentralPersonVerification> {
+	const authorization = request.headers.get('authorization');
+	const proof = request.headers.get('dpop');
+	if (authorization === null || proof === null)
+		return { kind: 'refused', failure: 'missing-headers', facts: {} };
+	const token = /^DPoP ([^\s]+)$/u.exec(authorization)?.[1];
+	if (token === undefined) return { kind: 'refused', failure: 'not-dpop-scheme', facts: {} };
+	const facts: {
+		accessTokenHash: string;
+		proofJwkMembers: readonly string[];
+		proofKeyThumbprint?: string;
+	} = {
+		accessTokenHash: base64UrlSha256(token),
+		proofJwkMembers: [],
+	};
+	let claims: z.infer<typeof tokenClaimsSchema>;
+	try {
+		const verified = await jwtVerify(token, createLocalJWKSet(await settings.readSigningKeys()), {
+			issuer: settings.issuer,
+			audience: settings.audience,
+			typ: 'at+jwt',
+			currentDate: new Date(settings.now()),
+		});
+		claims = tokenClaimsSchema.parse(verified.payload);
+	} catch {
+		return { kind: 'refused', failure: 'token', facts };
+	}
+	const header = decodeProtectedHeader(proof);
+	const jwk = z.looseObject({}).safeParse(header.jwk);
+	facts.proofJwkMembers = jwk.success ? Object.keys(jwk.data).toSorted() : [];
+	const exactHeader = z
+		.strictObject({ typ: z.literal('dpop+jwt'), alg: z.literal('ES256'), jwk: proofJwkSchema })
+		.safeParse(header);
+	if (!exactHeader.success) return { kind: 'refused', failure: 'proof-header', facts };
+	let proofClaims: z.infer<typeof proofClaimsSchema>;
+	try {
+		const verified = await compactVerify(proof, await importJWK(exactHeader.data.jwk, 'ES256'));
+		const parsed = proofClaimsSchema.safeParse(
+			JSON.parse(new TextDecoder().decode(verified.payload)),
+		);
+		if (!parsed.success) return { kind: 'refused', failure: 'proof-claims', facts };
+		proofClaims = parsed.data;
+	} catch {
+		return { kind: 'refused', failure: 'proof-signature', facts };
+	}
+	facts.proofKeyThumbprint = await calculateJwkThumbprint(exactHeader.data.jwk, 'sha256');
+	if (proofClaims.htm !== 'POST') return { kind: 'refused', failure: 'proof-method', facts };
+	if (proofClaims.htu !== `${settings.publicOrigin}${target.path}`)
+		return { kind: 'refused', failure: 'proof-htu', facts };
+	if (proofClaims.ath !== base64UrlSha256(token))
+		return { kind: 'refused', failure: 'proof-ath', facts };
+	if (
+		!inRequestWindow(proofClaims.iat * 1000, settings.now()) ||
+		!inRequestWindow(uuid7Milliseconds(proofClaims.jti), settings.now())
+	)
+		return { kind: 'refused', failure: 'proof-time', facts };
+	if (claims.cnf.jkt !== facts.proofKeyThumbprint)
+		return { kind: 'refused', failure: 'proof-key-binding', facts };
+	if (claims.organization_id !== target.organization)
+		return { kind: 'refused', failure: 'organization', facts };
+	const intent = target.intent;
+	if (proofClaims.intent !== intent) return { kind: 'refused', failure: 'intent', facts };
+	return { kind: 'verified', claims, requestId: proofClaims.jti, intent, facts };
+}
+
 export function createControlledCentralAdmin(props: {
 	readonly issuer: string;
 	readonly audience: string;
@@ -237,82 +339,12 @@ export function createControlledCentralAdmin(props: {
 		request: Request,
 		route: AdminRouteName,
 		body: FleetAdminRequest,
-	): Promise<
-		| {
-				readonly kind: 'refused';
-				readonly failure: AdminVerificationFailure;
-				readonly facts: Partial<AdminArrival>;
-		  }
-		| {
-				readonly kind: 'verified';
-				readonly claims: z.infer<typeof tokenClaimsSchema>;
-				readonly requestId: string;
-				readonly intent: string;
-				readonly facts: Partial<AdminArrival>;
-		  }
-	> {
-		const authorization = request.headers.get('authorization');
-		const proof = request.headers.get('dpop');
-		if (authorization === null || proof === null)
-			return { kind: 'refused', failure: 'missing-headers', facts: {} };
-		const token = /^DPoP ([^\s]+)$/u.exec(authorization)?.[1];
-		if (token === undefined) return { kind: 'refused', failure: 'not-dpop-scheme', facts: {} };
-		const facts: {
-			accessTokenHash: string;
-			proofJwkMembers: readonly string[];
-			proofKeyThumbprint?: string;
-		} = {
-			accessTokenHash: base64UrlSha256(token),
-			proofJwkMembers: [],
-		};
-		let claims: z.infer<typeof tokenClaimsSchema>;
-		try {
-			const verified = await jwtVerify(token, createLocalJWKSet(await props.readSigningKeys()), {
-				issuer: props.issuer,
-				audience: props.audience,
-				typ: 'at+jwt',
-				currentDate: new Date(props.now()),
-			});
-			claims = tokenClaimsSchema.parse(verified.payload);
-		} catch {
-			return { kind: 'refused', failure: 'token', facts };
-		}
-		const header = decodeProtectedHeader(proof);
-		const jwk = z.looseObject({}).safeParse(header.jwk);
-		facts.proofJwkMembers = jwk.success ? Object.keys(jwk.data).toSorted() : [];
-		const exactHeader = z
-			.strictObject({ typ: z.literal('dpop+jwt'), alg: z.literal('ES256'), jwk: proofJwkSchema })
-			.safeParse(header);
-		if (!exactHeader.success) return { kind: 'refused', failure: 'proof-header', facts };
-		let proofClaims: z.infer<typeof proofClaimsSchema>;
-		try {
-			const verified = await compactVerify(proof, await importJWK(exactHeader.data.jwk, 'ES256'));
-			const parsed = proofClaimsSchema.safeParse(
-				JSON.parse(new TextDecoder().decode(verified.payload)),
-			);
-			if (!parsed.success) return { kind: 'refused', failure: 'proof-claims', facts };
-			proofClaims = parsed.data;
-		} catch {
-			return { kind: 'refused', failure: 'proof-signature', facts };
-		}
-		facts.proofKeyThumbprint = await calculateJwkThumbprint(exactHeader.data.jwk, 'sha256');
-		if (proofClaims.htm !== 'POST') return { kind: 'refused', failure: 'proof-method', facts };
-		if (proofClaims.htu !== `${props.publicOrigin}${fleetAdminRoutePaths[route]}`)
-			return { kind: 'refused', failure: 'proof-htu', facts };
-		if (proofClaims.ath !== base64UrlSha256(token))
-			return { kind: 'refused', failure: 'proof-ath', facts };
-		if (
-			!inRequestWindow(proofClaims.iat * 1000, props.now()) ||
-			!inRequestWindow(uuid7Milliseconds(proofClaims.jti), props.now())
-		)
-			return { kind: 'refused', failure: 'proof-time', facts };
-		if (claims.cnf.jkt !== facts.proofKeyThumbprint)
-			return { kind: 'refused', failure: 'proof-key-binding', facts };
-		if (claims.organization_id !== body.organizationId)
-			return { kind: 'refused', failure: 'organization', facts };
-		const intent = independentIntent(body);
-		if (proofClaims.intent !== intent) return { kind: 'refused', failure: 'intent', facts };
-		return { kind: 'verified', claims, requestId: proofClaims.jti, intent, facts };
+	): Promise<CentralPersonVerification> {
+		return verifyCentralPersonRequest(props, request, {
+			path: fleetAdminRoutePaths[route],
+			organization: body.organizationId,
+			intent: independentIntent(body),
+		});
 	}
 
 	function admit(
