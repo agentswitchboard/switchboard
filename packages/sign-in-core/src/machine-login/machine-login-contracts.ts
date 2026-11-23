@@ -37,7 +37,7 @@ export type PresentedMachine = z.infer<typeof presentedMachineSchema>;
 
 const organizationPlaceholder = '{organization_id}';
 const organizationLinkPattern =
-	/^(?!.*\{organization_id\}.*\{organization_id\})[Hh][Tt][Tt][Pp][Ss]:\/\/[^/\\?#@\s\x00-\x1f\x7f-\x9f]+(?:\/[^/\\?#\s\x00-\x1f\x7f-\x9f]*)*\/\{organization_id\}(?:\/[^/\\?#\s\x00-\x1f\x7f-\x9f]*)*(?:\?[^#\\\s\x00-\x1f\x7f-\x9f]*)?$/u;
+	/^(?!.*\{organization_id\}.*\{organization_id\})[Hh][Tt][Tt][Pp][Ss]:\/\/[^/\\?#@\s\p{Cc}]+(?:\/[^/\\?#\s\p{Cc}]*)*\/\{organization_id\}(?:\/[^/\\?#\s\p{Cc}]*)*(?:\?[^#\\\s\p{Cc}]*)?$/u;
 const linkUrlTemplateSchema = z
 	.string()
 	.regex(organizationLinkPattern)

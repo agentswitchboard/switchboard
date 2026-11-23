@@ -9,7 +9,7 @@
 		},
 		"link_url": {
 			"type": "string",
-			"pattern": "^(?!.*\\{organization_id\\}.*\\{organization_id\\})[Hh][Tt][Tt][Pp][Ss]:\\/\\/[^/\\\\?#@\\s\\x00-\\x1f\\x7f-\\x9f]+(?:\\/[^/\\\\?#\\s\\x00-\\x1f\\x7f-\\x9f]*)*\\/\\{organization_id\\}(?:\\/[^/\\\\?#\\s\\x00-\\x1f\\x7f-\\x9f]*)*(?:\\?[^#\\\\\\s\\x00-\\x1f\\x7f-\\x9f]*)?$",
+			"pattern": "^(?!.*\\{organization_id\\}.*\\{organization_id\\})[Hh][Tt][Tt][Pp][Ss]:\\/\\/[^/\\\\?#@\\s\\p{Cc}]+(?:\\/[^/\\\\?#\\s\\p{Cc}]*)*\\/\\{organization_id\\}(?:\\/[^/\\\\?#\\s\\p{Cc}]*)*(?:\\?[^#\\\\\\s\\p{Cc}]*)?$",
 			"description": "Absolute HTTPS template with one literal {organization_id} path segment. The runtime also checks URL parser acceptance and that the placeholder survives path normalization."
 		}
 	},
