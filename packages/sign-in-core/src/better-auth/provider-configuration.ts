@@ -524,7 +524,14 @@ export function createSignInProvider(props: SignInProviderProps): SignInProvider
 			}),
 			createOrganizationMembershipReadPlugin({ store: props.store, platform: props.platform }),
 			twoFactor({ allowPasswordless: true }),
-			createSecondFactorProviderPlugin({ store: props.store, platform: props.platform }),
+			createSecondFactorProviderPlugin({
+				store: props.store,
+				platform: props.platform,
+				passkeyRelyingParty: {
+					origin: props.configuration.issuer,
+					rpId: new URL(props.configuration.issuer).hostname,
+				},
+			}),
 			createPasskeyConfirmationPlugin({
 				issuer: props.configuration.issuer,
 				store: props.store,

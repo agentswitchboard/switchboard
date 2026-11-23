@@ -4,6 +4,11 @@ import { z } from 'zod';
 
 import { isPasskeyRegistrationRequest } from '#sign-in-core/better-auth/passkey-registration-request';
 import {
+	describePasskeyRegistrationRefusal,
+	verifyPasskeyRegistrationResponse,
+	type PasskeyRegistrationExpectation,
+} from '#sign-in-core/better-auth/passkey-registration-verification';
+import {
 	requireFactorActor,
 	requireFactorChange,
 	type FactorActor,
@@ -58,9 +63,19 @@ const nativeConfirmationSchema = z.object({
 	user: publicConfirmationUserSchema,
 });
 
+/** The passkey plugin's challenge cookie name: its default, which sign-in does not override. */
+const passkeyChallengeCookieName = 'better-auth-passkey';
+const storedRegistrationChallengeSchema = z.object({
+	type: z.literal('registration'),
+	expectedChallenge: z.string(),
+	userData: z.object({ id: z.string() }),
+});
+
 export function createSecondFactorProviderPlugin(props: {
 	readonly store: Pick<SignInStore, 'factors' | 'factorChanges'>;
 	readonly platform: Pick<SignInPlatform, 'clock' | 'ids'>;
+	/** The origin and RP ID the passkey plugin is configured with; verification here must use the same. */
+	readonly passkeyRelyingParty: Pick<PasskeyRegistrationExpectation, 'origin' | 'rpId'>;
 }): BetterAuthPlugin {
 	let pending:
 		| { readonly kind: 'none' }
@@ -71,6 +86,40 @@ export function createSecondFactorProviderPlugin(props: {
 		  } = { kind: 'none' };
 	function requireMutationPermission(actor: FactorActor, change: FactorChange): void {
 		requireFactorChange({ clock: props.platform.clock, factors: actor.factors, change });
+	}
+	/**
+	 * Verify the registration the way the passkey plugin will, without consuming its challenge, so a
+	 * client fault answers 4xx. The plugin turns every verifier throw into 500. A missing or foreign
+	 * challenge is left to the plugin's own 4xx answers.
+	 */
+	async function refuseUnverifiableRegistration(
+		context: Parameters<Parameters<typeof createAuthMiddleware>[0]>[0],
+		actor: FactorActor,
+	): Promise<void> {
+		const cookie = context.context.createAuthCookie(passkeyChallengeCookieName);
+		const token = await context.getSignedCookie(cookie.name, context.context.secret);
+		if (!token) return;
+		const stored = await context.context.internalAdapter.findVerificationValue(token);
+		if (!stored) return;
+		let storedJson: unknown;
+		try {
+			storedJson = JSON.parse(stored.value);
+		} catch {
+			return;
+		}
+		const challenge = storedRegistrationChallengeSchema.safeParse(storedJson);
+		if (!challenge.success || challenge.data.userData.id !== actor.personId) return;
+		const body = z.object({ response: z.unknown() }).safeParse(context.body);
+		const verification = await verifyPasskeyRegistrationResponse({
+			response: body.success ? body.data.response : undefined,
+			expected: { challenge: challenge.data.expectedChallenge, ...props.passkeyRelyingParty },
+		});
+		if (verification.kind === 'verified') return;
+		throw new APIError('BAD_REQUEST', {
+			error: 'invalid_request',
+			reason: verification.reason,
+			message: describePasskeyRegistrationRefusal(verification.reason),
+		});
 	}
 	return {
 		id: 'sign-in-second-factors',
@@ -122,6 +171,8 @@ export function createSecondFactorProviderPlugin(props: {
 									code: 'INVALID_REQUEST',
 									message: 'invalid-passkey-registration',
 								});
+							if (path === '/passkey/verify-registration')
+								await refuseUnverifiableRegistration(context, actor);
 							if (
 								path === '/two-factor/enable' &&
 								body.success &&
