@@ -9,7 +9,8 @@ export const machineRouteGroups: readonly ReachableRouteGroup[] = [
 		paths: [workerLinkRoutePath],
 		exposure: ['machine'],
 		requestParts: ['query'],
-		documentedAnswers: [101, 401, 404, 429, 503],
+		// Central or the carrier can return 503 during an outage, which the fault-free F1 lane rejects.
+		documentedAnswers: [101, 401, 404, 429],
 		disclosure:
 			'An authorized machine gets its link. A known ended enrollment receives a terminal close.',
 		permittedRefusalEffects: ['none'],
