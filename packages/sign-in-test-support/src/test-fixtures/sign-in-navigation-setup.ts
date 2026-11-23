@@ -2,6 +2,7 @@ import { fileURLToPath } from 'node:url';
 
 import { member, passkey, session, twoFactor, user } from '@agent-collaboration/sign-in-core';
 import { and, eq } from 'drizzle-orm';
+import type { Page } from 'playwright';
 import { expect } from 'vitest';
 import { z } from 'zod';
 
@@ -220,7 +221,9 @@ async function rejectWhenAborted<TValue>(
  * document committing first; it has no timeout and no grace period. Known gap: a named request
  * that the document never issues is not an error here, because the page publishes no event that
  * says startup has issued every fetch it will issue (and adding one is a product change). That
- * case surfaces only as the suite watchdog, never as a false pass or a false failure. `onBlocked` observes what a returned journey is still waiting for.
+ * case surfaces only as the suite watchdog, never as a false pass or a false failure.
+ * Once the requests are over, the passkey section must also be at rest (see
+ * `awaitPasskeySectionTerminalState`). `onBlocked` observes what a returned journey is still waiting for.
  */
 export async function awaitMePageRequestsAfter(
 	browser: NavigationBrowser,
@@ -242,13 +245,38 @@ export async function awaitMePageRequestsAfter(
 			observation.tracker.settled.then(() => new Promise<never>(() => {})),
 		]);
 		observation.tracker.observeJourneyReturned();
-		// Not the rendered rows: N4 makes more than the 10 passkey requests a minute that request class
-		// admits, so a late visit's list is a 429 and its skeleton never clears. The request being over,
-		// finished or failed after its headers, is the outcome this wait owns.
-		return await rejectWhenAborted(observation.tracker.settled, signal);
+		// The requests being over, finished or failed after their headers, is the outcome this wait owns.
+		// N4 makes more than the 10 passkey requests a minute that request class admits, so a late
+		// visit's list is a 429; since the Retry alert (#16) that is a terminal UI state too. The section
+		// must then be at rest: a terminal marker shown and the loading skeleton gone.
+		const outcomes = await rejectWhenAborted(observation.tracker.settled, signal);
+		await rejectWhenAborted(awaitPasskeySectionTerminalState(proof.page), signal);
+		return outcomes;
 	} finally {
 		await observation.stop();
 	}
+}
+
+/**
+ * The Me passkey section is at rest once it shows a real terminal state (the list rows, "No passkeys
+ * yet.", or the error alert with Retry) and the loading skeleton is gone. A page stuck on the
+ * skeleton, or showing it beside the alert or the rows, fails this wait instead of passing on the
+ * requests alone.
+ * Neither wait has a clock: each ends on the DOM event, or rejects when the page closes, which the
+ * scenario abort does.
+ */
+export async function awaitPasskeySectionTerminalState(page: Page): Promise<void> {
+	const section = page.getByRole('region', { name: 'Passkey list' });
+	await section
+		.getByRole('listitem')
+		.or(section.getByText('No passkeys yet.', { exact: true }))
+		.or(section.getByRole('alert').getByRole('button', { name: 'Retry', exact: true }))
+		.first()
+		.waitFor({ timeout: 0 });
+	await section
+		.locator('[data-slot="skeleton"]')
+		.first()
+		.waitFor({ state: 'detached', timeout: 0 });
 }
 
 export function followReadyLinkToMe(
