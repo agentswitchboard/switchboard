@@ -179,6 +179,23 @@ const reachableRouteGroups: readonly ReachableRouteGroup[] = [
 	{
 		method: 'POST',
 		paths: [
+			'/api/auth/organization-admin/v1/approval-list',
+			'/api/auth/organization-admin/v1/approval-read',
+			'/api/auth/organization-admin/v1/approval-decide',
+		],
+		exposure: ['cli'],
+		requestParts: ['json'],
+		// C3 (R5): central's C3 replies and admin refusals arrive at 200; a classified refusal is
+		// never a 5xx (central's result matrix), and F1's controlled central is always available.
+		documentedAnswers: [200, 400, 401, 403, 413, 429],
+		disclosure:
+			'Only approval requests the authorized organization owner may see; no credential in refusal.',
+		permittedRefusalEffects: ['none'],
+		evidence: 'fleet-admin-relay.ts; approval-person-relay.host.e2e.test.ts',
+	},
+	{
+		method: 'POST',
+		paths: [
 			'/api/auth/organization/create',
 			'/api/auth/organization/invite-member',
 			'/api/auth/organization/cancel-invitation',
