@@ -47,15 +47,23 @@ it.each(machineDeviceFixtureSchemas)(
 			z.toJSONSchema(schema, { target: 'draft-2020-12' }),
 		);
 		expect(schema.parse(fixture.body)).toEqual(fixture.body);
+		expect(fixture.headers['cache-control']).toBe('no-store');
 		if (projectAt === undefined) return;
+		const projectionExampleHeaders =
+			name === 'poll-temporarily_unavailable' ? { 'retry-after': '5' } : undefined;
 		const projected = await projectMachineDeviceResponse(
 			projectAt,
-			Response.json(fixture.body, { status: fixture.status, headers: fixture.headers }),
+			Response.json(fixture.body, {
+				status,
+				...(projectionExampleHeaders === undefined ? {} : { headers: projectionExampleHeaders }),
+			}),
 		);
 		expect(projected.status).toBe(fixture.status);
 		expect(await projected.json()).toEqual(fixture.body);
-		for (const [name, value] of Object.entries(fixture.headers))
-			expect(projected.headers.get(name)).toBe(value);
+		const observed = Object.fromEntries(
+			[...projected.headers].filter(([header]) => header !== 'content-type'),
+		);
+		expect(observed).toEqual(fixture.headers);
 	},
 );
 

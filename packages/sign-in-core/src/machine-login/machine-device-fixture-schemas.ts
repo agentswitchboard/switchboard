@@ -60,6 +60,12 @@ export const machineDeviceFixtureSchemas: readonly MachineDeviceFixtureSchema[] 
 		schema: errorFixtureSchema('invalid_grant'),
 		projectAt: machineTokenPath,
 	},
+	{
+		name: 'refresh-invalid_client',
+		status: 400,
+		schema: errorFixtureSchema('invalid_client'),
+		projectAt: machineTokenPath,
+	},
 ];
 
 export const machineDeviceFixtureDirectory = new URL(

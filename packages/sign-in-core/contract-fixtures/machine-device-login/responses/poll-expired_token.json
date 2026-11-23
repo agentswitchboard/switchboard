@@ -1,7 +1,8 @@
 {
 	"status": 400,
 	"headers": {
-		"cache-control": "no-store"
+		"cache-control": "no-store",
+		"pragma": "no-cache"
 	},
 	"body": {
 		"error": "expired_token"

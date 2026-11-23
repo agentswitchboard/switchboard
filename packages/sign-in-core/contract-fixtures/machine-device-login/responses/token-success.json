@@ -1,7 +1,8 @@
 {
 	"status": 200,
 	"headers": {
-		"cache-control": "no-store"
+		"cache-control": "no-store",
+		"pragma": "no-cache"
 	},
 	"body": {
 		"access_token": "fixture-only-machine-access-token",

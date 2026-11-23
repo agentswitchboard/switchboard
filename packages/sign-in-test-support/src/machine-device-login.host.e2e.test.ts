@@ -392,8 +392,7 @@ it('matches device-login replay fixtures while approving one machine ID and rele
 				.where(eq(oauthClient.clientId, enrollmentId)),
 		).toEqual([{ disabled: true }]);
 		const afterRevoke = await refresh(replacement.refresh_token);
-		expect(afterRevoke.status).toBe(400);
-		expect(await afterRevoke.json()).toEqual({ error: 'invalid_client' });
+		await assertMachineDeviceReplayResponse('refresh-invalid_client', afterRevoke);
 		expect(mintBodies).toHaveLength(2);
 
 		const later = controlledSignInClock.now() + 901_000;
