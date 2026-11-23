@@ -24,6 +24,13 @@ it('uses the same strict HTTPS link template contract at startup and on discover
 		machineAudience: 'https://central.example.invalid/machine',
 		linkUrlTemplate,
 	});
+	expect(
+		machineLoginConfigurationSchema.safeParse({
+			routerClientId: machineId,
+			machineAudience: 'https://central.example.invalid/machine',
+		}).success,
+	).toBe(false);
+	expect(fleetLoginDiscoveryResponseSchema.safeParse({ client_id: machineId }).success).toBe(false);
 	for (const link_url of [
 		'https://sign-in.example.invalid/api/fleet/link/{organization_id}',
 		'https://central.example.invalid/v1/organizations/{organization_id}/link',

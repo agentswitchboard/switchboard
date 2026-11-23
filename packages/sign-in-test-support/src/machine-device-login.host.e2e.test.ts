@@ -202,10 +202,17 @@ it('matches device-login replay fixtures while approving one machine ID and rele
 		const discovery = fleetLoginDiscoveryResponseSchema.parse(
 			await assertMachineDeviceReplayResponse(
 				'discovery',
-				await harness.auth('/.well-known/fleet-login'),
+				await harness.auth('/.well-known/fleet-login', {
+					headers: { 'x-forwarded-host': 'unrelated.example.invalid', 'x-forwarded-proto': 'http' },
+				}),
 			),
 		);
 		expect(discovery.client_id).toBe(routerClientId);
+		expect(discovery.link_url).toBe(
+			harness.signInHost === 'cloudflare'
+				? `https://${new URL(harness.issuer).host}/api/fleet/link/{organization_id}`
+				: 'https://central.example.invalid/v1/organizations/{organization_id}/link',
+		);
 		function pollDevice(issuedDeviceCode: string): Promise<Response> {
 			return harness.auth(
 				'/api/auth/oauth2/token',

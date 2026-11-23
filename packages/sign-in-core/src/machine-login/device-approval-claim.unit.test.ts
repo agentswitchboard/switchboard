@@ -35,6 +35,22 @@ const definitiveRefusals = [
 	{ kind: 'unknownWorkspace' },
 	{ kind: 'machineInAnotherOrganization' },
 ] as const satisfies readonly z.infer<typeof deviceLoginRefusalSchema>[];
+const generatedRefusals = [...definitiveRefusals, { kind: 'requestConflict' }] as const;
+
+function refusedByCentral(
+	reason: z.infer<typeof deviceLoginRefusalSchema>,
+): DeviceApprovalCompletion {
+	return { kind: 'answered', decision: { result: 'refused', reason } };
+}
+
+function centralMayHaveApproved(completion: DeviceApprovalCompletion): boolean {
+	return (
+		completion.kind === 'unanswered' ||
+		(completion.kind === 'answered' &&
+			(completion.decision.result === 'approved' ||
+				completion.decision.reason.kind === 'requestConflict'))
+	);
+}
 
 function begin(attempt: Uuid7, validated: boolean): DeviceApprovalAction {
 	return { kind: 'begin', selection, validated, attempt };
@@ -145,8 +161,19 @@ it('holds a claim when Central reports a request conflict', (): void => {
 });
 
 it('keeps a successful denial exclusive of a Central approval across generated attempts', (): void => {
+	const sampledOutcomes = new Set<string>();
 	hegel.test(
 		(testCase) => {
+			// Exercise a lone completion before drawing the longer interleaving. A conflict is
+			// evidence of a retained approval, and an unanswered send may have committed.
+			const reason = testCase.draw(generators.sampledFrom([...generatedRefusals, null]));
+			sampledOutcomes.add(reason?.kind ?? 'unanswered');
+			const completion = reason === null ? unanswered : refusedByCentral(reason);
+			const lone = transitionDeviceApproval(unclaimed, begin(firstAttempt, true)).next;
+			const settled = transitionDeviceApproval(lone, finish(firstAttempt, completion)).next;
+			const denial = transitionDeviceApproval(settled, { kind: 'deny' });
+			expect(denial.outcome.kind === 'denied' && centralMayHaveApproved(completion)).toBe(false);
+
 			const commands = testCase.draw(
 				generators.arrays(
 					generators.sampledFrom([
@@ -179,20 +206,23 @@ it('keeps a successful denial exclusive of a Central approval across generated a
 					denied ||= result.outcome.kind === 'denied';
 					state = result.next;
 				} else if (state.kind === 'claimed' && state.attempts[attempt] === 'outstanding') {
-					hasCentralApproval ||= command === 'commit' || command === 'lose-reply';
 					const completion =
 						command === 'commit'
 							? approved
 							: command === 'lose-reply'
 								? unanswered
 								: command === 'refused'
-									? refused
+									? refusedByCentral(testCase.draw(generators.sampledFrom([...generatedRefusals])))
 									: notSent;
+					hasCentralApproval ||= centralMayHaveApproved(completion);
 					state = transitionDeviceApproval(state, finish(attempt, completion)).next;
 				}
 				expect(denied && hasCentralApproval).toBe(false);
 			}
 		},
 		{ testCases: 100, derandomize: true, database: hegel.Database.disabled },
+	);
+	expect([...sampledOutcomes].toSorted()).toEqual(
+		[...generatedRefusals.map(({ kind }) => kind), 'unanswered'].toSorted(),
 	);
 });
