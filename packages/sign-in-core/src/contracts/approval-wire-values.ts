@@ -44,20 +44,37 @@ function centralTimeParts(text: string): CentralTimeParts | null {
 		.slice(0, 6)
 		.map(Number);
 	const fraction = spelled[6] ?? '';
-	const millis = Date.UTC(year, month - 1, day, hour, minute, second);
-	const date = new Date(millis);
-	// Date.UTC rolls an out-of-range field into the next one; a round trip exposes it.
 	if (
 		year < 1 ||
-		date.getUTCFullYear() !== year ||
-		date.getUTCMonth() !== month - 1 ||
-		date.getUTCDate() !== day ||
-		date.getUTCHours() !== hour ||
-		date.getUTCMinutes() !== minute ||
-		date.getUTCSeconds() !== second
+		month < 1 ||
+		month > 12 ||
+		day < 1 ||
+		day > daysInMonth(year, month) ||
+		hour > 23 ||
+		minute > 59 ||
+		second > 59
 	)
 		return null;
-	return { epochSeconds: millis / 1000, fraction };
+	return {
+		epochSeconds: daysSinceEpoch(year, month, day) * 86_400 + hour * 3600 + minute * 60 + second,
+		fraction,
+	};
+}
+
+function daysInMonth(year: number, month: number): number {
+	const leapYear = (year % 4 === 0 && year % 100 !== 0) || year % 400 === 0;
+	return [31, leapYear ? 29 : 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31][month - 1] ?? 0;
+}
+
+/** Days from 1970-01-01 to a proleptic Gregorian date (H. Hinnant's days_from_civil). */
+function daysSinceEpoch(year: number, month: number, day: number): number {
+	const shiftedYear = month <= 2 ? year - 1 : year;
+	const era = Math.floor(shiftedYear / 400);
+	const yearOfEra = shiftedYear - era * 400;
+	const dayOfYear = Math.floor((153 * (month + (month > 2 ? -3 : 9)) + 2) / 5) + day - 1;
+	const dayOfEra =
+		yearOfEra * 365 + Math.floor(yearOfEra / 4) - Math.floor(yearOfEra / 100) + dayOfYear;
+	return era * 146_097 + dayOfEra - 719_468;
 }
 
 export const centralTimeSchema = z

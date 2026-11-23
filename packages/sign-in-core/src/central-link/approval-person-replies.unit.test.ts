@@ -181,6 +181,36 @@ describe('C3 replies sign-in accepts', (): void => {
 		).toBe(true);
 	});
 
+	it.each([
+		['across a day', '2026-11-22T23:30:00Z', '2026-11-23T00:30:00Z'],
+		['across a year', '2026-12-31T23:59:59.500Z', '2027-01-01T00:59:59.500Z'],
+		['into a leap day', '2028-02-28T23:15:00Z', '2028-02-29T00:15:00Z'],
+		['out of a leap day', '2028-02-29T23:15:00Z', '2028-03-01T00:15:00Z'],
+		['out of February in a common year', '2027-02-28T23:15:00Z', '2027-03-01T00:15:00Z'],
+		[
+			'out of a century leap day',
+			'2000-02-29T23:00:00.000000001Z',
+			'2000-03-01T00:00:00.000000001Z',
+		],
+	])('the one-hour window %s', (_name, raisedAt, deadline): void => {
+		const view = { ...providerApproval, window: { raisedAt, deadline } };
+		expect(approvalReadReplySchema.safeParse({ kind: 'request', view }).success).toBe(true);
+	});
+
+	it.each([
+		[
+			'the day after February 28 in 2028 is not March 1',
+			'2028-02-28T23:15:00Z',
+			'2028-03-01T00:15:00Z',
+		],
+		['1900 has no February 29', '1900-02-29T00:00:00Z', '1900-02-29T01:00:00Z'],
+		['2027 has no February 29', '2027-02-29T00:00:00Z', '2027-02-29T01:00:00Z'],
+		['April has no day 31', '2026-04-31T00:00:00Z', '2026-04-31T01:00:00Z'],
+	])('refuses a window where %s', (_name, raisedAt, deadline): void => {
+		const view = { ...providerApproval, window: { raisedAt, deadline } };
+		expect(approvalReadReplySchema.safeParse({ kind: 'request', view }).success).toBe(false);
+	});
+
 	it('keys each operation to its own reply union', (): void => {
 		expect(Object.keys(approvalPersonReplySchemas)).toEqual([
 			'ApprovalList',
