@@ -8,7 +8,10 @@ import {
 	machineDeviceFixtureSchemas,
 } from '#sign-in-core/machine-login/machine-device-fixture-schemas';
 import { machineDeviceRequestIsValid } from '#sign-in-core/machine-login/machine-device-requests';
-import { projectMachineDeviceResponse } from '#sign-in-core/response-release/machine-device-response';
+import {
+	machineResponseHeaders,
+	projectMachineDeviceResponse,
+} from '#sign-in-core/response-release/machine-device-response';
 
 const headersSchema = z.record(z.string(), z.string());
 const responseFixtureSchema = z.strictObject({
@@ -47,8 +50,14 @@ it.each(machineDeviceFixtureSchemas)(
 			z.toJSONSchema(schema, { target: 'draft-2020-12' }),
 		);
 		expect(schema.parse(fixture.body)).toEqual(fixture.body);
-		expect(fixture.headers['cache-control']).toBe('no-store');
-		if (projectAt === undefined) return;
+		if (projectAt === undefined) {
+			const expected =
+				name === 'discovery'
+					? { 'cache-control': 'no-store' }
+					: Object.fromEntries(machineResponseHeaders(new Response()));
+			expect(fixture.headers).toEqual(expected);
+			return;
+		}
 		const projectionExampleHeaders =
 			name === 'poll-temporarily_unavailable' ? { 'retry-after': '5' } : undefined;
 		const projected = await projectMachineDeviceResponse(
