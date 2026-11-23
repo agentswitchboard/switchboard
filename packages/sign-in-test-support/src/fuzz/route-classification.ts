@@ -176,6 +176,14 @@ const reachableRouteGroups: readonly ReachableRouteGroup[] = [
 		permittedRefusalEffects: ['none'],
 		evidence: 'fleet-admin-relay.ts; fleet-admin-relay.host.e2e.test.ts',
 	},
+	// COVERAGE GAP (PR #24 review S2; Sign-in Lead, step 2d): F1 covers these three routes as
+	// UNAUTHENTICATED ADMISSION ONLY. The campaign attaches the caller's cookie and no DPoP token or
+	// proof, so every generated request stops at the relay's early refusal (cookie, method, missing
+	// DPoP, size) and never reaches a signed request, central's reply decoding or the refusals
+	// behind the relay. Signed baselines (a valid CLI-signed request with a known answer, a wrong
+	// key, a body changed after signing, a reused proof) are a separate follow-up PR the Lead
+	// commissions after PR #24 merges. Signed behaviour is covered outside F1, in the host files
+	// named in this row's evidence.
 	{
 		method: 'POST',
 		paths: [
@@ -191,7 +199,8 @@ const reachableRouteGroups: readonly ReachableRouteGroup[] = [
 		disclosure:
 			'Only approval requests the authorized organization owner may see; no credential in refusal.',
 		permittedRefusalEffects: ['none'],
-		evidence: 'fleet-admin-relay.ts; approval-person-relay.host.e2e.test.ts',
+		evidence:
+			'F1: unauthenticated admission only (signed baselines are the follow-up PR). Signed: fleet-admin-relay.ts; approval-person-relay.host.e2e.test.ts; b3-central-approvals.host.e2e.test.ts',
 	},
 	{
 		method: 'POST',
