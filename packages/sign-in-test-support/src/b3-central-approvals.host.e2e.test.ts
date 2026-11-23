@@ -1,0 +1,195 @@
+import { epochMillisecondsSchema } from '@agent-collaboration/sign-in-core';
+import {
+	createMemoryProofKeyStore,
+	fleetCliSession,
+	requireFleetTarget,
+	runApprovalsCommand,
+	sendApprovalOperation,
+	type ApprovalsCommandOptions,
+	type FleetCliIo,
+} from '@agent-collaboration/sign-in-owner-cli';
+import { createWebSignInCapabilities } from '@agent-collaboration/sign-in-platform-web';
+import { expect, it } from 'vitest';
+import { z } from 'zod';
+
+import { c3CentralProofPin } from '#sign-in-test-support/test-fixtures/b3-central-proof-pin';
+import { startB3CentralTokio } from '#sign-in-test-support/test-fixtures/b3-central-tokio';
+import { useControlledSignInClock } from '#sign-in-test-support/test-fixtures/controlled-node-test-clock';
+import { controlledSignInClock } from '#sign-in-test-support/test-fixtures/controlled-sign-in-clock';
+import { fleetCliIoFor } from '#sign-in-test-support/test-fixtures/fleet-cli-fixture';
+import { startLocalAuthHarness } from '#sign-in-test-support/test-fixtures/local-auth-harness';
+import { ensureLocalOwnerOrganization } from '#sign-in-test-support/test-fixtures/local-owner-organization';
+import {
+	peoplePost,
+	signInConfirmedPeopleBrowser,
+} from '#sign-in-test-support/test-fixtures/people-browser-login';
+import { webSignInCrypto } from '#sign-in-test-support/test-fixtures/recording-sign-in-capabilities';
+
+useControlledSignInClock();
+
+/** Central main 1ede5c1b9's native build (c3CentralProofPin), started as the Tokio pair's central. */
+const centralExecutable = process.env.C3_CENTRAL_SERVE;
+const tokioPair = process.env.SIGN_IN_TEST_HOST === 'node';
+
+/** One printed line of the live record: the command and what the CLI said. */
+function record(
+	command: string,
+	result: { readonly exitCode: number; readonly lines: readonly string[] },
+): void {
+	process.stdout.write(`${JSON.stringify({ event: 'c3-live-approvals', command, ...result })}\n`);
+}
+
+it.runIf(centralExecutable !== undefined && tokioPair)(
+	"C3 live: the owner CLI lists, reads and decides against real central's person approval routes",
+	async (): Promise<void> => {
+		if (centralExecutable === undefined) throw new Error('Missing pinned Central build');
+		let now = controlledSignInClock.now();
+		const harness = await startLocalAuthHarness({
+			host: 'node',
+			turnstileSecret: 'published-test',
+			authenticatorClock: { now: () => epochMillisecondsSchema.parse(now) },
+			async centralLink(issuer: string) {
+				const central = await startB3CentralTokio({
+					executable: centralExecutable,
+					issuer,
+					jwksUrl: new URL('/api/auth/jwks', issuer).toString(),
+					pin: c3CentralProofPin,
+				});
+				return { socketPath: central.socketPath, close: central.close };
+			},
+		});
+		try {
+			// Real central keeps real time: align the sign-in proof clock with the host's first.
+			const clockSample = await fetch(harness.issuer);
+			await clockSample.body?.cancel();
+			now = epochMillisecondsSchema.parse(Date.parse(clockSample.headers.get('date') ?? ''));
+			const clock = await harness.auth('/__auth-proof/set-clock', {
+				method: 'POST',
+				headers: { 'content-type': 'application/json' },
+				body: JSON.stringify({ milliseconds: now }),
+			});
+			expect(clock.status).toBe(200);
+			await signInConfirmedPeopleBrowser({ harness, email: 'owner@example.invalid' });
+			const organizationId = await ensureLocalOwnerOrganization({
+				auth: harness.auth,
+				database: harness.database,
+			});
+			const bootstrap = await harness.auth('/api/auth/owner/bootstrap', {
+				method: 'POST',
+				headers: { 'content-type': 'application/json' },
+				body: '{}',
+			});
+			expect(bootstrap.status).toBe(200);
+			await harness.settleDeferredWork();
+			const ownerCookie = harness.cookie();
+			const target = { ...harness.target, organizationId };
+			const ids = createWebSignInCapabilities({
+				now: () => epochMillisecondsSchema.parse(now),
+			}).ids;
+
+			function cli(
+				io: FleetCliIo,
+			): (
+				args: readonly string[],
+				options?: ApprovalsCommandOptions,
+			) => Promise<{ readonly exitCode: number; readonly lines: readonly string[] }> {
+				const store = createMemoryProofKeyStore(webSignInCrypto);
+				return async (args, options = {}) => {
+					const lines: string[] = [];
+					const exitCode = await runApprovalsCommand({
+						arguments: args,
+						target,
+						options,
+						environment: {
+							io,
+							store: () => store,
+							confirmSecondFactor: async () => {
+								throw new Error('approvals never ask for a second factor');
+							},
+							write: (line) => lines.push(line),
+						},
+					});
+					const result = { exitCode, lines };
+					record(
+						['approvals', ...args, ...Object.entries(options).flat().map(String)].join(' '),
+						result,
+					);
+					return result;
+				};
+			}
+			const ownerIo = fleetCliIoFor({ harness, cookie: ownerCookie, now: () => now, sent: [] });
+			const owner = cli(ownerIo);
+
+			// list: real central's first page for an organization with no raised requests.
+			expect(await owner(['list'])).toEqual({ exitCode: 0, lines: ['No approval requests.'] });
+			expect(await owner(['list'], { all: true })).toEqual({
+				exitCode: 0,
+				lines: ['No approval requests.'],
+			});
+			// read: an id the person may not see is notVisible.
+			const unknown = ids.nextId();
+			expect(await owner(['show', unknown])).toEqual({ exitCode: 2, lines: ['Not found.'] });
+			expect(await owner(['approve', unknown])).toEqual({ exitCode: 2, lines: ['Not found.'] });
+
+			// decide, signed exactly as the CLI signs it: central verifies the decide intent and
+			// retains the first result under the operation id.
+			const fleetTarget = requireFleetTarget(target);
+			const session = await fleetCliSession({
+				target: fleetTarget,
+				store: createMemoryProofKeyStore(webSignInCrypto),
+				io: ownerIo,
+			});
+			const operationId = ids.nextId();
+			const decide = (decision: 'allow' | 'decline') =>
+				sendApprovalOperation({
+					target: fleetTarget,
+					session,
+					io: ownerIo,
+					operation: {
+						operation: 'ApprovalDecide',
+						organization: organizationId,
+						requestId: unknown,
+						operationId,
+						answer: { kind: 'unprovenCall', decision },
+					},
+				});
+			const first = await decide('allow');
+			const replayed = await decide('allow');
+			const changed = await decide('decline');
+			for (const [command, answer] of [
+				['decide allow', first],
+				['decide allow (same operation id)', replayed],
+				['decide decline (same operation id)', changed],
+			] as const)
+				process.stdout.write(
+					`${JSON.stringify({ event: 'c3-live-approvals', command, answer })}\n`,
+				);
+			expect(first).toEqual({ kind: 'replied', reply: { kind: 'notVisible' } });
+			expect(replayed).toEqual(first);
+			expect(changed).toEqual({ kind: 'replied', reply: { kind: 'operationConflict' } });
+
+			// A member, who holds no approval:decide, is refused by central itself.
+			const invited = await peoplePost(
+				harness,
+				'invite-member',
+				{ organizationId, email: 'member@example.invalid', role: 'member' },
+				ownerCookie,
+			);
+			const invitationId = z.object({ id: z.uuidv7() }).parse(await invited.json()).id;
+			await signInConfirmedPeopleBrowser({ harness, email: 'member@example.invalid' });
+			expect((await peoplePost(harness, 'accept-invitation', { invitationId })).status).toBe(200);
+			await harness.settleDeferredWork();
+			const member = cli(
+				fleetCliIoFor({ harness, cookie: harness.cookie(), now: () => now, sent: [] }),
+			);
+			expect(await member(['list'])).toEqual({
+				exitCode: 2,
+				lines: [
+					"Not permitted: answering approvals needs the organization owner's approval:decide.",
+				],
+			});
+		} finally {
+			await harness.close();
+		}
+	},
+);

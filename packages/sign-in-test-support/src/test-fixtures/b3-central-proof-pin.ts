@@ -30,12 +30,30 @@ async function assertDigest(file: string, expected: string): Promise<string> {
 	return actual;
 }
 
-export async function assertB3CentralNativeProofArtifact(executable: string): Promise<void> {
-	const sha256 = await assertDigest(executable, b3CentralProofPin.nativeSha256);
+/** A native Central build a live proof runs against: its source commit and binary digest. */
+export interface CentralNativeProofPin {
+	readonly commit: string;
+	readonly nativeSha256: string;
+}
+
+/**
+ * C3's live approval proof: Central main 1ede5c1b9 (#389, the person approval routes), the locked
+ * production CLI debug build, signed for direct macOS execution.
+ */
+export const c3CentralProofPin = {
+	commit: '1ede5c1b9afbe6bd427ac742f8b63d53a225151e',
+	nativeSha256: 'a8ae59ac7ce508b7418d40854057f55232eccb3c97b757aa661c39635a7468cd',
+} as const satisfies CentralNativeProofPin;
+
+export async function assertB3CentralNativeProofArtifact(
+	executable: string,
+	pin: CentralNativeProofPin = b3CentralProofPin,
+): Promise<void> {
+	const sha256 = await assertDigest(executable, pin.nativeSha256);
 	process.stdout.write(
 		JSON.stringify({
 			event: 'b3-central-native-proof-pin',
-			commit: b3CentralProofPin.commit,
+			commit: pin.commit,
 			sha256,
 		}) + '\n',
 	);

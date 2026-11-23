@@ -4,7 +4,10 @@ import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { createInterface } from 'node:readline';
 
-import { assertB3CentralNativeProofArtifact } from '#sign-in-test-support/test-fixtures/b3-central-proof-pin';
+import {
+	assertB3CentralNativeProofArtifact,
+	type CentralNativeProofPin,
+} from '#sign-in-test-support/test-fixtures/b3-central-proof-pin';
 
 export const b3CentralPublicOrigin = 'https://central.example.invalid';
 export const b3CentralServiceId = '019f0000-0000-7000-8000-00000000d209';
@@ -31,12 +34,14 @@ export async function startB3CentralTokio(props: {
 	readonly executable: string;
 	readonly issuer: string;
 	readonly jwksUrl: string;
+	/** The build this run must be; the B3 pin unless a proof names another. */
+	readonly pin?: CentralNativeProofPin;
 }): Promise<{
 	readonly tcp: URL;
 	readonly socketPath: string;
 	readonly close: () => Promise<void>;
 }> {
-	await assertB3CentralNativeProofArtifact(props.executable);
+	await assertB3CentralNativeProofArtifact(props.executable, props.pin);
 	const root = await mkdtemp('/tmp/b3-central-join-');
 	const centralRoot = join(root, 'central');
 	const centralConfig = join(root, 'central.json');
