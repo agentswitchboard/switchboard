@@ -239,9 +239,10 @@ export async function awaitMePageRequestsAfter(
 	proof.page.on('requestfailed', failed);
 	try {
 		await reachMe();
-		// Not the rendered rows: N4 makes more than the 10 passkey requests a minute that request class
-		// admits, so a late visit's list is a 429 and its skeleton never clears. The request being over,
-		// finished or failed after its headers, is the outcome this wait owns.
+		// The requests being over, finished or failed after their headers, is the outcome this wait owns.
+		// N4 makes more than the 10 passkey requests a minute that request class admits, so a late
+		// visit's list is a 429; since the Retry alert (#16) that is a terminal UI state too. The section
+		// must then be at rest: a terminal marker shown and the loading skeleton gone.
 		const outcomes = await rejectWhenAborted(tracker.settled, signal);
 		await rejectWhenAborted(awaitPasskeySectionTerminalState(proof.page), signal);
 		return outcomes;
@@ -257,18 +258,21 @@ export async function awaitMePageRequestsAfter(
 const passkeySectionTerminalStateTimeoutMilliseconds = 10_000;
 
 /**
- * The Me passkey section is at rest once it shows a real terminal state: the list rows, "No passkeys
- * yet.", or the error alert with Retry. The skeleton is none of these, so a page stuck on it fails
- * this wait instead of passing on the requests alone.
+ * The Me passkey section is at rest once it shows a real terminal state (the list rows, "No passkeys
+ * yet.", or the error alert with Retry) and the loading skeleton is gone. A page stuck on the
+ * skeleton, or showing it beside the alert or the rows, fails this wait instead of passing on the
+ * requests alone.
  */
-function awaitPasskeySectionTerminalState(page: Page): Promise<void> {
+async function awaitPasskeySectionTerminalState(page: Page): Promise<void> {
 	const section = page.getByRole('region', { name: 'Passkey list' });
-	return section
+	const timeout = passkeySectionTerminalStateTimeoutMilliseconds;
+	await section
 		.getByRole('listitem')
 		.or(section.getByText('No passkeys yet.', { exact: true }))
 		.or(section.getByRole('alert').getByRole('button', { name: 'Retry', exact: true }))
 		.first()
-		.waitFor({ timeout: passkeySectionTerminalStateTimeoutMilliseconds });
+		.waitFor({ timeout });
+	await section.locator('[data-slot="skeleton"]').first().waitFor({ state: 'detached', timeout });
 }
 
 export function followReadyLinkToMe(
