@@ -4,8 +4,7 @@ export type MePageRequestOutcome = 'finished' | 'failed';
 export type MePageWaitFailure =
 	| { readonly kind: 'pageLost'; readonly reason: string }
 	| { readonly kind: 'documentLeft'; readonly loaderId: string }
-	| { readonly kind: 'mountFailed'; readonly detail: string }
-	| { readonly kind: 'startupWithoutRequest'; readonly missingPaths: readonly string[] };
+	| { readonly kind: 'mountFailed'; readonly detail: string };
 
 export class MePageWaitError extends Error {
 	constructor(readonly failure: MePageWaitFailure) {
@@ -33,8 +32,10 @@ export interface MePageWaitBlock {
  *   Requests of any other loader, whatever their pathname, are never admitted.
  * - The wait resolves when every named path was admitted and has a terminal event.
  * - It rejects with a `MePageWaitError` when the page is lost, a script of the document fails or
- *   throws (the island cannot mount), another document commits first, or the island has rendered
- *   its final content while a named path was never requested.
+ *   throws (the island cannot mount), or another document commits first.
+ * - Known gap: a named path that the document never requests is not an error here. The page
+ *   publishes no event that says startup has issued every fetch it will issue, so nothing causal
+ *   can end that wait; it shows up only as the suite watchdog, never as a false pass or a false failure.
  */
 export function createMePageDocumentTracker(props: {
 	readonly origin: string;
@@ -58,16 +59,6 @@ export function createMePageDocumentTracker(props: {
 		readonly outcome: MePageRequestOutcome;
 		readonly cancelled: boolean;
 	}) => void;
-	/** The execution context (CDP id) that Chromium created for a committed main-frame document. */
-	readonly observeDocumentContext: (document: {
-		readonly loaderId: string;
-		readonly contextId: number;
-	}) => void;
-	/**
-	 * The island of the document that runs in `contextId` has mounted and shows no loading skeleton.
-	 * Only the claimed document's context counts; any other context's report is ignored.
-	 */
-	readonly observeStartupRendered: (render: { readonly contextId: number }) => void;
 	readonly observeScriptError: (detail: string) => void;
 	readonly observePageLost: (reason: string) => void;
 	/** The journey that reaches Me has returned; from now on blocking is reported. */
@@ -86,7 +77,6 @@ export function createMePageDocumentTracker(props: {
 		string,
 		{ readonly outcome: MePageRequestOutcome; readonly cancelled: boolean }
 	>();
-	const contextOfLoader = new Map<string, number>();
 	const admittedByPath = new Map<string, string>();
 	const outcomes = new Map<string, MePageRequestOutcome>();
 	const settled = Promise.withResolvers<ReadonlyMap<string, MePageRequestOutcome>>();
@@ -183,15 +173,6 @@ export function createMePageDocumentTracker(props: {
 			terminals.set(terminal.requestId, terminal);
 			applyTerminal(terminal.requestId);
 			evaluate();
-		},
-		observeDocumentContext(document): void {
-			contextOfLoader.set(document.loaderId, document.contextId);
-		},
-		observeStartupRendered(render): void {
-			if (ended || claimedLoaderId === null) return;
-			if (contextOfLoader.get(claimedLoaderId) !== render.contextId) return;
-			const missing = missingPaths();
-			if (missing.length > 0) fail({ kind: 'startupWithoutRequest', missingPaths: missing });
 		},
 		observeScriptError(detail): void {
 			if (claimedLoaderId !== null) fail({ kind: 'mountFailed', detail });

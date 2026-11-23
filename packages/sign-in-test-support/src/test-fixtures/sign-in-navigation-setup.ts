@@ -216,9 +216,11 @@ async function rejectWhenAborted<TValue>(
  * them, and closing the harness rejects any request still open, so a journey must not go on or
  * return before they have. Requests are bound to the committed main-frame document that issued
  * them (its loader id), not to a pathname, so a request of the document left behind never counts.
- * The wait fails, with a `MePageWaitError`, on a lost page, a document that cannot mount, another
- * document committing first, or a finished render that never requested a named path; it has no
- * timeout and no grace period. `onBlocked` observes what a returned journey is still waiting for.
+ * The wait fails, with a `MePageWaitError`, on a lost page, a document that cannot mount, or another
+ * document committing first; it has no timeout and no grace period. Known gap: a named request
+ * that the document never issues is not an error here, because the page publishes no event that
+ * says startup has issued every fetch it will issue (and adding one is a product change). That
+ * case surfaces only as the suite watchdog, never as a false pass or a false failure. `onBlocked` observes what a returned journey is still waiting for.
  */
 export async function awaitMePageRequestsAfter(
 	browser: NavigationBrowser,
