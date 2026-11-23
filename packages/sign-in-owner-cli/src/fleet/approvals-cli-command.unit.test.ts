@@ -246,7 +246,8 @@ describe('approvals approve and deny', (): void => {
 		expect(result.exitCode).toBe(1);
 		const operationId = String(Reflect.get(Object(result.calls[1]?.body), 'operationId'));
 		expect(result.lines).toEqual([
-			`Central did not answer. Repeat with: approvals approve ${requestId} --operation-id ${operationId} --option 4. A repeat sends the decide without reading the request, so it must carry this exact answer; it will not be decided twice.`,
+			"Central did not answer. To repeat, run the next line exactly. It sends the decide without reading the request, with this exact answer and operation id; within central's 24-hour retention it will not be decided twice.",
+			`approvals approve ${requestId} --operation-id ${operationId} --option 4`,
 		]);
 		expect(result.calls[2]?.body).toEqual(result.calls[1]?.body);
 	});
@@ -624,10 +625,14 @@ describe('question recovery with --answer', (): void => {
 		const firstBody = z
 			.object({ operationId: z.string(), answer: z.unknown() })
 			.parse(result.calls[1]?.body);
-		const [advice = ''] = result.lines;
+		// The second line is the command alone: exactly what a person copies.
+		const [, command = ''] = result.lines;
+		expect(command).toMatch(
+			/^approvals answer \S+ --operation-id \S+ --answer '(?:[^']|'\\'')*'$/u,
+		);
 		// Act: read the printed --answer word as a POSIX shell would, then recover with it.
-		const printed = /--answer '((?:[^']|'\\'')*)'\./u.exec(advice)?.[1]?.replaceAll("'\\''", "'");
-		expect(advice).toContain(
+		const printed = /--answer '((?:[^']|'\\'')*)'$/u.exec(command)?.[1]?.replaceAll("'\\''", "'");
+		expect(command).toContain(
 			`approvals answer ${requestId} --operation-id ${firstBody.operationId} --answer '`,
 		);
 		const recovered = await approvals(
