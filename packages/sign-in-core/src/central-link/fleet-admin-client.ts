@@ -281,38 +281,58 @@ export type RevokeMachineEnrollment = (props: {
 	readonly signal?: AbortSignal;
 }) => Promise<FleetAdminAnswer<RevokeMachineEnrollmentResult>>;
 
+/** A person's DPoP-carried request to one of central's link-only organization-admin routes. */
+export interface CentralPersonPost {
+	readonly path: string;
+	readonly authorization: string;
+	readonly proof: string;
+	readonly body: string | Uint8Array<ArrayBuffer>;
+	readonly signal?: AbortSignal;
+}
+
+/**
+ * The one HTTP send every organization-admin route shares: central's response, or why there is
+ * none. Each route family reads the response with its own reply rules.
+ */
+export async function postPersonRequestToCentral(
+	transport: CentralTransport,
+	props: CentralPersonPost,
+): Promise<
+	| { readonly kind: 'response'; readonly response: Response }
+	| { readonly kind: 'unknown'; readonly reason: CentralLinkUncertainty }
+> {
+	try {
+		const response = await transport.fetch(
+			new Request(`http://central.invalid${props.path}`, {
+				method: 'POST',
+				headers: {
+					'content-type': 'application/json',
+					authorization: props.authorization,
+					dpop: props.proof,
+				},
+				body: props.body,
+				...(props.signal === undefined ? {} : { signal: props.signal }),
+			}),
+		);
+		return { kind: 'response', response };
+	} catch (error) {
+		return {
+			kind: 'unknown',
+			reason: error instanceof Error && error.name === 'TimeoutError' ? 'timeout' : 'unavailable',
+		};
+	}
+}
+
 /** One send per call; the admin routes travel the private link like every other central call. */
 export function createFleetAdminLinkClient(
 	transport: CentralTransport,
 ): FleetAdminLinkClient & { readonly revokeMachineEnrollment: RevokeMachineEnrollment } {
-	async function send<TResult>(props: {
-		readonly path: string;
-		readonly resultSchema: z.ZodType<TResult>;
-		readonly authorization: string;
-		readonly proof: string;
-		readonly body: string | Uint8Array<ArrayBuffer>;
-		readonly signal?: AbortSignal;
-	}): Promise<FleetAdminAnswer<TResult>> {
-		let response: Response;
-		try {
-			response = await transport.fetch(
-				new Request(`http://central.invalid${props.path}`, {
-					method: 'POST',
-					headers: {
-						'content-type': 'application/json',
-						authorization: props.authorization,
-						dpop: props.proof,
-					},
-					body: props.body,
-					...(props.signal === undefined ? {} : { signal: props.signal }),
-				}),
-			);
-		} catch (error) {
-			return {
-				kind: 'unknown',
-				reason: error instanceof Error && error.name === 'TimeoutError' ? 'timeout' : 'unavailable',
-			};
-		}
+	async function send<TResult>(
+		props: CentralPersonPost & { readonly resultSchema: z.ZodType<TResult> },
+	): Promise<FleetAdminAnswer<TResult>> {
+		const posted = await postPersonRequestToCentral(transport, props);
+		if (posted.kind === 'unknown') return posted;
+		const { response } = posted;
 		if (response.status === 401) return { kind: 'unauthenticated' };
 		if (response.status === 400) return { kind: 'request-refused' };
 		if (response.status === 503) return { kind: 'answered-unavailable' };

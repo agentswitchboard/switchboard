@@ -53,6 +53,14 @@ export async function nativeOrganizationProvisioning(
 								kind: 'unknown' as const,
 								reason: 'unavailable' as const,
 							}),
+							sendApprovalPersonRequest: async () => ({
+								kind: 'unknown' as const,
+								reason: 'unavailable' as const,
+							}),
+							relayApprovalPersonRequest: async () => ({
+								kind: 'unknown' as const,
+								reason: 'unavailable' as const,
+							}),
 							async provisionOrganization(request) {
 								const row = (
 									await context

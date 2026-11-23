@@ -53,7 +53,7 @@ export const approvalPersonPreflightStatuses = {
  * Applying admission refusals, which arrive at 200 in the admin envelope
  * `{"result":"refused","reason":…}`. C3 has no `secondFactorRequired`.
  */
-const approvalPersonAdminRefusals = [
+export const approvalPersonAdminRefusals = [
 	'notPermitted',
 	'refreshRequired',
 	'authorizationSyncRequired',

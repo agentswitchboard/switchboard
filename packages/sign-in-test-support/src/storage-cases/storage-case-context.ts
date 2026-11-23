@@ -94,6 +94,14 @@ export function createStorageCaseContext(props: {
 				kind: 'unknown' as const,
 				reason: 'unavailable' as const,
 			}),
+			sendApprovalPersonRequest: async () => ({
+				kind: 'unknown' as const,
+				reason: 'unavailable' as const,
+			}),
+			relayApprovalPersonRequest: async () => ({
+				kind: 'unknown' as const,
+				reason: 'unavailable' as const,
+			}),
 			provisionOrganization: async () => ({ kind: 'unknown', reason: 'unavailable' }),
 		},
 		log: (): void => undefined,

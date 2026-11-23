@@ -172,6 +172,14 @@ export function createRecordingSignInCapabilities(props: {
 				recorded.push({ kind: 'central-call', operation: 'relayFleetAdminRequest' });
 				return client.relayFleetAdminRequest(request);
 			},
+			sendApprovalPersonRequest: async (request) => {
+				recorded.push({ kind: 'central-call', operation: 'sendApprovalPersonRequest' });
+				return client.sendApprovalPersonRequest(request);
+			},
+			relayApprovalPersonRequest: async (request) => {
+				recorded.push({ kind: 'central-call', operation: 'relayApprovalPersonRequest' });
+				return client.relayApprovalPersonRequest(request);
+			},
 		};
 	}
 	return { crypto, clock, ids, recordCentralClient, records: () => [...recorded] };
