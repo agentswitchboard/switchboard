@@ -35,6 +35,7 @@ const secondFactorWindowSeconds = 900;
 const routePermission: Readonly<Record<AdminRouteName, string>> = {
 	CreateWorkspace: 'workspace:create',
 	WorkspaceLookup: 'organization:view',
+	ListWorkspaces: 'organization:view',
 	ReadChangeRecords: 'organization:readAudit',
 };
 
@@ -150,6 +151,17 @@ function base64UrlSha256(text: string): string {
 /** Central's `AdminOperation::intent`, restated from its published vectors. */
 function independentIntent(request: FleetAdminRequest): string {
 	const organization = request.organizationId;
+	if (request.operation === 'ListWorkspaces')
+		return base64UrlSha256(
+			sortedJson({
+				v: 1,
+				operation: 'ListWorkspaces',
+				organization,
+				target: organization,
+				operationId: null,
+				params: { after: request.after ?? null, limit: request.limit },
+			}),
+		);
 	const intent =
 		request.operation === 'CreateWorkspace'
 			? {
@@ -204,8 +216,13 @@ export function createControlledCentralAdmin(props: {
 	const ledger = new Map<string, { readonly intent: string; readonly result: FixtureAdminReply }>();
 	const scripted = new Map<
 		AdminRouteName,
-		| { readonly kind: 'typed'; readonly answer: (request: FleetAdminRequest) => FixtureAdminReply }
-		| { readonly kind: 'raw'; readonly body: object }
+		(
+			| {
+					readonly kind: 'typed';
+					readonly answer: (request: FleetAdminRequest) => FixtureAdminReply;
+			  }
+			| { readonly kind: 'raw'; readonly body: object }
+		)[]
 	>();
 	const records: {
 		readonly id: string;
@@ -359,6 +376,18 @@ export function createControlledCentralAdmin(props: {
 					workspace:
 						workspaces.find((workspace) => workspace.workspaceId === body.workspaceId) ?? null,
 				};
+			case 'ListWorkspaces': {
+				const { after = null, limit = 100 } = body;
+				const remaining = workspaces
+					.filter((workspace) => after === null || workspace.workspaceId > after)
+					.toSorted((left, right) => left.workspaceId.localeCompare(right.workspaceId));
+				const page = remaining.slice(0, limit);
+				return {
+					result: 'workspaces',
+					workspaces: page,
+					next: remaining.length > limit ? (page.at(-1)?.workspaceId ?? null) : null,
+				};
+			}
 			case 'ReadChangeRecords': {
 				const start =
 					body.after === null ? 0 : records.findIndex((record) => record.id === body.after) + 1;
@@ -375,10 +404,10 @@ export function createControlledCentralAdmin(props: {
 		workspaces,
 		changeRecords: records,
 		scriptNextAnswer(route, answer): void {
-			scripted.set(route, { kind: 'typed', answer });
+			scripted.set(route, [...(scripted.get(route) ?? []), { kind: 'typed', answer }]);
 		},
 		scriptNextRawAnswer(route, body): void {
-			scripted.set(route, { kind: 'raw', body });
+			scripted.set(route, [...(scripted.get(route) ?? []), { kind: 'raw', body }]);
 		},
 		async fetch(request, route): Promise<Response> {
 			const authorization = request.headers.get('authorization');
@@ -410,7 +439,7 @@ export function createControlledCentralAdmin(props: {
 					bodySha256,
 					request: null,
 				});
-				return new Response(null, { status: 400 });
+				return new Response(null, { status: route === 'ListWorkspaces' ? 401 : 400 });
 			}
 			const verified = await verify(request, route, parsed.data);
 			const facts = {
@@ -432,8 +461,9 @@ export function createControlledCentralAdmin(props: {
 				return new Response(null, { status: 401 });
 			}
 			const refused = admit(route, verified.claims, verified.requestId);
-			const script = refused === null ? scripted.get(route) : undefined;
-			if (script !== undefined) scripted.delete(route);
+			const scripts = refused === null ? scripted.get(route) : undefined;
+			const script = scripts?.shift();
+			if (scripts?.length === 0) scripted.delete(route);
 			if (script?.kind === 'raw') {
 				arrivals.push({ route, outcome: { kind: 'scripted-raw' }, ...facts });
 				return Response.json(script.body);

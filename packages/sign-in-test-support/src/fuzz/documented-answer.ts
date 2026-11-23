@@ -18,9 +18,15 @@ export function assertDocumentedAnswer(props: {
 	readonly caller: RouteCaller;
 	readonly request: GeneratedRequest;
 	readonly status: number;
+	readonly boundMachineRefresh?: boolean;
 }): void {
 	expect(
-		documentedAnswersFor(props.classification, props.caller, props.request),
+		documentedAnswersFor(
+			props.classification,
+			props.caller,
+			props.request,
+			props.boundMachineRefresh,
+		),
 		`S2 documented-answer: ${props.classification.path} for ${props.caller}, ${props.request.label}`,
 	).toContain(props.status);
 }

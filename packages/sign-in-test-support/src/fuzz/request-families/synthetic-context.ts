@@ -23,4 +23,10 @@ export const syntheticRequestFamilyContext: RequestFamilyContext = {
 	oauthCodeChallenge: 'challenge',
 	oauthRedirectUri: 'http://127.0.0.1:49152/callback',
 	oauthResource: 'https://resource.example.invalid',
+	machineRouterClientId: 'router-client',
+	machineId: 'machine-id',
+	machineEnrollmentId: 'machine-enrollment',
+	machineUserCode: 'ABCDEFGH',
+	machineDeviceCode: 'device-code',
+	machineRefreshToken: 'unissued-machine-refresh-token',
 };

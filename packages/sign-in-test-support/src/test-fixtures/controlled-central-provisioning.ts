@@ -25,6 +25,9 @@ type ControlledCentralRoute =
 	| '/internal/organization-provisioning'
 	| '/internal/organization-statement-digest'
 	| '/internal/organization-authorization-revisions'
+	| '/internal/device-login-decisions'
+	| '/internal/machine-token-decisions'
+	| '/organization-admin/v1/revoke-machine-enrollment'
 	| (typeof fleetAdminRoutePaths)[keyof typeof fleetAdminRoutePaths];
 /** acknowledge: apply and ACK; lost-reply: apply, then lose the reply; the rest refuse. */
 export type ControlledPushReply = 'acknowledge' | 'lost-reply' | 'unavailable' | 'conflict';
@@ -105,7 +108,9 @@ const statusForRefusal = {
 
 /** A producer-contract peer only. It proves consumer sends and parsing, never central's
  * stamp verification, CAS, record or isolation. */
-export function createControlledCentralProvisioning(): ControlledCentralProvisioning {
+export function createControlledCentralProvisioning(
+	machineDecisions?: (request: Request) => Promise<Response>,
+): ControlledCentralProvisioning {
 	const sends: ControlledProvisioningSend[] = [];
 	const exchanges: CentralPeerExchange[] = [];
 	const digestReads: string[] = [];
@@ -203,7 +208,10 @@ export function createControlledCentralProvisioning(): ControlledCentralProvisio
 			const route =
 				pathname === '/internal/organization-provisioning' ||
 				pathname === '/internal/organization-statement-digest' ||
-				pathname === '/internal/organization-authorization-revisions'
+				pathname === '/internal/organization-authorization-revisions' ||
+				pathname === '/internal/device-login-decisions' ||
+				pathname === '/internal/machine-token-decisions' ||
+				pathname === '/organization-admin/v1/revoke-machine-enrollment'
 					? pathname
 					: adminRoute === undefined
 						? 'other'
@@ -215,6 +223,14 @@ export function createControlledCentralProvisioning(): ControlledCentralProvisio
 			});
 			if (request.method !== 'POST' || route === 'other')
 				return new Response(null, { status: 404 });
+			if (
+				route === '/internal/device-login-decisions' ||
+				route === '/internal/machine-token-decisions' ||
+				route === '/organization-admin/v1/revoke-machine-enrollment'
+			)
+				return machineDecisions === undefined
+					? new Response(null, { status: 404 })
+					: await machineDecisions(request);
 			if (adminRoute !== undefined && adminArrivalsUntilHold !== null) {
 				adminArrivalsUntilHold -= 1;
 				if (adminArrivalsUntilHold === 0) {

@@ -111,18 +111,42 @@ function opaqueGuard(expression: ts.Expression, checker: ts.TypeChecker): Guard 
 }
 
 /** Read a guard as what it says about the path and the method; anything else is opaque. */
-function analyze(expression: ts.Expression, path: string, checker: ts.TypeChecker): Guard {
+function analyze(
+	expression: ts.Expression,
+	path: string,
+	checker: ts.TypeChecker,
+	guardBindings = new Set<ts.VariableDeclaration>(),
+): Guard {
 	const current = unwrapExpression(expression);
 	const opaque = (): Guard => opaqueGuard(current, checker);
+	if (ts.isIdentifier(current)) {
+		const binding = resolveDeclaration(current, checker);
+		if (
+			binding !== undefined &&
+			ts.isVariableDeclaration(binding) &&
+			ts.isVariableDeclarationList(binding.parent) &&
+			(binding.parent.flags & ts.NodeFlags.Const) !== 0 &&
+			binding.initializer !== undefined
+		) {
+			if (guardBindings.has(binding))
+				return unsupportedRouteForm(current, 'a cyclic dispatch guard');
+			guardBindings.add(binding);
+			try {
+				return analyze(binding.initializer, path, checker, guardBindings);
+			} finally {
+				guardBindings.delete(binding);
+			}
+		}
+	}
 	if (ts.isPrefixUnaryExpression(current) && current.operator === ts.SyntaxKind.ExclamationToken) {
-		const inner = analyze(current.operand, path, checker);
+		const inner = analyze(current.operand, path, checker, guardBindings);
 		return { path: inner.path === undefined ? undefined : !inner.path, methods: inner.methods };
 	}
 	if (ts.isBinaryExpression(current)) {
 		const kind = current.operatorToken.kind;
 		if (kind === ts.SyntaxKind.AmpersandAmpersandToken || kind === ts.SyntaxKind.BarBarToken) {
-			const left = analyze(current.left, path, checker);
-			const right = analyze(current.right, path, checker);
+			const left = analyze(current.left, path, checker, guardBindings);
+			const right = analyze(current.right, path, checker, guardBindings);
 			const combine = (a: boolean | undefined, b: boolean | undefined): boolean | undefined =>
 				a === undefined
 					? b

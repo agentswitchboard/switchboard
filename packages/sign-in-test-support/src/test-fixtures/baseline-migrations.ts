@@ -3,10 +3,11 @@ import path from 'node:path';
 
 import { z } from 'zod';
 
-/** Copy the real main migration, without executing authored fixture DDL. */
+/** Copy the real migration prefix, without executing authored fixture DDL. */
 export async function prepareBaselineMigrations(props: {
 	readonly currentFolder: string;
 	readonly runtimeDirectory: string;
+	readonly through?: '0004_organization_stamp_record';
 }): Promise<string> {
 	const baselineFolder = path.join(props.runtimeDirectory, 'baseline-migrations');
 	await mkdir(path.join(baselineFolder, 'meta'), { recursive: true });
@@ -30,13 +31,21 @@ export async function prepareBaselineMigrations(props: {
 	const baseline = journal.entries[0];
 	if (baseline?.tag !== '0000_outstanding_nextwave')
 		throw new Error('Main migration identity changed');
-	await copyFile(
-		path.join(props.currentFolder, baseline.tag + '.sql'),
-		path.join(baselineFolder, baseline.tag + '.sql'),
+	const last =
+		props.through === undefined ? 0 : journal.entries.findIndex(({ tag }) => tag === props.through);
+	if (last < 0) throw new Error('Requested migration baseline is absent');
+	const entries = journal.entries.slice(0, last + 1);
+	await Promise.all(
+		entries.map(({ tag }) =>
+			copyFile(
+				path.join(props.currentFolder, tag + '.sql'),
+				path.join(baselineFolder, tag + '.sql'),
+			),
+		),
 	);
 	await writeFile(
 		path.join(baselineFolder, 'meta/_journal.json'),
-		JSON.stringify({ ...journal, entries: [baseline] }),
+		JSON.stringify({ ...journal, entries }),
 	);
 	return baselineFolder;
 }

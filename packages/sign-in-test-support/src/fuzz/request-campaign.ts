@@ -1,3 +1,4 @@
+import { machineTokenResponseSchema } from '@agent-collaboration/sign-in-core/better-auth';
 import * as hegel from '@hegeldev/hegel';
 import { expect } from 'vitest';
 
@@ -7,6 +8,7 @@ import {
 	boundShrinking,
 	caseIdentityNote,
 	fuzzCasesOverride,
+	fuzzSeed,
 	fuzzSettingsExact,
 	scriptedTestCase,
 	type FailureReplay,
@@ -20,6 +22,7 @@ import {
 	assertDocumentedErrorBody,
 	assertGenericRefusalBody,
 	assertRequestDisclosure,
+	isBoundMachineRefresh,
 	observeRequestAnswer,
 	type ObservedRequestAnswer,
 } from '#sign-in-test-support/fuzz/request-disclosure';
@@ -76,6 +79,7 @@ export async function runRequestGroup(props: {
 	const { harness, family, caller, classification } = props;
 	let caseNumber = 0;
 	let planKeys: readonly string[] | undefined;
+	const expectedPlanKeys = planKeysOf(family);
 	const runCase = async (
 		testCase: Pick<hegel.TestCase, 'draw'>,
 		note: (text: string) => void,
@@ -89,21 +93,28 @@ export async function runRequestGroup(props: {
 				route: routeKey(family.route),
 				caller,
 				caseNumber,
+				seed: fuzzSeed,
+				offset: identity.offset,
+				mode: identity.stepIndex === undefined ? 'random' : 'scheduled',
+				variant:
+					identity.stepIndex === undefined ? null : (expectedPlanKeys[identity.stepIndex] ?? null),
 			}) + '\n',
 		);
 		const fixture = await createRequestCaseFixture({
 			caller,
 			path: family.route.path,
 			existingHarness: harness,
+			machineRefreshVariant:
+				family.route.path === '/api/auth/oauth2/token' &&
+				(identity.stepIndex === undefined ||
+					expectedPlanKeys[identity.stepIndex]?.endsWith('|machine-refresh') === true),
 		});
 		const steps = family.variantSteps(fixture.context);
 		const keys = steps.map(variantKey);
 		planKeys ??= keys;
 		expect(keys, 'S2 live field inventory changed between cases').toEqual(planKeys);
 		// The unit proofs (request-budget.unit.test.ts) use the synthetic context: it must carry the live field inventory.
-		expect(keys, 'S2 live field inventory differs from the proved one').toEqual(
-			family.variantSteps(syntheticRequestFamilyContext).map(variantKey),
-		);
+		expect(keys, 'S2 live field inventory differs from the proved one').toEqual(expectedPlanKeys);
 		const generated = family.generate(
 			testCase,
 			fixture.context,
@@ -129,6 +140,19 @@ export async function runRequestGroup(props: {
 		});
 		const observed = await observeRequestAnswer(response);
 		const answer = props.observeAnswer?.(observed, generated) ?? observed;
+		if (
+			generated.variant.encoding === 'form' &&
+			generated.variant.mutation === 'valid' &&
+			generated.variant.field === null
+		) {
+			if (generated.variant.flow === 'machine-refresh')
+				expect(answer.status, 'S2 registered machine refresh succeeds').toBe(200);
+			if (family.route.path === '/api/auth/oauth2/revoke')
+				expect(
+					[answer.status, answer.body],
+					'S2 registered machine refresh credential cannot be revoked here',
+				).toEqual([403, { error: 'machine_revocation_forbidden' }]);
+		}
 		await fixture.harness.settleDeferredWork();
 		const after = await readRequestStorageSnapshot(fixture.harness.database);
 		expect(
@@ -140,6 +164,7 @@ export async function runRequestGroup(props: {
 			caller,
 			request: generated,
 			status: answer.status,
+			boundMachineRefresh: isBoundMachineRefresh(fixture.context, generated),
 		});
 		assertDocumentedErrorBody({
 			documentedErrorBodies: classification.documentedErrorBodies,
@@ -149,6 +174,9 @@ export async function runRequestGroup(props: {
 		});
 		assertGenericRefusalBody(answer, {
 			htmlRefusalDocumented: classification.htmlRefusals?.includes(answer.status) === true,
+			...(classification.deviceDecisionRefusal === undefined
+				? {}
+				: { deviceDecisionRefusal: classification.deviceDecisionRefusal }),
 		});
 		assertRequestDisclosure({
 			fixture,
@@ -158,6 +186,21 @@ export async function runRequestGroup(props: {
 			before,
 			after,
 		});
+		if (answer.status === 200 && generated.variant.flow === 'machine-refresh') {
+			// Probe the returned credential after the first rotation's storage assertions.
+			const { machine_client_id, refresh_token } = machineTokenResponseSchema.parse(answer.body);
+			const followUp = await fixture.harness.auth(family.route.path, {
+				method: 'POST',
+				headers: { 'content-type': 'application/x-www-form-urlencoded' },
+				body: new URLSearchParams({
+					grant_type: 'refresh_token',
+					client_id: machine_client_id,
+					refresh_token,
+				}),
+			});
+			await followUp.body?.cancel();
+			expect(followUp.status, 'S2 returned machine refresh credential is accepted').toBe(200);
+		}
 		if (answer.status >= 400 || answer.headers.get('location')?.includes('error='))
 			assertRequestRefusalEffects({
 				classification,
@@ -165,6 +208,7 @@ export async function runRequestGroup(props: {
 				before,
 				after,
 				request: generated,
+				answer,
 				// Central's actual replies during this request: the only acknowledgement evidence.
 				central: {
 					acknowledgements: readCentralAcknowledgements(
@@ -199,7 +243,7 @@ export async function runRequestGroup(props: {
 			throw new Error(
 				`The printed case is for ${replay.route} as ${replay.caller}, not ${routeKey(family.route)} as ${caller}`,
 			);
-		const stepIndex = planKeysOf(family).indexOf(replay.variant);
+		const stepIndex = expectedPlanKeys.indexOf(replay.variant);
 		if (stepIndex < 0) throw new Error(`The printed variant ${replay.variant} is not planned`);
 		const scripted = scriptedTestCase(replay.evidence);
 		let variantDraw = replay.mode === 'random';
@@ -244,7 +288,7 @@ export async function runRequestGroup(props: {
 		await runCases({
 			stepIndex: undefined,
 			cases: props.randomCasesOnly,
-			seedOffset: planKeysOf(family).length,
+			seedOffset: expectedPlanKeys.length,
 		});
 		return { executedCases: caseNumber };
 	}

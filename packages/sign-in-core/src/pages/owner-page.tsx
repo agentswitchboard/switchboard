@@ -34,6 +34,7 @@ import type { OrganizationId } from '#sign-in-core/storage/models/sign-in-store'
 export interface OwnerPageProps {
 	readonly ready: boolean;
 	readonly continueLocation?: string;
+	readonly deviceUserCode?: string;
 	readonly configuration: SignInConfiguration;
 	readonly resume: string | null;
 	readonly createOrganization?: boolean;
@@ -332,7 +333,13 @@ export function OwnerPage(props: OwnerPageProps): React.ReactElement {
 				{props.organizationSetup !== undefined && (
 					<OrganizationSetupCard setup={props.organizationSetup} />
 				)}
-				{factorPage === 'confirmed' && <FactorControls state={factorPage} resume={props.resume} />}
+				{factorPage === 'confirmed' && (
+					<FactorControls
+						state={factorPage}
+						resume={props.resume}
+						deviceUserCode={props.deviceUserCode}
+					/>
+				)}
 			</>
 		);
 	const organizationTask = organizationTaskOf(props);
@@ -344,10 +351,24 @@ export function OwnerPage(props: OwnerPageProps): React.ReactElement {
 			? signInFlowSteps(factorPage, organizationTask)
 			: undefined;
 	let currentTask: React.ReactElement;
-	if (factorPending) currentTask = <FactorControls state={factorPage} resume={props.resume} />;
+	if (factorPending)
+		currentTask = (
+			<FactorControls
+				state={factorPage}
+				resume={props.resume}
+				deviceUserCode={props.deviceUserCode}
+			/>
+		);
 	else if (organizationTask === 'choose') currentTask = <MembershipChoices {...props} />;
 	else if (organizationTask === 'create') currentTask = <CreateOrganizationCard />;
-	else currentTask = <FactorControls state={factorPage} resume={props.resume} />;
+	else
+		currentTask = (
+			<FactorControls
+				state={factorPage}
+				resume={props.resume}
+				deviceUserCode={props.deviceUserCode}
+			/>
+		);
 	const creatingOrganization = !factorPending && organizationTask === 'create';
 	return (
 		<>

@@ -4,6 +4,7 @@ import type { Writable } from 'node:stream';
 import {
 	createSignInStore,
 	createCentralLinkClient,
+	createMachineLoginDecisionsClient,
 	runAuthorizationRevisionBackfill,
 	signInConfigurationSchema,
 	type SignInClock,
@@ -73,17 +74,17 @@ export function createNodeSignInConfiguration(props: {
 	readonly log: (observation: SignInObservation) => void;
 }): SignInHttpConfiguration {
 	const capabilities = createWebSignInCapabilities(props.clock, props.deadlines);
+	const central = createCentralUnixTransport(props.settings.centralSocketPath);
 	const platform = {
 		...capabilities,
-		centralClient: createCentralLinkClient(
-			createCentralUnixTransport(props.settings.centralSocketPath),
-		),
+		centralClient: createCentralLinkClient(central),
 		requestLimiter: createFixedWindowRequestLimiter(capabilities.clock),
 		runAtomically: props.database.runAtomically,
 		log: props.log,
 	};
 	return {
 		openDatabase: props.database.openDatabase,
+		machineLoginDecisions: createMachineLoginDecisionsClient(central),
 		platform,
 		store: createSignInStore({
 			openDatabase: props.database.openDatabase,

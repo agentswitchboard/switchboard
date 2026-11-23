@@ -107,6 +107,47 @@ describe('admin operations against central producer vectors', (): void => {
 	);
 });
 
+const listOrganizationId = '019f0000-0000-7000-8000-00000000d201';
+const workspaceCursor = '019f0000-0000-7000-8000-00000000d110';
+
+it.each([
+	{ body: { organizationId: listOrganizationId }, after: null, limit: 100 },
+	{
+		body: { organizationId: listOrganizationId, after: null, limit: 100 },
+		after: null,
+		limit: 100,
+	},
+	{
+		body: { organizationId: listOrganizationId, after: workspaceCursor, limit: 1 },
+		after: workspaceCursor,
+		limit: 1,
+	},
+])(
+	'encodes the ListWorkspaces body and signs the Central page parameters $body',
+	({ body, after, limit }): void => {
+		const operation = fleetAdminRequestSchema.parse({ operation: 'ListWorkspaces', ...body });
+		expect(fleetAdminRequestBody(operation)).toEqual(body);
+		expect(fleetAdminIntent(operation)).toEqual({
+			operation: 'ListWorkspaces',
+			operationId: null,
+			organization: listOrganizationId,
+			params: { after, limit },
+			target: listOrganizationId,
+			v: 1,
+		});
+	},
+);
+
+it.each([null, 0, 101, 1.5])('rejects ListWorkspaces page limit %s', (limit): void => {
+	expect(
+		fleetAdminRequestSchema.safeParse({
+			operation: 'ListWorkspaces',
+			organizationId: listOrganizationId,
+			limit,
+		}).success,
+	).toBe(false);
+});
+
 it('a changed effect field changes the digest, so a retry cannot change what it does', async (): Promise<void> => {
 	const base: FleetAdminRequest = {
 		operation: 'CreateWorkspace',

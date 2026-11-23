@@ -92,6 +92,82 @@ export function unsupportedRouteForm(node: ts.Node, why: string): never {
 	);
 }
 
+function literalRouteCase(expression: ts.Expression, checker: ts.TypeChecker): string | undefined {
+	if (ts.isStringLiteral(expression)) return expression.text;
+	if (!ts.isIdentifier(expression)) return undefined;
+	const declaration = resolveDeclaration(expression, checker);
+	if (
+		declaration === undefined ||
+		!ts.isVariableDeclaration(declaration) ||
+		!ts.isVariableDeclarationList(declaration.parent) ||
+		(declaration.parent.flags & ts.NodeFlags.Const) === 0 ||
+		declaration.initializer === undefined
+	)
+		return undefined;
+	const initializer = unwrapExpression(declaration.initializer);
+	return ts.isStringLiteral(initializer) ? initializer.text : undefined;
+}
+
+/** A switch on the first argument with literal path cases that return one equality on the second. */
+export function methodPathPairsOfDeclaration(
+	declaration: ts.FunctionDeclaration,
+	checker: ts.TypeChecker,
+): readonly { readonly path: string; readonly method: string }[] | undefined {
+	const [pathname, method] = declaration.parameters.map((parameter) => parameter.name.getText());
+	const [dispatch] = declaration.body?.statements ?? [];
+	if (
+		declaration.parameters.length !== 2 ||
+		declaration.body?.statements.length !== 1 ||
+		dispatch === undefined ||
+		!ts.isSwitchStatement(dispatch) ||
+		!ts.isIdentifier(dispatch.expression) ||
+		dispatch.expression.text !== pathname
+	)
+		return undefined;
+	const clauses = dispatch.caseBlock.clauses;
+	const fallback = clauses.at(-1);
+	const fallbackReturn = fallback?.statements[0];
+	if (
+		fallback === undefined ||
+		!ts.isDefaultClause(fallback) ||
+		fallback.statements.length !== 1 ||
+		fallbackReturn === undefined ||
+		!ts.isReturnStatement(fallbackReturn) ||
+		fallbackReturn.expression?.kind !== ts.SyntaxKind.FalseKeyword
+	)
+		return undefined;
+	const pairs: { path: string; method: string }[] = [];
+	let groupedPaths: string[] = [];
+	for (const clause of clauses.slice(0, -1)) {
+		if (!ts.isCaseClause(clause)) return undefined;
+		const path = literalRouteCase(clause.expression, checker);
+		if (path === undefined) return undefined;
+		groupedPaths.push(path);
+		if (clause.statements.length === 0) continue;
+		const returned = clause.statements[0];
+		const comparison =
+			returned !== undefined && ts.isReturnStatement(returned) ? returned.expression : undefined;
+		if (
+			clause.statements.length !== 1 ||
+			comparison === undefined ||
+			!ts.isBinaryExpression(comparison) ||
+			comparison.operatorToken.kind !== ts.SyntaxKind.EqualsEqualsEqualsToken ||
+			!ts.isIdentifier(comparison.left) ||
+			comparison.left.text !== method ||
+			!ts.isStringLiteral(comparison.right)
+		)
+			return undefined;
+		const methodLiteral = comparison.right.text;
+		pairs.push(
+			...groupedPaths.map((groupedPath) => ({ path: groupedPath, method: methodLiteral })),
+		);
+		groupedPaths = [];
+	}
+	return groupedPaths.length === 0 && new Set(pairs.map((pair) => pair.path)).size === pairs.length
+		? pairs
+		: undefined;
+}
+
 /**
  * The routes a predicate function keeps in a table, when its body is `table.some((route) =>
  * route.path === pathname)` or `Object.hasOwn(table, pathname)`; undefined for any other body.

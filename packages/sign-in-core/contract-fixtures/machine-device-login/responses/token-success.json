@@ -1,0 +1,16 @@
+{
+	"status": 200,
+	"headers": {
+		"cache-control": "no-store",
+		"pragma": "no-cache"
+	},
+	"body": {
+		"access_token": "fixture-only-machine-access-token",
+		"refresh_token": "fixture-only-machine-refresh-token",
+		"expires_in": 300,
+		"expires_at": 1893456300,
+		"token_type": "Bearer",
+		"scope": "offline_access",
+		"machine_client_id": "019a3dce-2000-7000-8000-0000000000a4"
+	}
+}

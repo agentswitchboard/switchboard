@@ -2,6 +2,8 @@ import { z } from 'zod';
 
 import type {
 	CreateWorkspaceRequest_Deserialize,
+	ListWorkspacesRequest_Deserialize,
+	ListWorkspacesRequest_Serialize,
 	OrganizationAdminIntent_Serialize,
 	ReadChangeRecordsRequest_Deserialize,
 	ReadChangeRecordsRequest_Serialize,
@@ -9,34 +11,21 @@ import type {
 } from '#sign-in-core/central-link/generated/central-sign-in.gen';
 import type { AssertWireType, WireTypesEqual } from '#sign-in-core/central-link/wire-type-equality';
 import { canonicalJson, type CanonicalJsonValue } from '#sign-in-core/contracts/canonical-json';
+import {
+	centralUuid7Schema,
+	fleetAdminWorkspaceNameSchema,
+	listWorkspacesIntent,
+	listWorkspacesPath,
+	listWorkspacesRequestBody,
+	listWorkspacesRequestSchema,
+} from '#sign-in-core/contracts/fleet-admin-wire';
 import type { SignInCrypto } from '#sign-in-core/contracts/sign-in-platform';
+
+export { fleetAdminWorkspaceNameSchema } from '#sign-in-core/contracts/fleet-admin-wire';
 
 // Central's published admin wire (codex-router 7fb2de88a, `contracts/*Request.schema.json`,
 // vendored in `contract-fixtures/central-organization-admin/`): closed bodies, routes and the
 // T06 signed intent. Central refuses, never trims, a body outside these rules.
-const centralUuid7Schema = z
-	.string()
-	.regex(/^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u);
-/** The code points Rust's `char::is_whitespace` (Unicode White_Space) accepts. */
-function isUnicodeWhitespace(codePoint: number): boolean {
-	return (
-		(codePoint >= 0x09 && codePoint <= 0x0d) ||
-		(codePoint >= 0x2000 && codePoint <= 0x200a) ||
-		[0x20, 0x85, 0xa0, 0x1680, 0x2028, 0x2029, 0x202f, 0x205f, 0x3000].includes(codePoint)
-	);
-}
-/** Central's ResourceName: 1..=256 UTF-8 bytes, no leading or trailing Unicode whitespace. */
-export const fleetAdminWorkspaceNameSchema = z
-	.string()
-	// Every White_Space code point is in the BMP, so the end units decide; a surrogate never is.
-	.refine((name) => {
-		if (name.length === 0) return false;
-		return (
-			!isUnicodeWhitespace(name.charCodeAt(0)) &&
-			!isUnicodeWhitespace(name.charCodeAt(name.length - 1))
-		);
-	}, 'A workspace name has no leading or trailing whitespace')
-	.refine((name) => utf8ByteLength(name) <= 256, 'A workspace name is at most 256 bytes');
 export const fleetAdminRequestSchema = z.discriminatedUnion('operation', [
 	z.strictObject({
 		operation: z.literal('CreateWorkspace'),
@@ -53,6 +42,7 @@ export const fleetAdminRequestSchema = z.discriminatedUnion('operation', [
 		organizationId: centralUuid7Schema,
 		workspaceId: centralUuid7Schema,
 	}),
+	listWorkspacesRequestSchema,
 	z.strictObject({
 		operation: z.literal('ReadChangeRecords'),
 		organizationId: centralUuid7Schema,
@@ -64,9 +54,18 @@ export const fleetAdminRequestSchema = z.discriminatedUnion('operation', [
 type FleetAdminWireBodies = {
 	CreateWorkspace: CreateWorkspaceRequest_Deserialize;
 	WorkspaceLookup: WorkspaceLookupRequest;
+	ListWorkspaces: ListWorkspacesRequest_Deserialize;
 	ReadChangeRecords: ReadChangeRecordsRequest_Deserialize;
 };
-type FleetAdminRequestBodies = Omit<FleetAdminWireBodies, 'ReadChangeRecords'> & {
+type FleetAdminRequestBodies = Omit<
+	FleetAdminWireBodies,
+	'ReadChangeRecords' | 'ListWorkspaces'
+> & {
+	// A local Zod input may carry undefined. The body builder omits either field in that case.
+	ListWorkspaces: Omit<FleetAdminWireBodies['ListWorkspaces'], 'after' | 'limit'> & {
+		after?: FleetAdminWireBodies['ListWorkspaces']['after'];
+		limit?: FleetAdminWireBodies['ListWorkspaces']['limit'];
+	};
 	ReadChangeRecords: Required<FleetAdminWireBodies['ReadChangeRecords']>;
 };
 export type FleetAdminRequest = {
@@ -83,6 +82,9 @@ export type FleetAdminOutgoingPhases = [
 	>,
 	AssertWireType<WireTypesEqual<FleetAdminWireBodies['WorkspaceLookup'], WorkspaceLookupRequest>>,
 	AssertWireType<
+		WireTypesEqual<FleetAdminWireBodies['ListWorkspaces'], ListWorkspacesRequest_Deserialize>
+	>,
+	AssertWireType<
 		WireTypesEqual<FleetAdminWireBodies['ReadChangeRecords'], ReadChangeRecordsRequest_Deserialize>
 	>,
 ];
@@ -93,6 +95,16 @@ type ReadChangeRecordsSerializerMatches = WireTypesEqual<
 // @ts-expect-error The producer's serializer requires after; its request decoder permits omission.
 export type RejectReadChangeRecordsSerializer = AssertWireType<ReadChangeRecordsSerializerMatches>;
 
+export type ListWorkspacesOutgoingPhase = AssertWireType<
+	WireTypesEqual<ReturnType<typeof listWorkspacesRequestBody>, ListWorkspacesRequest_Deserialize>
+>;
+type ListWorkspacesSerializerMatches = WireTypesEqual<
+	ReturnType<typeof listWorkspacesRequestBody>,
+	ListWorkspacesRequest_Serialize
+>;
+// @ts-expect-error ListWorkspaces requests may omit after and limit; the serializer includes both.
+export type RejectListWorkspacesSerializer = AssertWireType<ListWorkspacesSerializerMatches>;
+
 function utf8ByteLength(text: string): number {
 	return new TextEncoder().encode(text).length;
 }
@@ -100,6 +112,7 @@ function utf8ByteLength(text: string): number {
 export const fleetAdminRoutePaths = {
 	CreateWorkspace: '/organization-admin/v1/create-workspace',
 	WorkspaceLookup: '/organization-admin/v1/workspace-lookup',
+	ListWorkspaces: listWorkspacesPath,
 	ReadChangeRecords: '/organization-admin/v1/change-records',
 } as const satisfies Record<FleetAdminRequest['operation'], string>;
 
@@ -118,6 +131,8 @@ export function fleetAdminRequestBody(operation: FleetAdminRequest): CanonicalJs
 				organizationId: operation.organizationId,
 				workspaceId: operation.workspaceId,
 			} satisfies FleetAdminWireBodies['WorkspaceLookup'];
+		case 'ListWorkspaces':
+			return listWorkspacesRequestBody(operation);
 		case 'ReadChangeRecords':
 			return {
 				organizationId: operation.organizationId,
@@ -153,6 +168,8 @@ export function fleetAdminIntent(
 				operationId: null,
 				params: {},
 			} satisfies OrganizationAdminIntent_Serialize;
+		case 'ListWorkspaces':
+			return listWorkspacesIntent(operation);
 		case 'ReadChangeRecords':
 			return {
 				v: 1,

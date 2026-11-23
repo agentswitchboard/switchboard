@@ -113,7 +113,7 @@ export type Description = string;
 
 export type DeviceLoginDecision = { result: "approved"; enrollmentId: EnrollmentId; label: MachineLabel; allowedWorkspaces: AllowedWorkspaces } | { result: "refused"; reason: DeviceLoginRefusal };
 
-export type DeviceLoginRefusal = { kind: "notPermitted" } | { kind: "machineInAnotherOrganization" } | { kind: "unknownWorkspace" } | { kind: "secondFactorRequired"; withinSeconds: number };
+export type DeviceLoginRefusal = { kind: "notPermitted" } | { kind: "machineInAnotherOrganization" } | { kind: "unknownWorkspace" } | { kind: "requestConflict" } | { kind: "secondFactorRequired"; withinSeconds: number };
 
 export type DeviceLoginRequestId = RecordId;
 
@@ -533,7 +533,7 @@ export type RevokeMachineEnrollmentRequest = {
 /**  A signed stamp time in nonnegative, exact JSON integer seconds. */
 export type StatementSeconds = UnixSeconds;
 
-export type TargetedOrganizationChangeKind = "organizationProvisioned" | "stampRenewed" | "workspaceCreated" | "machineEnrolled" | "machineRevoked" | "machineExpired" | "allowanceChanged";
+export type TargetedOrganizationChangeKind = "organizationProvisioned" | "stampRenewed" | "workspaceCreated" | "machineEnrolled" | "machineRevoked" | "machineExpired";
 
 export type TargetedOrganizationChangeRecord = {
 	id: string,

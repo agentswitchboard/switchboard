@@ -88,9 +88,12 @@ function assertChangedFields(
  */
 function assertRequestsAreTheirVariants(built: readonly GeneratedRequest[]): void {
 	// The valid fields of each encoding (a JSON body is compared with the valid JSON body).
-	const validFieldsOf = (encoding: string): ReturnType<typeof fieldsOf> => {
+	const validFieldsOf = (step: VariantStep): ReturnType<typeof fieldsOf> => {
 		const valid = built.find(
-			(request) => request.variant.encoding === encoding && request.variant.mutation === 'valid',
+			(request) =>
+				request.variant.encoding === step.encoding &&
+				request.variant.flow === step.flow &&
+				request.variant.mutation === 'valid',
 		);
 		return valid === undefined ? undefined : fieldsOf(valid);
 	};
@@ -117,7 +120,7 @@ function assertRequestsAreTheirVariants(built: readonly GeneratedRequest[]): voi
 			expect(contentType).toContain('application/x-www-form-urlencoded');
 		if (step.encoding === 'query') expect(request.init.method).toBe('GET');
 		expect(fields, `${variantKey(step)} has a body to read`).toBeDefined();
-		const validFields = validFieldsOf(step.encoding);
+		const validFields = validFieldsOf(step);
 		expect(validFields, `${step.encoding} has a valid request to compare with`).toBeDefined();
 		if (validFields !== undefined && fields !== undefined)
 			assertChangedFields(validFields, fields, step);
@@ -129,9 +132,28 @@ function assertRequestsAreTheirVariants(built: readonly GeneratedRequest[]): voi
  * the field names on its valid request's wire, not built from the step constructors the schedules use.
  */
 const independentMutations = ['near-valid', 'boundary', 'wrong-type'] as const;
-/** Form routes that also accept a JSON body (the provider callbacks); authorize takes a form only. */
-const formAndJsonRoutes = new Set(['/api/auth/callback/google', '/api/auth/callback/github']);
+/** Form routes that also accept a JSON body; authorize takes a form only. */
+const formAndJsonRoutes = new Set([
+	'/api/auth/callback/google',
+	'/api/auth/callback/github',
+	'/api/auth/device/code',
+	'/api/auth/machine-login/deny',
+	'/api/auth/oauth2/revoke',
+]);
 const formOnlyRoutes = new Set(['/api/auth/oauth2/authorize']);
+
+function machineTokenInventory(flow: string, fields: readonly string[]): readonly string[] {
+	return [
+		...['form', 'json'].flatMap((encoding) => [
+			`${encoding}|-|valid|${flow}`,
+			...fields.flatMap((field) =>
+				independentMutations.map((mutation) => `${encoding}|${field}|${mutation}|${flow}`),
+			),
+		]),
+		`malformed|-|valid|${flow}`,
+		`wrong-content-type|-|valid|${flow}`,
+	];
+}
 
 function independentInventory(family: RequestFamily): readonly string[] {
 	const path = family.route.path;
@@ -152,6 +174,8 @@ function independentInventory(family: RequestFamily): readonly string[] {
 				`form|${field}|near-valid`,
 				`form|${field}|boundary`,
 			]),
+			...machineTokenInventory('machine-device', ['grant_type', 'client_id', 'device_code']),
+			...machineTokenInventory('machine-refresh', ['grant_type', 'client_id', 'refresh_token']),
 		].toSorted();
 	if (path === '/api/auth/oauth2/introspect')
 		return [

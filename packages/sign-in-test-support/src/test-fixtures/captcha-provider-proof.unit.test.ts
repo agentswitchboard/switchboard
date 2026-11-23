@@ -37,6 +37,9 @@ const unusedBindings = {
 	get CENTRAL(): never {
 		throw new Error('Unrelated request inspected central');
 	},
+	get CENTRAL_LINK(): never {
+		throw new Error('Unrelated request inspected the machine link');
+	},
 } satisfies AuthWorkerEnv;
 
 it('leaves an unrelated social POST body available to the production handler', async (): Promise<void> => {

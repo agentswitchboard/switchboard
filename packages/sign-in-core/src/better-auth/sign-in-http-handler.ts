@@ -1,15 +1,20 @@
 import { decodeBasicCredentials } from '@better-auth/core/oauth2';
+import { DEVICE_CODE_GRANT_TYPE } from '@better-auth/oauth-provider';
 import { decodeJwt, decodeProtectedHeader } from 'jose';
 
+import { respondToDeviceApprovalPage } from '#sign-in-core/better-auth/device-approval-page';
 import { renderFactorFormResponse } from '#sign-in-core/better-auth/factor-enrollment-page';
 import {
 	forwardFleetAdminRequest,
+	forwardMachineEnrollmentRevocation,
 	isFleetAdminForwardingRoute,
+	listWorkspacesForPerson,
 } from '#sign-in-core/better-auth/fleet-admin-forwarding';
 import {
 	isFleetAdminRelayRoute,
 	relayFleetAdminRequest,
 } from '#sign-in-core/better-auth/fleet-admin-relay';
+import { releaseMachineTokenResponse } from '#sign-in-core/better-auth/machine-token-release';
 import {
 	minimalOwnerPage,
 	ownerAuthorizationResume,
@@ -47,6 +52,13 @@ import {
 } from '#sign-in-core/better-auth/store-result-adapters';
 import type { PersonTokenHeader_Deserialize } from '#sign-in-core/central-link/generated/central-sign-in.gen';
 import { isSignedInNavigationPath } from '#sign-in-core/contracts/sign-in-navigation';
+import { parseDeviceUserCode } from '#sign-in-core/machine-login/device-user-code';
+import { guardMachineLoginDecisions } from '#sign-in-core/machine-login/fleet-guarded-machine-decisions';
+import {
+	machineDeviceRequestIsValid,
+	revokeMachineEnrollmentPublicPath,
+} from '#sign-in-core/machine-login/machine-device-requests';
+import { fleetLoginDiscoveryResponseSchema } from '#sign-in-core/machine-login/machine-login-contracts';
 import { runAuthorizationRevisionDrain } from '#sign-in-core/organizations/authorization-revision-drainer';
 import type { OrganizationFleetState } from '#sign-in-core/organizations/organization-provisioning';
 import { pageAssetResponse } from '#sign-in-core/pages/page-document';
@@ -63,6 +75,7 @@ import {
 	accessTokenReleaseClaimsSchema,
 	type SignInResponseReleasePorts,
 } from '#sign-in-core/response-release/sign-in-response-release';
+import { readMachineEnrollmentClient } from '#sign-in-core/storage/machine-client-store';
 
 export type SignInHttpConfiguration = Omit<
 	SignInProviderProps,
@@ -76,9 +89,30 @@ export interface SignInHttpHandlerOptions {
 }
 
 export function createSignInHttpHandler(
-	configuration: SignInHttpConfiguration,
+	configurationInput: SignInHttpConfiguration,
 	options: SignInHttpHandlerOptions = {},
 ): (request: Request) => Promise<Response> {
+	const decisions = configurationInput.machineLoginDecisions;
+	const runFleetCall = createOrganizationFleetCallRunner(configurationInput);
+	const configuration: SignInHttpConfiguration = {
+		...configurationInput,
+		...(decisions === undefined
+			? {}
+			: {
+					machineLoginDecisions: guardMachineLoginDecisions({ decisions, runFleetCall }),
+				}),
+		listWorkspaces:
+			configurationInput.listWorkspaces ??
+			(async (request) =>
+				listWorkspacesForPerson({
+					...request,
+					configuration: configurationInput.configuration,
+					platform: configurationInput.platform,
+					signIn: (inner) => respondToSignInRequest(inner, createProviderRequestState()),
+					runFleetCall,
+				})),
+	};
+	const machineLogin = configuration.configuration.machineLogin;
 	return async (incomingRequest: Request): Promise<Response> => {
 		const asset = pageAssetResponse(incomingRequest);
 		if (asset !== null) return asset;
@@ -194,8 +228,42 @@ export function createSignInHttpHandler(
 			if (admission.kind === 'refused') return admission.response;
 			const request = admission.request;
 			const url = new URL(request.url);
-			if (!isPublicSignInRoute(url.pathname, request.method))
+			if (!isPublicSignInRoute(url.pathname, request.method, machineLogin !== undefined))
 				return Response.json({ error: 'not-found' }, { status: 404 });
+			if (machineLogin !== undefined && url.pathname === '/.well-known/fleet-login') {
+				if (!(await machineDeviceRequestIsValid(request, false))) return invalidRequestResponse();
+				return Response.json(
+					fleetLoginDiscoveryResponseSchema.parse({
+						client_id: machineLogin.routerClientId,
+						link_url: machineLogin.linkUrlTemplate,
+					}),
+					{ headers: { 'cache-control': 'no-store' } },
+				);
+			}
+			if (machineLogin !== undefined && url.pathname === '/device') {
+				if (!(await machineDeviceRequestIsValid(request, false))) return invalidRequestResponse();
+				return await respondToDeviceApprovalPage({
+					request,
+					configuration,
+					provider: createSignInProvider({
+						...configuration,
+						requestState: state,
+						authority: { kind: 'public' },
+					}),
+					signIn: (inner) => respondToSignInRequest(inner, createProviderRequestState()),
+				});
+			}
+			if (machineLogin !== undefined && url.pathname === revokeMachineEnrollmentPublicPath) {
+				if (!(await machineDeviceRequestIsValid(request, false))) return invalidRequestResponse();
+				return await forwardMachineEnrollmentRevocation({
+					request,
+					configuration: configuration.configuration,
+					platform: configuration.platform,
+					openDatabase: configuration.openDatabase,
+					signIn: (inner) => respondToSignInRequest(inner, createProviderRequestState()),
+					runFleetCall,
+				});
+			}
 			passkeyAuditPending = url.pathname === '/api/auth/passkey/verify-authentication';
 			if (isFleetAdminRelayRoute(url.pathname))
 				return await relayFleetAdminRequest({
@@ -218,10 +286,28 @@ export function createSignInHttpHandler(
 					}),
 					store: configuration.store,
 					platform: configuration.platform,
+					machineLoginEnabled: machineLogin !== undefined,
 				});
+			const factorRoute = url.pathname.startsWith('/api/auth/two-factor/');
+			const ownerPage =
+				request.method === 'GET' && ['/sign-in', '/owner-ready'].includes(url.pathname);
+			const deviceRequest =
+				machineLogin !== undefined && (factorRoute || ownerPage)
+					? url.searchParams.get('device')
+					: null;
+			const deviceUserCode = parseDeviceUserCode(deviceRequest);
+			if (
+				deviceRequest !== null &&
+				(deviceUserCode === null ||
+					url.searchParams.has('authorize') ||
+					(ownerPage && url.searchParams.has('client_id')) ||
+					url.searchParams.getAll('device').length !== 1)
+			)
+				return invalidRequestResponse();
+
 			// Validate continuation before any native factor mutation, not after
 			// confirmation has already rotated the browser's session cookie.
-			const factorContinuation = url.pathname.startsWith('/api/auth/two-factor/')
+			const factorContinuation = factorRoute
 				? ownerAuthorizationResume(url.searchParams.get('authorize'), configuration.configuration)
 				: null;
 			if (factorContinuation?.kind === 'refused') return invalidRequestResponse();
@@ -240,7 +326,7 @@ export function createSignInHttpHandler(
 				)
 					return Response.json({ error: 'redirect-linking-required' }, { status: 400 });
 			}
-			if (request.method === 'GET' && ['/sign-in', '/owner-ready'].includes(url.pathname)) {
+			if (ownerPage) {
 				const resumedAuthorization = new URL(
 					'/api/auth/oauth2/authorize',
 					configuration.configuration.issuer,
@@ -276,6 +362,14 @@ export function createSignInHttpHandler(
 						: null;
 				const memberships = account?.choices ?? [];
 				const activeOrganizationId = account?.activeOrganization?.organizationId ?? null;
+				if (deviceUserCode !== null && activeOrganizationId !== null)
+					return new Response(null, {
+						status: 303,
+						headers: {
+							location: `/device?user_code=${encodeURIComponent(deviceUserCode)}`,
+							'cache-control': 'no-store',
+						},
+					});
 				const selectionRequired = memberships.length > 0 && activeOrganizationId === null;
 				if (account?.activeOrganization?.role === 'owner') {
 					const organizationId = account.activeOrganization.organizationId;
@@ -299,6 +393,7 @@ export function createSignInHttpHandler(
 					createOrganization,
 					ready: url.pathname === '/owner-ready',
 					configuration: configuration.configuration,
+					...(deviceUserCode === null ? {} : { deviceUserCode }),
 					resume: pageContinuation.kind === 'resume' ? pageContinuation.authorization : null,
 				});
 			}
@@ -308,6 +403,27 @@ export function createSignInHttpHandler(
 					: undefined;
 			const tokenClientId =
 				body?.get('client_id') ?? basicClientId(request.headers.get('authorization'));
+			const grant = body?.get('grant_type');
+			const machineToken =
+				machineLogin !== undefined &&
+				(grant === DEVICE_CODE_GRANT_TYPE ||
+					(grant === 'refresh_token' &&
+						tokenClientId !== undefined &&
+						tokenClientId !== null &&
+						(await readMachineEnrollmentClient({
+							openDatabase: configuration.openDatabase,
+							clientId: tokenClientId,
+						})) !== null));
+			if (
+				machineToken &&
+				(!request.headers
+					.get('content-type')
+					?.toLowerCase()
+					.startsWith('application/x-www-form-urlencoded') ||
+					request.headers.has('authorization') ||
+					(body?.has('resource') && body.get('resource') !== machineLogin?.machineAudience))
+			)
+				return invalidRequestResponse();
 			const providerProps = {
 				...configuration,
 				requestState: state,
@@ -358,16 +474,30 @@ export function createSignInHttpHandler(
 			};
 			const response = await handleSignInRequest({
 				request,
+				machineLoginEnabled: machineLogin !== undefined,
 				providerHandler: provider.handler,
 				issuedSessions: state.issuedSessions,
 				createdUserIds: state.createdUserIds,
 				ports,
+				...(machineToken && machineLogin !== undefined
+					? {
+							releaseMachineToken: (response: Response): Promise<Response> =>
+								releaseMachineTokenResponse({
+									response,
+									issuer: configuration.configuration.issuer,
+									configuration: machineLogin,
+									state: state.machineToken,
+									now: configuration.platform.clock.now,
+								}),
+						}
+					: {}),
 			});
 			if (response.status === 429)
 				return await renderFactorFormResponse({
 					request,
 					crypto: configuration.platform.crypto,
 					resume: factorResume,
+					deviceUserCode: factorRoute ? (deviceUserCode ?? undefined) : undefined,
 					response: providerLimitedResponse({
 						response,
 						requestClass: admission.requestClass,
@@ -425,6 +555,7 @@ export function createSignInHttpHandler(
 				response,
 				crypto: configuration.platform.crypto,
 				resume: factorResume,
+				deviceUserCode: factorRoute ? (deviceUserCode ?? undefined) : undefined,
 			});
 		} catch {
 			await Promise.allSettled(

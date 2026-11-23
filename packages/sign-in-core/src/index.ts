@@ -19,6 +19,7 @@ export * from '#sign-in-core/central-link/central-transport';
 export * from '#sign-in-core/central-link/organization-provisioning-client';
 export * from '#sign-in-core/central-link/authorization-revision-push-client';
 export * from '#sign-in-core/central-link/central-link-client';
+export { createMachineLoginDecisionsClient } from '#sign-in-core/central-link/machine-login-decisions-client';
 export * from '#sign-in-core/contracts/organization-statement';
 export * from '#sign-in-core/contracts/organization-membership';
 export * from '#sign-in-core/organizations/person-organization-context';

@@ -1,0 +1,18 @@
+{
+	"$schema": "https://json-schema.org/draft/2020-12/schema",
+	"type": "object",
+	"properties": {
+		"client_id": {
+			"type": "string",
+			"format": "uuid",
+			"pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-7[0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12})$"
+		},
+		"link_url": {
+			"type": "string",
+			"pattern": "^(?!.*\\{organization_id\\}.*\\{organization_id\\})[Hh][Tt][Tt][Pp][Ss]:\\/\\/[^/\\\\?#@\\s\\p{Cc}]+(?:\\/[^/\\\\?#\\s\\p{Cc}]*)*\\/\\{organization_id\\}(?:\\/[^/\\\\?#\\s\\p{Cc}]*)*(?:\\?[^#\\\\\\s\\p{Cc}]*)?$",
+			"description": "Absolute HTTPS template with one literal {organization_id} path segment. The runtime also checks URL parser acceptance and that the placeholder survives path normalization."
+		}
+	},
+	"required": ["client_id", "link_url"],
+	"additionalProperties": false
+}

@@ -1,0 +1,47 @@
+{
+	"$schema": "https://json-schema.org/draft/2020-12/schema",
+	"type": "object",
+	"properties": {
+		"access_token": {
+			"type": "string",
+			"minLength": 1
+		},
+		"refresh_token": {
+			"type": "string",
+			"minLength": 1
+		},
+		"expires_in": {
+			"type": "integer",
+			"exclusiveMinimum": 0,
+			"maximum": 9007199254740991
+		},
+		"expires_at": {
+			"type": "integer",
+			"minimum": 0,
+			"maximum": 9007199254740991
+		},
+		"token_type": {
+			"type": "string",
+			"const": "Bearer"
+		},
+		"scope": {
+			"type": "string",
+			"const": "offline_access"
+		},
+		"machine_client_id": {
+			"type": "string",
+			"format": "uuid",
+			"pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-7[0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12})$"
+		}
+	},
+	"required": [
+		"access_token",
+		"refresh_token",
+		"expires_in",
+		"expires_at",
+		"token_type",
+		"scope",
+		"machine_client_id"
+	],
+	"additionalProperties": false
+}

@@ -5,7 +5,14 @@ export interface RouteIdentity {
 	readonly path: string;
 }
 
-export type RouteExposure = 'signed-out' | 'member' | 'owner' | 'cli' | 'server-only' | 'blocked';
+export type RouteExposure =
+	| 'signed-out'
+	| 'member'
+	| 'owner'
+	| 'cli'
+	| 'machine'
+	| 'server-only'
+	| 'blocked';
 export type RequestPart = 'query' | 'form' | 'json';
 export type PermittedRefusalEffect =
 	| 'clear-current-choice'
@@ -17,6 +24,7 @@ export type PermittedRefusalEffect =
 	| 'login-link-intent'
 	| 'expired-session-cleanup'
 	| 'oauth-code-consumption'
+	| 'pending-device-poll'
 	| 'provider-verification-consumption'
 	| 'cookie-delete';
 
@@ -57,12 +65,16 @@ export function documentedAnswersFor(
 	>,
 	caller: RouteCaller,
 	request?: Pick<GeneratedRequest, 'variant'>,
+	boundMachineRefresh = false,
 ): readonly number[] {
 	const answers =
 		classification.documentedAnswersByCaller?.[caller] ?? classification.documentedAnswers;
 	const exposed =
 		classification.exposure.includes(caller) ||
-		(caller === 'owner' && classification.exposure.includes('cli'));
+		(caller === 'owner' && classification.exposure.includes('cli')) ||
+		(boundMachineRefresh &&
+			classification.exposure.includes('machine') &&
+			request?.variant.flow === 'machine-refresh');
 	const bodyUnreadable =
 		request !== undefined &&
 		['malformed', 'wrong-content-type'].includes(request.variant.encoding) &&
@@ -84,6 +96,12 @@ export interface RouteClassification extends RouteIdentity {
 	readonly documentedErrorBodies?: Readonly<Record<number, DocumentedErrorBody>>;
 	/** Statuses whose refusal may be an HTML page (a documented page refusal), not a generic JSON error. */
 	readonly htmlRefusals?: readonly number[];
+	readonly deviceDecisionRefusal?: 'approve' | 'deny';
 	/** Where a caller may get fewer answers than the route-wide list, its own list. */
 	readonly documentedAnswersByCaller?: Readonly<Partial<Record<RouteCaller, readonly number[]>>>;
 }
+
+export type ReachableRouteGroup = Omit<RouteClassification, 'path' | 'method'> & {
+	readonly method: 'GET' | 'POST';
+	readonly paths: readonly string[];
+};

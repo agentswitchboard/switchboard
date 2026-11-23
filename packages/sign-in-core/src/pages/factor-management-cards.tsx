@@ -10,12 +10,17 @@ import {
 } from '@agent-collaboration/tool-access-ui/server';
 import type * as React from 'react';
 
-export function factorAction(path: string, resume: string | null): string {
-	return `/api/auth/two-factor/${path}${resume === null ? '' : `?authorize=${encodeURIComponent(resume)}`}`;
+function continuationSearch(resume: string | null, deviceUserCode: string | undefined): string {
+	if (resume !== null) return `?authorize=${encodeURIComponent(resume)}`;
+	return deviceUserCode === undefined ? '' : `?device=${encodeURIComponent(deviceUserCode)}`;
 }
 
-export function ownerReadyLocation(resume: string | null): string {
-	return `/owner-ready${resume === null ? '' : `?authorize=${encodeURIComponent(resume)}`}`;
+export function factorAction(path: string, resume: string | null, deviceUserCode?: string): string {
+	return `/api/auth/two-factor/${path}${continuationSearch(resume, deviceUserCode)}`;
+}
+
+export function ownerReadyLocation(resume: string | null, deviceUserCode?: string): string {
+	return `/owner-ready${continuationSearch(resume, deviceUserCode)}`;
 }
 
 /** A factor form's submit button. Its spinner is hidden until the factor

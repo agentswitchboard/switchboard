@@ -1,0 +1,42 @@
+import type { ListWorkspacesReply } from '#sign-in-core/central-link/fleet-admin-client';
+import type { Uuid7 } from '#sign-in-core/contracts/sign-in-platform';
+
+type WorkspacePage = Extract<ListWorkspacesReply, { readonly result: 'workspaces' }>;
+export type ListWorkspacesPageResult = ListWorkspacesReply | { readonly result: 'unavailable' };
+
+export type ListWorkspacesResult =
+	| {
+			readonly result: 'workspaces';
+			readonly workspaces: readonly WorkspacePage['workspaces'][number][];
+	  }
+	| Extract<ListWorkspacesPageResult, { readonly result: 'refused' | 'unavailable' }>;
+
+/** The request supplies the current browser's session for the organization-scoped person call. */
+export type ListWorkspaces = (props: {
+	readonly request: Request;
+	readonly organizationId: string;
+}) => Promise<ListWorkspacesResult>;
+
+/** Expose only a complete directory read. A repeated cursor, out-of-order row,
+ * or refusal on a later page must never look like a complete partial list.
+ */
+export async function collectWorkspacePages(
+	readPage: (after: Uuid7 | undefined) => Promise<ListWorkspacesPageResult>,
+): Promise<ListWorkspacesResult> {
+	const workspaces: WorkspacePage['workspaces'] = [];
+	let after: Uuid7 | undefined;
+	for (;;) {
+		const page = await readPage(after);
+		if (page.result !== 'workspaces') return page;
+		let previous = after;
+		for (const workspace of page.workspaces) {
+			if (previous !== undefined && workspace.workspaceId <= previous)
+				return { result: 'unavailable' };
+			previous = workspace.workspaceId;
+			workspaces.push(workspace);
+		}
+		if (page.next === null) return { result: 'workspaces', workspaces };
+		if (page.next !== previous || page.next === after) return { result: 'unavailable' };
+		after = page.next;
+	}
+}

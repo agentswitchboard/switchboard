@@ -2,15 +2,10 @@ import * as hegel from '@hegeldev/hegel';
 import { expect, it } from 'vitest';
 
 import { requestFamilies, type RequestFamilyContext } from './index';
+import { syntheticRequestFamilyContext } from './synthetic-context';
 
 const context: RequestFamilyContext = {
-	issuer: 'https://issuer.example.invalid',
-	personId: 'person',
-	organizationId: 'organization',
-	memberId: 'member',
-	invitationId: 'invitation',
-	passkeyId: 'passkey',
-	challengeId: 'challenge',
+	...syntheticRequestFamilyContext,
 	passkeyRegistrationResponse: {
 		id: 'registration-credential',
 		response: { attestationObject: 'attestation' },
@@ -19,23 +14,11 @@ const context: RequestFamilyContext = {
 		id: 'authentication-credential',
 		response: { signature: 'signature' },
 	},
-	totpCode: '840293',
-	backupCode: 'synthetic-recovery-code',
-	captchaToken: 'synthetic-captcha-token',
-	callbackQuery: { code: 'provider-code', state: 'provider-state' },
-	oauthClientId: 'client',
-	oauthClientSecret: 'secret',
-	oauthCode: 'code',
-	oauthToken: 'token',
-	oauthCodeVerifier: 'verifier',
-	oauthCodeChallenge: 'challenge',
-	oauthRedirectUri: 'http://127.0.0.1:49152/callback',
-	oauthResource: 'https://resource.example.invalid',
 };
 
 it('generates the registered method and legal fetch transport for each family', () => {
 	const identities = requestFamilies.map(({ route }) => `${route.method} ${route.path}`);
-	expect(identities).toHaveLength(53);
+	expect(identities).toHaveLength(61);
 	expect(new Set(identities).size).toBe(identities.length);
 	for (const family of requestFamilies) {
 		const encodings = new Set<string>();
@@ -159,6 +142,7 @@ it('generates the registered method and legal fetch transport for each family', 
 		if (family.route.method === 'GET') expect(labels.has('valid')).toBe(true);
 		else if (
 			family.route.path === '/api/auth/oauth2/authorize' ||
+			family.route.path === '/api/auth/oauth2/revoke' ||
 			family.route.path.startsWith('/api/auth/callback/')
 		)
 			expect(completeLabels.has('form:valid')).toBe(true);

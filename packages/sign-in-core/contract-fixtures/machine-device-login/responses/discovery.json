@@ -1,0 +1,10 @@
+{
+	"status": 200,
+	"headers": {
+		"cache-control": "no-store"
+	},
+	"body": {
+		"client_id": "019a3dce-2000-7000-8000-0000000000a1",
+		"link_url": "https://sign-in.example.invalid/api/fleet/link/{organization_id}"
+	}
+}

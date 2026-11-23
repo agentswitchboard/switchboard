@@ -6,6 +6,8 @@ Runs the existing sign-in core and Better Auth boundary on Node 24 with an HTTP 
 
 Settings contain `stateDirectory`, listener `hostname` and `port`, the core sign-in configuration (including its Turnstile site), provider credentials, the auth secret and optional `turnstileSecretKey`. Supply credentials through the deployment's secret-loading process. Missing Turnstile credentials keep protected sign-in starts closed. `stateDirectory/sign-in.sqlite` contains durable sign-in state.
 
+When enabling machine login, set `configuration.machineLogin.linkUrlTemplate` to `<centralPublicOrigin>/v1/organizations/{organization_id}/link`. Use Central's HTTPS public origin and keep the literal organization placeholder. `GET /.well-known/fleet-login` publishes this configured template as `link_url`.
+
 The default client-address policy is `{ kind: 'socket-peer' }`. Incoming `x-sign-in-client-address` is always replaced. An explicitly configured `{ kind: 'trusted-proxy', peers, header }` accepts that header only from a listed socket peer and walks its addresses from right to left while the hops are trusted. Malformed trusted-proxy addresses are refused. The core and Better Auth use only the resulting internal header, with IPv6 addresses sharing a /64 budget.
 
 The host keeps fixed request windows per route class and address, including requests for the core's own pages. A window starts at the first request and expires without moving on later requests. Better Auth separately counts its HTTP routes in memory, with limiting enabled in development and production. The [route policy](../sign-in-core/src/request-limits/request-limit-policy.ts) owns the limits. A limited request returns 429 with `Retry-After`. The counters are process state and add no sign-in database table.

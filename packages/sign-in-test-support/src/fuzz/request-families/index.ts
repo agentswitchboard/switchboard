@@ -11,6 +11,7 @@ import { requestFamily as callbackGooglePostFamily } from './callback-google-pos
 import { requestFamily as getSessionFamily } from './get-session';
 import { requestFamily as linkSocialFamily } from './link-social';
 import { requestFamily as listAccountsFamily } from './list-accounts';
+import { machineLoginFamilies } from './machine-login';
 import { requestFamily as oauth2AuthorizeFamily } from './oauth2-authorize';
 import { requestFamily as oauth2AuthorizePostFamily } from './oauth2-authorize-post';
 import { requestFamily as oauth2IntrospectFamily } from './oauth2-introspect';
@@ -113,4 +114,5 @@ export const requestFamilies = [
 	oauth2IntrospectFamily,
 	oauth2TokenFamily,
 	switchboardSignOutFamily,
+	...machineLoginFamilies,
 ] as const;

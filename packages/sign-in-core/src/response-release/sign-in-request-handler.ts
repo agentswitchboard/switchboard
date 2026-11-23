@@ -5,6 +5,11 @@ import {
 	switchboardSignOutPath,
 } from '#sign-in-core/contracts/sign-in-navigation';
 import {
+	isMachineLoginRoute,
+	machineDeviceRequestIsValid,
+} from '#sign-in-core/machine-login/machine-device-requests';
+import { projectMachineDeviceResponse } from '#sign-in-core/response-release/machine-device-response';
+import {
 	organizationRequestErrorResponse,
 	organizationReadResponse,
 } from '#sign-in-core/response-release/organization-request-errors';
@@ -15,7 +20,12 @@ import {
 } from '#sign-in-core/response-release/sign-in-response-release';
 
 /** Provider sign-in, tokens and the audited redirect login-link flow are public. */
-export function isPublicSignInRoute(pathname: string, method: string): boolean {
+export function isPublicSignInRoute(
+	pathname: string,
+	method: string,
+	machineLoginEnabled = false,
+): boolean {
+	if (machineLoginEnabled && isMachineLoginRoute(pathname, method)) return true;
 	if (pathname === switchboardSignOutPath) return method === 'POST';
 	if (isSignedInNavigationPath(pathname)) return method === 'GET';
 	if (pathname === '/api/auth/link-social') return method === 'POST';
@@ -100,10 +110,21 @@ export async function handleSignInRequest(props: {
 	readonly issuedSessions: readonly IssuedPersonSession[];
 	readonly createdUserIds: readonly string[];
 	readonly ports: SignInResponseReleasePorts;
+	readonly machineLoginEnabled?: boolean;
+	readonly releaseMachineToken?: (response: Response) => Promise<Response>;
 }): Promise<Response> {
 	const pathname = new URL(props.request.url).pathname;
-	if (!isPublicSignInRoute(pathname, props.request.method))
+	if (!isPublicSignInRoute(pathname, props.request.method, props.machineLoginEnabled))
 		return Response.json({ error: 'not-found' }, { status: 404 });
+	const machineDevice = isMachineLoginRoute(pathname, props.request.method);
+	if (
+		(machineDevice || props.releaseMachineToken !== undefined) &&
+		!(await machineDeviceRequestIsValid(props.request, props.releaseMachineToken !== undefined))
+	)
+		return Response.json(
+			{ error: 'invalid_request' },
+			{ status: 400, headers: { 'cache-control': 'no-store' } },
+		);
 	const invalidOrganizationRequest = await organizationRequestErrorResponse(props.request);
 	if (invalidOrganizationRequest !== null) return invalidOrganizationRequest;
 	if (pathname === '/api/auth/organization/invite-member') {
@@ -131,6 +152,8 @@ export async function handleSignInRequest(props: {
 		tokenGrant = body.get('grant_type') === 'client_credentials' ? 'client_credentials' : 'person';
 	}
 	const response = await props.providerHandler(props.request);
+	if (props.releaseMachineToken !== undefined) return props.releaseMachineToken(response);
+	if (machineDevice) return projectMachineDeviceResponse(pathname, response);
 	if (pathname === '/api/auth/organization/person-membership' && response.status === 400) {
 		const headers = new Headers(response.headers);
 		headers.set('cache-control', 'no-store');

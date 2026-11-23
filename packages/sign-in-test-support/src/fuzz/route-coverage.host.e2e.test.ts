@@ -1,25 +1,31 @@
 import { afterAll, beforeAll, expect, it } from 'vitest';
 
+import { createFuzzMachineOptions } from '#sign-in-test-support/fuzz/machine-login-fixture';
 import {
 	actualOuterRoutes,
 	ambiguousMethodMismatches,
 	discoverOuterResponder,
+	discoverWorkerOuterRoutes,
 	liveServedButNotStatic,
 	providerRequestHookRoutes,
 	servedOuterRoutes,
 	staticServedOuterRoutes,
 } from '#sign-in-test-support/fuzz/outer-handler-routes';
 import { requestFamilies } from '#sign-in-test-support/fuzz/request-families/index';
+import { workerMachineLinkFamily } from '#sign-in-test-support/fuzz/request-families/worker-machine-link';
 import { routeClassification, routeKey } from '#sign-in-test-support/fuzz/route-classification';
 import { useControlledSignInClock } from '#sign-in-test-support/test-fixtures/controlled-node-test-clock';
-import { startLocalAuthHarness } from '#sign-in-test-support/test-fixtures/local-auth-harness';
+import {
+	organizationOne,
+	startLocalAuthHarness,
+} from '#sign-in-test-support/test-fixtures/local-auth-harness';
 import { installedProviderEndpointInventory } from '#sign-in-test-support/test-fixtures/provider-endpoint-inventory';
 
 useControlledSignInClock();
 
 let harness: Awaited<ReturnType<typeof startLocalAuthHarness>>;
 beforeAll(async () => {
-	harness = await startLocalAuthHarness();
+	harness = await startLocalAuthHarness(createFuzzMachineOptions());
 });
 afterAll(async () => {
 	await harness?.close();
@@ -47,6 +53,8 @@ it('classifies exactly the installed provider and outer-handler routes, and give
 	expect(new Set(classificationKeys).size).toBe(classificationKeys.length);
 	const classified = new Set(classificationKeys);
 	const providerKeys = new Set(inventory.httpRoutes.map(routeKey));
+	const workerKeys = new Set(discoverWorkerOuterRoutes().map(routeKey));
+	expect([...workerKeys].filter((key) => !classified.has(key))).toEqual([]);
 	// Every installed provider route is classified, and every classified route is installed or an
 	// outer pair the real route predicate admits (no stale row).
 	expect([...providerKeys].filter((key) => !classified.has(key))).toEqual([]);
@@ -54,7 +62,9 @@ it('classifies exactly the installed provider and outer-handler routes, and give
 		actualOuterRoutes(routeClassification.map((row) => row.path)).map(routeKey),
 	);
 	expect(
-		classificationKeys.filter((key) => !providerKeys.has(key) && !predicateAdmitted.has(key)),
+		classificationKeys.filter(
+			(key) => !providerKeys.has(key) && !predicateAdmitted.has(key) && !workerKeys.has(key),
+		),
 	).toEqual([]);
 	// Every pair the live outer handler serves is classified, and every classified method of a path
 	// admitted under every method is served: a new page, a new method on a known path, a stale method
@@ -119,7 +129,29 @@ it('classifies exactly the installed provider and outer-handler routes, and give
 		.filter((row) => !row.exposure.includes('blocked') && !row.exposure.includes('server-only'))
 		.map(routeKey)
 		.toSorted();
-	const familyKeys = requestFamilies.map((family) => routeKey(family.route));
+	const familyKeys = [...requestFamilies, workerMachineLinkFamily].map((family) =>
+		routeKey(family.route),
+	);
 	expect(new Set(familyKeys).size).toBe(familyKeys.length);
 	expect(familyKeys.toSorted()).toEqual(reachableKeys);
 });
+
+it.skipIf(process.env.SIGN_IN_TEST_HOST === 'node')(
+	'refuses the Worker link request family before Central',
+	async (): Promise<void> => {
+		const worker = await harness.miniflare.getWorker('sign-in');
+		const arrivals = harness.centralProvisioning.arrivals.length;
+		await Promise.all(
+			workerMachineLinkFamily.variants.map(async (variant): Promise<void> => {
+				const fixture = workerMachineLinkFamily.generate(organizationOne, variant);
+				const response = await worker.fetch(new URL(fixture.pathname, harness.issuer).toString(), {
+					...fixture.init,
+					headers: Object.fromEntries(fixture.init.headers),
+				});
+				expect(response.status, variant).toBe(fixture.status);
+				await response.body?.cancel();
+			}),
+		);
+		expect(harness.centralProvisioning.arrivals).toHaveLength(arrivals);
+	},
+);

@@ -72,6 +72,8 @@ async function relay(props: {
 	readonly body: string;
 	readonly headers: Readonly<Record<string, string>>;
 }): Promise<Response> {
+	if (props.operation === 'ListWorkspaces')
+		throw new Error('ListWorkspaces has no public CLI relay');
 	return fetch(new URL(relayPath[props.operation], props.fixture.target.issuer), {
 		method: 'POST',
 		headers: { 'content-type': 'application/json', ...props.headers },

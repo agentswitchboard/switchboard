@@ -16,6 +16,17 @@ export interface ProviderRequestState {
 	authorizationFenceCommitted: boolean;
 	readonly createdUserIds: string[];
 	readonly issuedSessions: IssuedPersonSession[];
+	machineToken:
+		| { readonly kind: 'none' }
+		| {
+				readonly kind: 'granted';
+				readonly machineId: Uuid7;
+				readonly organizationId: Uuid7;
+				readonly enrollmentId: Uuid7;
+				readonly clientId: Uuid7;
+				readonly decidedAt: number;
+				readonly grantExpiresAt: number;
+		  };
 	loginLink: ProviderLoginLinkState;
 	organizationActor:
 		| { readonly kind: 'none' }
@@ -30,6 +41,7 @@ export function createProviderRequestState(): ProviderRequestState {
 		authorizationFenceCommitted: false,
 		createdUserIds: [],
 		issuedSessions: [],
+		machineToken: { kind: 'none' },
 		loginLink: { kind: 'none' },
 		organizationActor: { kind: 'none' },
 		peopleChange: { kind: 'none' },

@@ -1,0 +1,12 @@
+{
+	"method": "POST",
+	"path": "/api/auth/oauth2/token",
+	"headers": {
+		"content-type": "application/x-www-form-urlencoded"
+	},
+	"body": {
+		"grant_type": "urn:ietf:params:oauth:grant-type:device_code",
+		"client_id": "019a3dce-2000-7000-8000-0000000000a1",
+		"device_code": "fixture-only-device-code"
+	}
+}

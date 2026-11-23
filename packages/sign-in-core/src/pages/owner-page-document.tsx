@@ -16,6 +16,7 @@ export function renderOwnerPage(props: OwnerPageProps & { readonly nonce: PageNo
 	const { nonce, ...pageProps } = props;
 	const callback = new URL('/owner-ready', props.configuration.issuer);
 	if (props.resume !== null) callback.searchParams.set('authorize', props.resume);
+	if (props.deviceUserCode !== undefined) callback.searchParams.set('device', props.deviceUserCode);
 	const document = pageDocument({
 		title: ownerPageTitle(pageProps),
 		children: React.createElement(OwnerPage, {

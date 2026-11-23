@@ -7,12 +7,22 @@ import {
 	createFleetAdminProofKey,
 	fleetAdminProofKeyThumbprint,
 	signFleetAdminProof,
+	signMachineEnrollmentRevocationProof,
 	type FleetAdminProofKey,
 } from '#sign-in-core/central-link/fleet-admin-proof';
+import {
+	collectWorkspacePages,
+	type ListWorkspacesResult,
+} from '#sign-in-core/central-link/list-workspaces';
 import type { SignInConfiguration } from '#sign-in-core/contracts/deployment-configuration';
+import { listWorkspacesPageLimit } from '#sign-in-core/contracts/fleet-admin-wire';
 import { personFleetTokenClaimsSchema } from '#sign-in-core/contracts/person-fleet-token';
 import { trustedSignInClientAddressHeader } from '#sign-in-core/contracts/sign-in-client-address';
 import type { SignInPlatform } from '#sign-in-core/contracts/sign-in-platform';
+import {
+	revokeMachineEnrollmentRequestSchema,
+	type RevokeMachineEnrollmentResult,
+} from '#sign-in-core/machine-login/machine-login-contracts';
 import {
 	base64UrlSha256,
 	fleetAdminIntentDigest,
@@ -21,6 +31,8 @@ import {
 	type FleetAdminRequest,
 } from '#sign-in-core/organizations/fleet-admin-operation';
 import type { RunOrganizationFleetCall } from '#sign-in-core/organizations/organization-fleet-call';
+import { disableMachineEnrollmentClient } from '#sign-in-core/storage/machine-client-store';
+import type { SignInDatabaseFactory } from '#sign-in-core/storage/models/sign-in-database';
 
 /** The owner page's cookie-only forwarding routes, one per central admin route. */
 export const fleetAdminForwardingRoutes = {
@@ -52,17 +64,12 @@ type PersonFleetCredential =
  * (so every release fence runs), signs central's proof and forwards it over the private link.
  * The key and token are dropped when this returns; nothing is stored or returned.
  */
-export async function forwardFleetAdminRequest(props: {
-	readonly request: Request;
-	readonly route: FleetAdminForwardingRoute;
-	readonly configuration: SignInConfiguration;
-	readonly platform: Pick<SignInPlatform, 'centralClient' | 'clock' | 'crypto' | 'ids'>;
-	readonly hasLiveSession: () => Promise<boolean>;
-	readonly signIn: SelfCall;
-	/** B2 renew-on-use: the organization's guard runs before anything is forwarded (WS7: and
-	 * recovers an organization a freshly emptied central forgot). */
-	readonly runFleetCall: RunOrganizationFleetCall;
-}): Promise<Response> {
+export async function forwardFleetAdminRequest(
+	props: PersonFleetCaller & {
+		readonly route: FleetAdminForwardingRoute;
+		readonly hasLiveSession: () => Promise<boolean>;
+	},
+): Promise<Response> {
 	const noStore = { 'cache-control': 'no-store' };
 	if (
 		!isSameOriginSignInPost(props.request.method, props.request.headers, props.configuration.issuer)
@@ -78,14 +85,146 @@ export async function forwardFleetAdminRequest(props: {
 		return Response.json({ error: 'invalid-request' }, { status: 400, headers: noStore });
 	if (!(await props.hasLiveSession()))
 		return Response.json({ error: 'unauthorized' }, { status: 401, headers: noStore });
+	const answer = await sendSignedFleetAdminRequest({ ...props, operation: parsed.data });
+	switch (answer.kind) {
+		case 'credential-refused':
+			return Response.json(
+				{ error: 'credential-refused', status: answer.status },
+				{ status: 403, headers: noStore },
+			);
+		case 'organization-mismatch':
+			return Response.json({ error: 'organization-mismatch' }, { status: 403, headers: noStore });
+		case 'answered':
+			return Response.json(answer.result, { headers: noStore });
+		case 'unauthenticated':
+			return Response.json(
+				{ error: 'central-refused-credential' },
+				{ status: 502, headers: noStore },
+			);
+		case 'request-refused':
+			return Response.json({ error: 'central-refused-request' }, { status: 502, headers: noStore });
+		case 'answered-unavailable':
+		case 'unknown':
+			return Response.json({ error: 'central-unavailable' }, { status: 503, headers: noStore });
+		default:
+			return answer satisfies never;
+	}
+}
+
+interface PersonFleetCaller {
+	readonly request: Request;
+	readonly configuration: SignInConfiguration;
+	readonly platform: Pick<SignInPlatform, 'centralClient' | 'clock' | 'crypto' | 'ids'>;
+	readonly signIn: SelfCall;
+	readonly runFleetCall: RunOrganizationFleetCall;
+}
+
+type PersonFleetAnswer =
+	| FleetAdminAnswer
+	| { readonly kind: 'organization-mismatch' }
+	| { readonly kind: 'credential-refused'; readonly status: number };
+
+export async function forwardMachineEnrollmentRevocation(
+	props: PersonFleetCaller & { readonly openDatabase: SignInDatabaseFactory },
+): Promise<Response> {
+	const headers = { 'cache-control': 'no-store' };
+	if (
+		!isSameOriginSignInPost(props.request.method, props.request.headers, props.configuration.issuer)
+	)
+		return Response.json({ error: 'not-allowed' }, { status: 403, headers });
+	const input = revokeMachineEnrollmentRequestSchema.safeParse(
+		await props.request.json().catch(() => null),
+	);
+	if (!input.success) return Response.json({ error: 'invalid-request' }, { status: 400, headers });
+	const revoke = props.platform.centralClient.revokeMachineEnrollment;
+	if (revoke === undefined)
+		return Response.json({ error: 'central-unavailable' }, { status: 503, headers });
+
 	const key = await createFleetAdminProofKey(props.platform.crypto);
 	const credential = await obtainPersonFleetCredential({ ...props, key });
 	if (credential.kind === 'refused')
-		return Response.json(
-			{ error: 'credential-refused', status: credential.status },
-			{ status: 403, headers: noStore },
-		);
-	const operation = parsed.data;
+		return Response.json({ error: 'credential-refused' }, { status: 403, headers });
+	const request = input.data;
+	const claims = personFleetTokenClaimsSchema.safeParse(decodeJwt(credential.accessToken));
+	if (
+		!claims.success ||
+		claims.data.organization_id !== request.organizationId ||
+		!claims.data.permissions.includes('machine:revoke')
+	)
+		return Response.json({ result: 'refused', reason: 'notPermitted' }, { headers });
+	const proof = await signMachineEnrollmentRevocationProof(props.platform.crypto, {
+		key,
+		centralOrigin: props.configuration.centralPublicOrigin,
+		requestId: props.platform.ids.nextId(),
+		issuedAtSeconds: Math.floor(props.platform.clock.now() / 1000),
+		accessToken: credential.accessToken,
+		request,
+	});
+	const run = await props.runFleetCall<FleetAdminAnswer<RevokeMachineEnrollmentResult>>({
+		organizationId: request.organizationId,
+		send: async (retry) =>
+			revoke({
+				request,
+				accessToken: credential.accessToken,
+				proof,
+				...(retry === null ? {} : { signal: retry.signal }),
+			}),
+		answeredUnavailable: (answer) => answer.kind === 'answered-unavailable',
+		atDeadline: { kind: 'unknown', reason: 'timeout' },
+	});
+	if (run.kind === 'held' || run.answer.kind !== 'answered')
+		return Response.json({ error: 'central-unavailable' }, { status: 503, headers });
+	const result = run.answer.result;
+	if (result.result === 'revoked' || result.result === 'alreadyEnded')
+		await disableMachineEnrollmentClient({
+			...request,
+			clientId: request.enrollmentId,
+			openDatabase: props.openDatabase,
+			clock: props.platform.clock,
+		});
+	return Response.json(result, { headers });
+}
+
+export async function listWorkspacesForPerson(
+	props: PersonFleetCaller & { readonly organizationId: string },
+): Promise<ListWorkspacesResult> {
+	return collectWorkspacePages(async (after) => {
+		const parsed = fleetAdminRequestSchema.safeParse({
+			operation: 'ListWorkspaces',
+			organizationId: props.organizationId,
+			limit: listWorkspacesPageLimit,
+			...(after === undefined ? {} : { after }),
+		});
+		if (!parsed.success || props.request.headers.has('authorization'))
+			return { result: 'refused', reason: 'notPermitted' };
+		const answer = await sendSignedFleetAdminRequest({ ...props, operation: parsed.data });
+		switch (answer.kind) {
+			case 'answered':
+				if (answer.result.result === 'workspaces' || answer.result.result === 'refused')
+					return answer.result;
+				return { result: 'unavailable' };
+			case 'credential-refused':
+			case 'organization-mismatch':
+				return { result: 'refused', reason: 'notPermitted' };
+			case 'request-refused':
+			case 'unauthenticated':
+			case 'answered-unavailable':
+			case 'unknown':
+				return { result: 'unavailable' };
+			default:
+				return answer satisfies never;
+		}
+	});
+}
+
+async function sendSignedFleetAdminRequest(
+	props: PersonFleetCaller & { readonly operation: FleetAdminRequest },
+): Promise<PersonFleetAnswer> {
+	const key = await createFleetAdminProofKey(props.platform.crypto);
+	const credential = await obtainPersonFleetCredential({ ...props, key });
+	if (credential.kind === 'refused')
+		return { kind: 'credential-refused', status: credential.status };
+	const { operation } = props;
 	// The token names the session's organization and binds this request's key; a body naming
 	// another organization, or a token bound elsewhere, is refused before anything is sent.
 	const claims = personFleetTokenClaimsSchema.safeParse(decodeJwt(credential.accessToken));
@@ -94,7 +233,7 @@ export async function forwardFleetAdminRequest(props: {
 		claims.data.organization_id !== operation.organizationId ||
 		claims.data.cnf.jkt !== (await fleetAdminProofKeyThumbprint(props.platform.crypto, key))
 	)
-		return Response.json({ error: 'organization-mismatch' }, { status: 403, headers: noStore });
+		return { kind: 'organization-mismatch' };
 	const proof = await signFleetAdminProof(props.platform.crypto, {
 		key,
 		htu: `${props.configuration.centralPublicOrigin}${fleetAdminRoutePaths[operation.operation]}`,
@@ -119,26 +258,7 @@ export async function forwardFleetAdminRequest(props: {
 		answeredUnavailable: (sent) => sent.kind === 'answered-unavailable',
 		atDeadline: { kind: 'unknown', reason: 'timeout' },
 	});
-	// Rule 4: an expired stamp renewal could not replace is "try again shortly", never sent.
-	if (run.kind === 'held')
-		return Response.json({ error: 'central-unavailable' }, { status: 503, headers: noStore });
-	const answer = run.answer;
-	switch (answer.kind) {
-		case 'answered':
-			return Response.json(answer.result, { headers: noStore });
-		case 'unauthenticated':
-			return Response.json(
-				{ error: 'central-refused-credential' },
-				{ status: 502, headers: noStore },
-			);
-		case 'request-refused':
-			return Response.json({ error: 'central-refused-request' }, { status: 502, headers: noStore });
-		case 'answered-unavailable':
-		case 'unknown':
-			return Response.json({ error: 'central-unavailable' }, { status: 503, headers: noStore });
-		default:
-			return answer satisfies never;
-	}
+	return run.kind === 'held' ? { kind: 'answered-unavailable' } : run.answer;
 }
 
 /** Native authorization with the caller's own cookie, then a DPoP-bound token exchange. */

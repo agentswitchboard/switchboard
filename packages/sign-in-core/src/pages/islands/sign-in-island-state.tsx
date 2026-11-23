@@ -1,5 +1,6 @@
 import { z } from 'zod';
 
+import { deviceApprovalPageStateSchema } from '#sign-in-core/contracts/device-approval-state';
 import { organizationChoiceSchema } from '#sign-in-core/contracts/organization-membership';
 import { signedInNavigationStateSchema } from '#sign-in-core/contracts/sign-in-navigation';
 import { organizationIdSchema } from '#sign-in-core/storage/models/sign-in-store';
@@ -28,6 +29,11 @@ export const signInIslandStateSchema = z.discriminatedUnion('kind', [
 	z.strictObject({
 		kind: z.literal('signed-in-navigation'),
 		navigation: signedInNavigationStateSchema,
+	}),
+	z.strictObject({
+		kind: z.literal('device-approval'),
+		navigation: signedInNavigationStateSchema,
+		device: deviceApprovalPageStateSchema,
 	}),
 	z.strictObject({
 		kind: z.literal('person-organization-choice'),

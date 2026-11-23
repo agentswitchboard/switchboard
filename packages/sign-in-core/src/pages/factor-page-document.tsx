@@ -26,6 +26,7 @@ export function renderFactorControls(state: FactorPageState, resume: string | nu
 export function renderFactorPage(props: {
 	readonly content: FactorPageContent;
 	readonly resume: string | null;
+	readonly deviceUserCode?: string | undefined;
 	readonly headers: Headers;
 	readonly status: number;
 	readonly nonce: PageNonce;
@@ -35,12 +36,18 @@ export function renderFactorPage(props: {
 		title: factorResponseTitle(props.content),
 		children: (
 			<React.Fragment>
-				<FactorResponseContent content={props.content} resume={props.resume} />
+				<FactorResponseContent
+					content={props.content}
+					resume={props.resume}
+					deviceUserCode={props.deviceUserCode}
+				/>
 				<PageStatus />
 			</React.Fragment>
 		),
 		// Error pages carry their one action in the card; others keep a quiet way back.
-		footer: refusal ? undefined : <PageBackLink href={ownerReadyLocation(props.resume)} />,
+		footer: refusal ? undefined : (
+			<PageBackLink href={ownerReadyLocation(props.resume, props.deviceUserCode)} />
+		),
 		// The replacement codes page mounts Better Auth UI's codes block (copy,
 		// download, print) with the explicit finish.
 		scripts:

@@ -1,14 +1,20 @@
+import { decodeJwt } from 'jose';
+
+import { revokeMachineEnrollmentPath } from '#sign-in-core/central-link/fleet-admin-client';
 import type {
+	OrganizationAdminIntent_Serialize,
 	ProofClaims,
 	ProofHeader,
 	ProofJwk,
 } from '#sign-in-core/central-link/generated/central-sign-in.gen';
 import { canonicalJson } from '#sign-in-core/contracts/canonical-json';
+import { personFleetTokenClaimsSchema } from '#sign-in-core/contracts/person-fleet-token';
 import type {
 	SignInCrypto,
 	SignInEcPrivateJwk,
 	SignInExportedJwk,
 } from '#sign-in-core/contracts/sign-in-platform';
+import type { RevokeMachineEnrollmentRequest } from '#sign-in-core/machine-login/machine-login-contracts';
 import { base64UrlSha256 } from '#sign-in-core/organizations/fleet-admin-operation';
 
 /**
@@ -135,6 +141,49 @@ export async function signFleetAdminProof(
 		new TextEncoder().encode(signingInput),
 	);
 	return `${signingInput}.${base64UrlBytes(new Uint8Array(signature))}`;
+}
+
+export async function signMachineEnrollmentRevocationProof(
+	crypto: SignInCrypto,
+	props: {
+		readonly key: FleetAdminProofKey;
+		readonly centralOrigin: string;
+		readonly requestId: string;
+		readonly issuedAtSeconds: number;
+		readonly accessToken: string;
+		readonly request: RevokeMachineEnrollmentRequest;
+	},
+): Promise<string> {
+	const claims = personFleetTokenClaimsSchema.parse(decodeJwt(props.accessToken));
+	if (
+		claims.organization_id !== props.request.organizationId ||
+		claims.cnf.jkt !== (await fleetAdminProofKeyThumbprint(crypto, props.key)) ||
+		!claims.permissions.includes('machine:revoke')
+	)
+		throw new Error('Person credential does not permit this revocation');
+	return signFleetAdminProof(crypto, {
+		key: props.key,
+		htu: `${props.centralOrigin}${revokeMachineEnrollmentPath}`,
+		requestId: props.requestId,
+		issuedAtSeconds: props.issuedAtSeconds,
+		bound: {
+			accessToken: props.accessToken,
+			intent: await base64UrlSha256(
+				crypto,
+				canonicalJson({
+					v: 1,
+					operation: 'RevokeMachineEnrollment',
+					organization: props.request.organizationId,
+					target: props.request.enrollmentId,
+					operationId: null,
+					params: { actor: claims.sub, secondFactorAt: claims.second_factor_at ?? null },
+				} satisfies Extract<
+					OrganizationAdminIntent_Serialize,
+					{ operation: 'RevokeMachineEnrollment' }
+				>),
+			),
+		},
+	});
 }
 
 function base64UrlJson(value: unknown): string {

@@ -2,6 +2,7 @@ import {
 	signInConfigurationSchema,
 	createSignInStore,
 	createCentralLinkClient,
+	createMachineLoginDecisionsClient,
 	type SignInObservation,
 } from '@agent-collaboration/sign-in-core';
 import type { SignInHttpConfiguration } from '@agent-collaboration/sign-in-core/better-auth';
@@ -22,11 +23,12 @@ export function signInWorkerConfiguration(bindings: AuthWorkerEnv): SignInHttpCo
 		.parse(bindings).TURNSTILE_SECRET_KEY;
 	const openDatabase: SignInHttpConfiguration['openDatabase'] = () =>
 		openSignInDatabase(bindings.DB);
+	const central = {
+		fetch: (request: Request): Promise<Response> => bindings.CENTRAL.fetch(request),
+	};
 	const platform = {
 		...createWebSignInCapabilities(),
-		centralClient: createCentralLinkClient({
-			fetch: (request: Request): Promise<Response> => bindings.CENTRAL.fetch(request),
-		}),
+		centralClient: createCentralLinkClient(central),
 		requestLimiter: createBindingRequestLimiter({
 			signInAttempts: bindings.SIGN_IN_ATTEMPTS,
 			authRequests: bindings.AUTH_REQUESTS,
@@ -42,6 +44,7 @@ export function signInWorkerConfiguration(bindings: AuthWorkerEnv): SignInHttpCo
 	};
 	return {
 		openDatabase,
+		machineLoginDecisions: createMachineLoginDecisionsClient(central),
 		platform,
 		store: createSignInStore({ openDatabase, platform, ownerEmail: configuration.ownerEmail }),
 		configuration,

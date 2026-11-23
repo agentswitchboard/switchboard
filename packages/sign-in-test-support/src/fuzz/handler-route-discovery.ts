@@ -2,6 +2,7 @@ import ts from 'typescript';
 
 import {
 	isPathname,
+	methodPathPairsOfDeclaration,
 	resolveDeclaration,
 	tablePathsOfDeclaration,
 	unsupportedRouteForm,
@@ -113,7 +114,9 @@ function pathsBehindPredicate(
 		if (returnsBoolean(declaration, checker)) assertPredicateIsEvaluable(declaration, checker);
 		return [];
 	}
-	const table = tablePathsOfDeclaration(declaration, checker);
+	const table =
+		tablePathsOfDeclaration(declaration, checker) ??
+		methodPathPairsOfDeclaration(declaration, checker)?.map((pair) => pair.path);
 	return (
 		table ??
 		unsupportedRouteForm(call, `a predicate with an unreadable body (${call.expression.text})`)

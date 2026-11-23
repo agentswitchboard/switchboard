@@ -3,21 +3,31 @@ import { z } from 'zod';
 import type { CentralTransport } from '#sign-in-core/central-link/central-transport';
 import type {
 	AdminRefusal,
+	ListWorkspacesResult_Serialize,
 	MachineAllowanceState,
 	OrganizationAdminResult_Serialize,
 	OrganizationChangeKind,
 	OrganizationChangeOrigin,
 	OrganizationChangeRecord,
+	RevokeMachineEnrollmentRequest as RevokeMachineWireRequest,
 	TargetedOrganizationChangeKind,
 	WorkspaceView_Serialize,
 } from '#sign-in-core/central-link/generated/central-sign-in.gen';
 import { organizationChangeFixtures } from '#sign-in-core/central-link/generated/organization-change-fixtures';
 import type { AssertWireType, WireTypesEqual } from '#sign-in-core/central-link/wire-type-equality';
+import {
+	fleetAdminWorkspaceNameSchema,
+	listWorkspacesPageLimit,
+} from '#sign-in-core/contracts/fleet-admin-wire';
 import type { Uuid7 } from '#sign-in-core/contracts/sign-in-platform';
+import {
+	revokeMachineEnrollmentResultSchema,
+	type RevokeMachineEnrollmentRequest,
+	type RevokeMachineEnrollmentResult,
+} from '#sign-in-core/machine-login/machine-login-contracts';
 import {
 	fleetAdminRequestBody,
 	fleetAdminRoutePaths,
-	fleetAdminWorkspaceNameSchema,
 	type FleetAdminRequest,
 } from '#sign-in-core/organizations/fleet-admin-operation';
 import type { CentralLinkUncertainty } from '#sign-in-core/organizations/organization-provisioning';
@@ -115,6 +125,25 @@ const changeRecordSchema = z.discriminatedUnion('kind', [
 	}),
 ]);
 const workspaceSchema = workspaceWireSchema.extend({ workspaceId: signInRecordIdSchema });
+const listWorkspacesWirePageSchema = z.strictObject({
+	result: z.literal('workspaces'),
+	workspaces: z.array(workspaceWireSchema).max(listWorkspacesPageLimit),
+	next: centralRecordIdSchema.nullable(),
+});
+const listWorkspacesWireReplySchema = z.union([listWorkspacesWirePageSchema, refusedSchema]);
+const listWorkspacesReplySchema = z.union([
+	listWorkspacesWirePageSchema.extend({
+		workspaces: z.array(workspaceSchema).max(listWorkspacesPageLimit),
+		next: signInRecordIdSchema.nullable(),
+	}),
+	refusedSchema,
+]);
+export type ListWorkspacesReply = z.output<typeof listWorkspacesReplySchema>;
+type ListWorkspacesWireRefusal = Extract<ListWorkspacesResult_Serialize, { result: 'refused' }>;
+type ListWorkspacesWireResult =
+	| Exclude<ListWorkspacesResult_Serialize, ListWorkspacesWireRefusal>
+	| (ListWorkspacesWireRefusal & { reason: FleetAdminRefusalReason });
+
 export const fleetAdminResultSchemas = {
 	CreateWorkspace: z.union([
 		z.strictObject({ result: z.literal('applied'), workspace: workspaceSchema }),
@@ -124,6 +153,7 @@ export const fleetAdminResultSchemas = {
 		z.strictObject({ result: z.literal('found'), workspace: workspaceSchema.nullable() }),
 		refusedSchema,
 	]),
+	ListWorkspaces: listWorkspacesReplySchema,
 	ReadChangeRecords: z.union([
 		z.strictObject({ result: z.literal('records'), records: z.array(changeRecordSchema) }),
 		refusedSchema,
@@ -155,6 +185,18 @@ export type FleetAdminIdTypes = [
 	AssertWireType<WireTypesEqual<SignInAllowanceChange['workspaceId'], Uuid7>>,
 ];
 export type FleetAdminWireSchemaTypes = [
+	AssertWireType<
+		WireTypesEqual<z.output<typeof listWorkspacesWireReplySchema>, ListWorkspacesWireResult>
+	>,
+	AssertWireType<
+		WireTypesEqual<z.input<typeof listWorkspacesReplySchema>, ListWorkspacesWireResult>
+	>,
+	AssertWireType<
+		WireTypesEqual<
+			NonNullable<Extract<ListWorkspacesReply, { result: 'workspaces' }>['next']>,
+			Uuid7
+		>
+	>,
 	AssertWireType<WireTypesEqual<z.output<typeof workspaceWireSchema>, WorkspaceView_Serialize>>,
 	AssertWireType<
 		WireTypesEqual<z.output<typeof fleetAdminRefusalReasonSchema>, FleetAdminRefusalReason>
@@ -196,8 +238,8 @@ export type FleetAdminWireSchemaTypes = [
  * Central's answer, or why there is none. 401 (any token or proof failure, empty body) and 400
  * (a body central could not parse: our defect, never retried) are their own outcomes.
  */
-export type FleetAdminAnswer =
-	| { readonly kind: 'answered'; readonly result: FleetAdminResult }
+export type FleetAdminAnswer<TResult = FleetAdminResult> =
+	| { readonly kind: 'answered'; readonly result: TResult }
 	| { readonly kind: 'unauthenticated' }
 	| { readonly kind: 'request-refused' }
 	/**
@@ -231,19 +273,30 @@ export interface FleetAdminLinkClient {
 	}) => Promise<FleetAdminAnswer>;
 }
 
+export const revokeMachineEnrollmentPath = '/organization-admin/v1/revoke-machine-enrollment';
+export type RevokeMachineEnrollment = (props: {
+	readonly request: RevokeMachineEnrollmentRequest;
+	readonly accessToken: string;
+	readonly proof: string;
+	readonly signal?: AbortSignal;
+}) => Promise<FleetAdminAnswer<RevokeMachineEnrollmentResult>>;
+
 /** One send per call; the admin routes travel the private link like every other central call. */
-export function createFleetAdminLinkClient(transport: CentralTransport): FleetAdminLinkClient {
-	async function send(props: {
-		readonly operation: FleetAdminRequest['operation'];
+export function createFleetAdminLinkClient(
+	transport: CentralTransport,
+): FleetAdminLinkClient & { readonly revokeMachineEnrollment: RevokeMachineEnrollment } {
+	async function send<TResult>(props: {
+		readonly path: string;
+		readonly resultSchema: z.ZodType<TResult>;
 		readonly authorization: string;
 		readonly proof: string;
 		readonly body: string | Uint8Array<ArrayBuffer>;
 		readonly signal?: AbortSignal;
-	}): Promise<FleetAdminAnswer> {
+	}): Promise<FleetAdminAnswer<TResult>> {
 		let response: Response;
 		try {
 			response = await transport.fetch(
-				new Request(`http://central.invalid${fleetAdminRoutePaths[props.operation]}`, {
+				new Request(`http://central.invalid${props.path}`, {
 					method: 'POST',
 					headers: {
 						'content-type': 'application/json',
@@ -270,19 +323,37 @@ export function createFleetAdminLinkClient(transport: CentralTransport): FleetAd
 		} catch {
 			return { kind: 'unknown', reason: 'malformed-reply' };
 		}
-		const parsed = fleetAdminResultSchemas[props.operation].safeParse(payload);
+		const parsed = props.resultSchema.safeParse(payload);
 		if (!parsed.success) return { kind: 'unknown', reason: 'malformed-reply' };
 		return { kind: 'answered', result: parsed.data };
 	}
 	return {
 		sendFleetAdminRequest: async (props) =>
-			send({
-				operation: props.operation.operation,
+			send<FleetAdminResult>({
+				path: fleetAdminRoutePaths[props.operation.operation],
+				resultSchema: fleetAdminResultSchemas[props.operation.operation],
 				authorization: `DPoP ${props.accessToken}`,
 				proof: props.proof,
 				body: JSON.stringify(fleetAdminRequestBody(props.operation)),
 				...(props.signal === undefined ? {} : { signal: props.signal }),
 			}),
-		relayFleetAdminRequest: async (props) => send(props),
+		relayFleetAdminRequest: async (props) =>
+			send<FleetAdminResult>({
+				...props,
+				path: fleetAdminRoutePaths[props.operation],
+				resultSchema: fleetAdminResultSchemas[props.operation],
+			}),
+		revokeMachineEnrollment: async (props) =>
+			send({
+				path: revokeMachineEnrollmentPath,
+				resultSchema: revokeMachineEnrollmentResultSchema,
+				authorization: `DPoP ${props.accessToken}`,
+				proof: props.proof,
+				body: JSON.stringify({
+					organizationId: props.request.organizationId,
+					enrollmentId: props.request.enrollmentId,
+				} satisfies RevokeMachineWireRequest),
+				...(props.signal === undefined ? {} : { signal: props.signal }),
+			}),
 	};
 }

@@ -1,8 +1,10 @@
+import { machineRouteGroups } from '#sign-in-test-support/fuzz/machine-route-classification';
 import {
 	documentedAnswersFor,
 	supportedSocialProviders,
 	type DocumentedErrorBody,
 	type PermittedRefusalEffect,
+	type ReachableRouteGroup,
 	type RequestPart,
 	type RouteCaller,
 	type RouteClassification,
@@ -21,20 +23,6 @@ export {
 	type RouteExposure,
 	type RouteIdentity,
 };
-
-interface ReachableRouteGroup {
-	readonly method: 'GET' | 'POST';
-	readonly paths: readonly string[];
-	readonly exposure: readonly RouteExposure[];
-	readonly requestParts: readonly RequestPart[];
-	readonly documentedAnswers: readonly number[];
-	readonly disclosure: string;
-	readonly permittedRefusalEffects: readonly PermittedRefusalEffect[];
-	readonly evidence: string;
-	readonly documentedErrorBodies?: Readonly<Record<number, DocumentedErrorBody>>;
-	readonly documentedAnswersByCaller?: Readonly<Partial<Record<RouteCaller, readonly number[]>>>;
-	readonly htmlRefusals?: readonly number[];
-}
 
 // These groups are transcribed from the sign-in route contracts and permanent host tests,
 // independently of both the provider inventory and request-family registry.
@@ -365,16 +353,18 @@ const reachableRouteGroups: readonly ReachableRouteGroup[] = [
 		],
 		evidence: 'sign-in-http-handler.ts; sign-in-request-handler.integration.test.ts',
 	},
+	...machineRouteGroups,
 	{
 		method: 'POST',
 		paths: ['/api/auth/oauth2/token'],
-		exposure: ['cli'],
-		requestParts: ['form'],
+		exposure: ['cli', 'machine'],
+		requestParts: ['form', 'json'],
 		documentedAnswers: [200, 400, 401, 403, 415, 429],
 		disclosure:
-			'Authorized token success may contain its access token and eligible CLI refresh token; refusals contain no credential.',
-		permittedRefusalEffects: ['none', 'oauth-code-consumption'],
-		evidence: 'sign-in-response-release.ts; provider-configuration.ts',
+			'Authorized CLI token success may contain its access token and eligible refresh token. The machine device and refresh grants require the bound machine client. Refusals contain no credential.',
+		permittedRefusalEffects: ['none', 'oauth-code-consumption', 'pending-device-poll'],
+		evidence:
+			'sign-in-response-release.ts; machine-token-release.ts; machine-device-login.host.e2e.test.ts',
 	},
 	{
 		method: 'POST',
@@ -515,7 +505,9 @@ const blockedProviderGroups: readonly {
 			'/api/auth/get-access-token',
 			'/api/auth/oauth2/consent',
 			'/api/auth/oauth2/continue',
-			'/api/auth/oauth2/revoke',
+			'/api/auth/device/token',
+			'/api/auth/device/approve',
+			'/api/auth/device/deny',
 			'/api/auth/oauth2/userinfo',
 			'/api/auth/oauth2/end-session',
 			'/api/auth/oauth2/end-session/confirm',

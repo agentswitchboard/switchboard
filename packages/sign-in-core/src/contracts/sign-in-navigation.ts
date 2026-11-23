@@ -18,10 +18,11 @@ export const switchboardSignOutPath = '/api/auth/switchboard/sign-out';
 export const signOutFailureMessage = "Couldn't sign you out; try again";
 
 export const signedInNavigationStateSchema = z.strictObject({
-	page: signedInNavigationPathSchema,
+	page: z.union([signedInNavigationPathSchema, z.literal('/device')]),
 	destinations: z.array(signedInNavigationPathSchema).readonly(),
 	activeOrganization: organizationChoiceSchema,
 	choices: z.array(organizationChoiceSchema).readonly(),
 	showOrganizationAdmin: z.boolean(),
+	showMachines: z.boolean().optional(),
 });
 export type SignedInNavigationState = z.infer<typeof signedInNavigationStateSchema>;

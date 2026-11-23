@@ -77,6 +77,7 @@ const operations: Readonly<Record<FleetAdminRequest['operation'], FleetAdminRequ
 		organizationId,
 		workspaceId: workspace.workspaceId,
 	},
+	ListWorkspaces: { operation: 'ListWorkspaces', organizationId, limit: 100 },
 	ReadChangeRecords: { operation: 'ReadChangeRecords', organizationId, after: null, limit: 10 },
 };
 /** Which route may answer each result tag; a refusal can come from any of them. */
@@ -84,8 +85,34 @@ const routesForResult: Readonly<Record<string, readonly FleetAdminRequest['opera
 	applied: ['CreateWorkspace'],
 	found: ['WorkspaceLookup'],
 	records: ['ReadChangeRecords'],
-	refused: ['CreateWorkspace', 'WorkspaceLookup', 'ReadChangeRecords'],
+	refused: ['CreateWorkspace', 'WorkspaceLookup', 'ListWorkspaces', 'ReadChangeRecords'],
 };
+
+it('parses a terminal workspace page containing the shared WorkspaceLookup row', async (): Promise<void> => {
+	const payload = { result: 'workspaces', workspaces: [workspace], next: null };
+	const transport = scripted(async () => Response.json(payload));
+	const client = createFleetAdminLinkClient(transport);
+	const answer = await client.sendFleetAdminRequest({
+		operation: operations.ListWorkspaces,
+		accessToken: 'token',
+		proof: 'proof',
+	});
+	expect(answer).toEqual({ kind: 'answered', result: payload });
+	const [request] = transport.sent;
+	expect(request?.url).toBe('http://central.invalid/organization-admin/v1/list-workspaces');
+	expect(await request?.json()).toEqual({ organizationId, limit: 100 });
+});
+
+it('requires next on a Central workspace page', async (): Promise<void> => {
+	const transport = scripted(async () => Response.json({ result: 'workspaces', workspaces: [] }));
+	await expect(
+		createFleetAdminLinkClient(transport).sendFleetAdminRequest({
+			operation: operations.ListWorkspaces,
+			accessToken: 'token',
+			proof: 'proof',
+		}),
+	).resolves.toEqual({ kind: 'unknown', reason: 'malformed-reply' });
+});
 async function producerResults(kind: 'fixtures' | 'negatives'): Promise<readonly unknown[]> {
 	return z
 		.array(z.unknown())
@@ -330,15 +357,7 @@ it('reads a mixed page of every Central change kind and keeps the record vocabul
 		permissionChecked: 'workspace:create',
 	};
 	const automatic = { kind: 'automatic' };
-	const records = [
-		{ ...base, kind: 'organizationProvisioned', origin: { kind: 'signInProvisioning' } },
-		{ ...base, kind: 'stampRenewed', origin: { kind: 'signInProvisioning' } },
-		{ ...base, kind: 'workspaceCreated', origin: person },
-		{ ...base, kind: 'machineEnrolled', origin: person },
-		{ ...base, kind: 'machineRevoked', origin: person },
-		{ ...base, kind: 'machineExpired', origin: automatic },
-		{ ...base, kind: 'allowanceChanged', origin: person },
-	];
+	const records = organizationChangeFixtures;
 
 	function read(
 		replyRecords: readonly unknown[],
