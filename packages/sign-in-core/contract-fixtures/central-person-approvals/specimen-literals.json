@@ -1,0 +1,18 @@
+{
+	"source": "codex-router 8670195564d6af00d4e21d80c806b8ebc28f7a6f, signin_approval_wire_specimens_test.rs, approval_people_list_requires_its_nullable_continuation",
+	"accepted": {
+		"ApprovalListReply": ["{\"kind\":\"page\",\"items\":[],\"next\":null}"]
+	},
+	"refused": {
+		"ApprovalListReply": [
+			"{\"kind\":\"page\",\"items\":[]}",
+			"[\"page\",[],null]",
+			"{\"kind\":\"page\",\"items\":[],\"next\":null,\"extra\":false}"
+		],
+		"ApprovalDecideReply": [
+			"{\"kind\":\"factorRequired\",\"withinSeconds\":901}",
+			"{\"kind\":\"factorRequired\",\"withinSeconds\":\"900\"}"
+		],
+		"ApprovalListRequest": ["[\"019a3dce-2000-7000-8000-000000000001\",\"waiting\",null]"]
+	}
+}

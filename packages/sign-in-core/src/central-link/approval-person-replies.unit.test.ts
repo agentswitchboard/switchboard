@@ -1,4 +1,7 @@
+import { readFile } from 'node:fs/promises';
+
 import { describe, expect, it } from 'vitest';
+import { z } from 'zod';
 
 import {
 	approvalDecideReplySchema,
@@ -448,5 +451,57 @@ describe('C3 request bodies', (): void => {
 		],
 	] as const)('refuses %s', (_name, operation, body): void => {
 		expect(approvalPersonRequestBodySchemas[operation].safeParse(body).success).toBe(false);
+	});
+});
+
+describe("central's own specimen literals (contract-fixtures/central-person-approvals)", (): void => {
+	const literalsSchema = z.strictObject({
+		source: z.string(),
+		accepted: z.strictObject({ ApprovalListReply: z.array(z.string()).min(1) }),
+		refused: z.strictObject({
+			ApprovalListReply: z.array(z.string()).min(1),
+			ApprovalDecideReply: z.array(z.string()).min(1),
+			ApprovalListRequest: z.array(z.string()).min(1),
+		}),
+	});
+	async function specimenLiterals(): Promise<z.output<typeof literalsSchema>> {
+		const text = await readFile(
+			new URL(
+				'../../contract-fixtures/central-person-approvals/specimen-literals.json',
+				import.meta.url,
+			),
+			'utf8',
+		);
+		return literalsSchema.parse(JSON.parse(text));
+	}
+
+	it('accepts the last page central accepts, unchanged', async (): Promise<void> => {
+		// Arrange
+		const literals = await specimenLiterals();
+		for (const bytes of literals.accepted.ApprovalListReply) {
+			// Act
+			const parsed = approvalListReplySchema.safeParse(JSON.parse(bytes));
+			// Assert
+			expect(parsed.success && parsed.data).toEqual(JSON.parse(bytes));
+		}
+	});
+
+	it('refuses every body central refuses', async (): Promise<void> => {
+		// Arrange
+		const { refused } = await specimenLiterals();
+		const checks = [
+			...refused.ApprovalListReply.map((bytes) =>
+				approvalListReplySchema.safeParse(JSON.parse(bytes)),
+			),
+			...refused.ApprovalDecideReply.map((bytes) =>
+				approvalDecideReplySchema.safeParse(JSON.parse(bytes)),
+			),
+			...refused.ApprovalListRequest.map((bytes) =>
+				approvalPersonRequestBodySchemas.ApprovalList.safeParse(JSON.parse(bytes)),
+			),
+		];
+		// Act / Assert
+		expect(checks.map((check) => check.success)).toEqual(checks.map(() => false));
+		expect(checks).toHaveLength(6);
 	});
 });
