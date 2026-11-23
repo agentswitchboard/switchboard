@@ -1,6 +1,6 @@
 # Central person approvals wire (C3)
 
-Consumer copies from codex-router `24dfd34898776612347a25e973921f7f70e405dd`, central's corrected C3 head, which is not on central `main` yet. Sources, as handed to sign-in in the DEL-06 packets:
+Consumer copies from codex-router `main` `1ede5c1b9afbe6bd427ac742f8b63d53a225151e`, where central merged C3. The generated file and both vector files there are byte-identical to the `24dfd348` copies below. Sources, as handed to sign-in in the DEL-06 packets:
 
 | File | Central commit | SHA-256 |
 |---|---|---|
