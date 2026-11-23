@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { expect, it } from 'vitest';
+import { expect, it, vi } from 'vitest';
 
 import { organizationAdminPage } from '#sign-in-core/better-auth/organization-admin-page';
 
@@ -22,3 +22,69 @@ it.each([false, true])(
 			);
 	},
 );
+
+/**
+ * Vitest's `window` is Node's global; scripts the page runs see the jsdom window it also exposes as
+ * `jsdom`, which has no `fetch` of its own.
+ */
+function jsdomWindowRunningServedScripts(): object {
+	const handle: unknown = Reflect.get(globalThis, 'jsdom');
+	const servedWindow: unknown =
+		typeof handle === 'object' && handle !== null ? Reflect.get(handle, 'window') : undefined;
+	if (typeof servedWindow !== 'object' || servedWindow === null)
+		throw new Error('The jsdom window is not exposed by the test environment.');
+	return servedWindow;
+}
+
+it('labels each change record with the origin it names: the person and permission, automatic in Central, or sign-in', async () => {
+	// Arrange
+	const organizationId = '019a3dce-2000-7000-8000-0000000000a1';
+	const createdAtMillis = Date.UTC(2026, 10, 22, 9, 30);
+	const timestamp = new Date(createdAtMillis).toISOString();
+	const personId = 'person-owner';
+	const record = {
+		kind: 'organizationProvisioned',
+		requestId: 'request-1',
+		targetId: organizationId,
+		createdAtMillis,
+	};
+	const records = [
+		{ ...record, id: 'record-1', origin: { kind: 'signInProvisioning' } },
+		{
+			...record,
+			id: 'record-2',
+			origin: { kind: 'person', personId, permissionChecked: 'machine:enroll' },
+		},
+		{ ...record, id: 'record-3', origin: { kind: 'automatic' } },
+	];
+	const servedWindow = jsdomWindowRunningServedScripts();
+	Reflect.set(servedWindow, 'fetch', (): Promise<Response> =>
+		Promise.resolve(Response.json({ result: 'records', records })),
+	);
+	try {
+		const html = await organizationAdminPage({
+			organizationId,
+			organizationName: 'research',
+			operationId: '019a3dce-2000-7000-8000-0000000000a2',
+			showPeopleLink: false,
+		}).text();
+		const served = new DOMParser().parseFromString(html, 'text/html');
+		document.body.innerHTML = served.body.innerHTML;
+		// Act: run the served page script against the stubbed forwarding route.
+		const script = document.createElement('script');
+		script.textContent = served.querySelector('script')?.textContent ?? '';
+		document.body.append(script);
+		const listed = (): string[] =>
+			[...document.querySelectorAll('#change-records li')].map((entry) => entry.textContent ?? '');
+		await vi.waitFor((): void => expect(listed()).toHaveLength(3));
+		// Assert
+		expect(listed()).toEqual([
+			`${timestamp} organizationProvisioned ${organizationId} by sign-in`,
+			`${timestamp} organizationProvisioned ${organizationId} by ${personId} (machine:enroll)`,
+			`${timestamp} organizationProvisioned ${organizationId} automatically in Central`,
+		]);
+	} finally {
+		Reflect.deleteProperty(servedWindow, 'fetch');
+		document.body.innerHTML = '';
+	}
+});
