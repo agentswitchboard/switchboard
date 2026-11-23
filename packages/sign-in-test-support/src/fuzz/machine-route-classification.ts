@@ -1,7 +1,20 @@
 import type { ReachableRouteGroup } from '#sign-in-test-support/fuzz/route-classification-types';
 
+export const workerLinkRoutePath = '/api/fleet/link/{organization_id}';
+
 // Transcribed from the machine handlers and permanent host proof.
 export const machineRouteGroups: readonly ReachableRouteGroup[] = [
+	{
+		method: 'GET',
+		paths: [workerLinkRoutePath],
+		exposure: ['machine'],
+		requestParts: ['query'],
+		documentedAnswers: [101, 401, 404, 429, 503],
+		disclosure:
+			'An authorized machine gets its link. A known ended enrollment receives a terminal close.',
+		permittedRefusalEffects: ['none'],
+		evidence: 'worker-machine-link.ts; b3-central-join.host.e2e.test.ts',
+	},
 	{
 		method: 'GET',
 		paths: ['/.well-known/fleet-login'],

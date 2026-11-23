@@ -5,7 +5,14 @@ export interface RouteIdentity {
 	readonly path: string;
 }
 
-export type RouteExposure = 'signed-out' | 'member' | 'owner' | 'cli' | 'server-only' | 'blocked';
+export type RouteExposure =
+	| 'signed-out'
+	| 'member'
+	| 'owner'
+	| 'cli'
+	| 'machine'
+	| 'server-only'
+	| 'blocked';
 export type RequestPart = 'query' | 'form' | 'json';
 export type PermittedRefusalEffect =
 	| 'clear-current-choice'

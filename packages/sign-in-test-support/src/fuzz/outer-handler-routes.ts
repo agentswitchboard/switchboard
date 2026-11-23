@@ -8,6 +8,7 @@ import {
 	type DiscoveredHandlerRoutes,
 	type OuterRouteIdentity,
 } from '#sign-in-test-support/fuzz/handler-route-discovery';
+import { resolveDeclaration } from '#sign-in-test-support/fuzz/route-ast';
 import { staticMethodsForPath } from '#sign-in-test-support/fuzz/static-route-dispatch';
 
 const outerHandlerFiles = [
@@ -19,6 +20,72 @@ const outerHandlerFiles = [
 /** The host route inventory uses the same enabled machine configuration as the request campaign. */
 function isFuzzHostRoute(pathname: string, method: string): boolean {
 	return isPublicSignInRoute(pathname, method, true);
+}
+
+/** The Worker carrier runs before the sign-in core's HTTP route predicate. */
+export function discoverWorkerOuterRoutes(): readonly OuterRouteIdentity[] {
+	const root = 'packages/sign-in-host-cloudflare';
+	const config = ts.readConfigFile(`${root}/tsconfig.json`, ts.sys.readFile);
+	const parsed = ts.parseJsonConfigFileContent(config.config, ts.sys, root);
+	const program = ts.createProgram(parsed.fileNames, parsed.options);
+	const checker = program.getTypeChecker();
+	const entry = program.getSourceFile(`${root}/src/index.ts`);
+	if (entry === undefined) throw new Error('Worker entry is missing from the route inventory');
+	const routes: OuterRouteIdentity[] = [];
+	function visitEntry(node: ts.Node): void {
+		if (
+			ts.isCallExpression(node) &&
+			ts.isIdentifier(node.expression) &&
+			node.expression.text === 'forwardWorkerMachineLink'
+		) {
+			const helper = resolveDeclaration(node.expression, checker);
+			if (helper === undefined || !ts.isFunctionDeclaration(helper) || helper.body === undefined)
+				throw new Error('Worker link dispatch has no readable implementation');
+			const selectors: string[] = [];
+			const methods: string[] = [];
+			function visitDispatch(candidate: ts.Node): void {
+				if (
+					ts.isCallExpression(candidate) &&
+					ts.isPropertyAccessExpression(candidate.expression) &&
+					candidate.expression.name.text === 'startsWith'
+				) {
+					const argument = candidate.arguments[0];
+					const prefix = argument === undefined ? undefined : resolveDeclaration(argument, checker);
+					if (
+						prefix === undefined ||
+						!ts.isVariableDeclaration(prefix) ||
+						prefix.initializer === undefined ||
+						!ts.isStringLiteral(prefix.initializer)
+					)
+						throw new Error('Worker link dispatch needs a literal prefix');
+					selectors.push(prefix.initializer.text);
+				}
+				if (
+					ts.isBinaryExpression(candidate) &&
+					ts.isPropertyAccessExpression(candidate.left) &&
+					candidate.left.name.text === 'method' &&
+					candidate.operatorToken.kind === ts.SyntaxKind.ExclamationEqualsEqualsToken &&
+					ts.isStringLiteral(candidate.right)
+				)
+					methods.push(candidate.right.text);
+				ts.forEachChild(candidate, visitDispatch);
+			}
+			visitDispatch(helper.body);
+			const [prefix] = selectors;
+			const [method] = methods;
+			if (
+				selectors.length !== 1 ||
+				methods.length !== 1 ||
+				prefix === undefined ||
+				method === undefined
+			)
+				throw new Error('Worker link dispatch needs one literal prefix and method');
+			routes.push({ method, path: `${prefix}{organization_id}` });
+		}
+		ts.forEachChild(node, visitEntry);
+	}
+	visitEntry(entry);
+	return routes;
 }
 
 /** Discover the literal paths and prefixes of both outer handlers, through the compiler (run from the workspace root). */

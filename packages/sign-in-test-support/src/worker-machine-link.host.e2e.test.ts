@@ -1,6 +1,7 @@
 import { expect, it } from 'vitest';
 import { z } from 'zod';
 
+import { workerMachineLinkFamily } from '#sign-in-test-support/fuzz/request-families/worker-machine-link';
 import { useControlledSignInClock } from '#sign-in-test-support/test-fixtures/controlled-node-test-clock';
 import {
 	organizationOne,
@@ -62,8 +63,21 @@ it.skipIf(process.env.SIGN_IN_TEST_HOST === 'node')(
 			const worker = await harness.miniflare.getWorker('sign-in');
 			const publicLink = new URL(`/api/fleet/link/${organizationOne}`, harness.issuer);
 			const beforeUpgrade = harness.centralProvisioning.arrivals.length;
+			await Promise.all(
+				workerMachineLinkFamily.variants.map(async (variant): Promise<void> => {
+					const fixture = workerMachineLinkFamily.generate(organizationOne, variant);
+					const answer = await worker.fetch(new URL(fixture.pathname, harness.issuer).toString(), {
+						...fixture.init,
+						headers: Object.fromEntries(fixture.init.headers),
+					});
+					expect(answer.status, variant).toBe(fixture.status);
+					await answer.body?.cancel();
+				}),
+			);
+			expect(await arrivals()).toEqual([]);
+			expect(harness.centralProvisioning.arrivals).toHaveLength(beforeUpgrade);
 			const answer = await worker.fetch(publicLink.toString(), {
-				headers: { upgrade: 'websocket' },
+				headers: { upgrade: 'websocket', authorization: 'Bearer fixture-only-machine-token' },
 			});
 			expect(answer.status).toBe(401);
 			expect(await answer.text()).toBe('storage-worker-refusal');
