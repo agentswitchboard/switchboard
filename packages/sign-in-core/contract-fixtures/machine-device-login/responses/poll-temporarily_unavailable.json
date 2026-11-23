@@ -1,0 +1,10 @@
+{
+	"status": 503,
+	"headers": {
+		"cache-control": "no-store",
+		"retry-after": "5"
+	},
+	"body": {
+		"error": "temporarily_unavailable"
+	}
+}

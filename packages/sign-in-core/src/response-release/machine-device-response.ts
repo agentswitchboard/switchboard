@@ -7,7 +7,7 @@ import {
 	machineLabelSchema,
 } from '#sign-in-core/machine-login/machine-login-contracts';
 
-const deviceCodeResponse = z.object({
+export const machineDeviceCodeResponseSchema = z.object({
 	device_code: z.string().min(1),
 	user_code: z.string().min(1),
 	verification_uri: z.url(),
@@ -40,7 +40,7 @@ const knownDeviceError = z.enum([
 	'machine_revocation_forbidden',
 	'temporarily_unavailable',
 ]);
-const deviceErrorBody = z.object({
+export const machineDeviceErrorResponseSchema = z.object({
 	error: knownDeviceError,
 	reason: deviceLoginRefusalSchema.optional(),
 });
@@ -51,7 +51,9 @@ export async function projectMachineDeviceResponse(
 ): Promise<Response> {
 	const headers = machineResponseHeaders(response);
 	if (!response.ok) {
-		const parsed = deviceErrorBody.safeParse(await response.json().catch(() => null));
+		const parsed = machineDeviceErrorResponseSchema.safeParse(
+			await response.json().catch(() => null),
+		);
 		const error = response.status >= 500 ? 'temporarily_unavailable' : 'invalid_request';
 		return Response.json(parsed.success ? parsed.data : { error }, {
 			status: response.status,
@@ -78,7 +80,7 @@ export function machineResponseHeaders(response: Response): Headers {
 function machineResponseSchema(pathname: string): z.ZodType | null {
 	switch (pathname) {
 		case '/api/auth/device/code':
-			return deviceCodeResponse;
+			return machineDeviceCodeResponseSchema;
 		case '/api/auth/device':
 			return verifyDeviceResponse;
 		case '/api/auth/machine-login/approve':

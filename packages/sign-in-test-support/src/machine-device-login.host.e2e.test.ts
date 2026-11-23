@@ -11,6 +11,7 @@ import {
 import {
 	decideDeviceLoginSchema,
 	decideMachineTokenSchema,
+	fleetLoginDiscoveryResponseSchema,
 	machineTokenClaimsSchema,
 	machineTokenResponseSchema,
 } from '@agent-collaboration/sign-in-core/better-auth';
@@ -25,6 +26,7 @@ import {
 	controlledSignInIds,
 } from '#sign-in-test-support/test-fixtures/controlled-sign-in-clock';
 import { startLocalAuthHarness } from '#sign-in-test-support/test-fixtures/local-auth-harness';
+import { assertMachineDeviceReplayResponse } from '#sign-in-test-support/test-fixtures/machine-device-replay-response';
 import { installOrganizationBrowserCookie } from '#sign-in-test-support/test-fixtures/organization-browser-transport';
 import {
 	launchProofBrowser,
@@ -104,7 +106,7 @@ async function confirmAndRetryDenyInBrowser(props: {
 	});
 }
 
-it('the real sign-in host approves one machine ID and releases one redemption', async (): Promise<void> => {
+it('matches device-login replay fixtures while approving one machine ID and releasing one redemption', async (): Promise<void> => {
 	const approveBodies: z.infer<typeof decideDeviceLoginSchema>[] = [];
 	const mintBodies: z.infer<typeof decideMachineTokenSchema>[] = [];
 	const revokeBodies: Array<{ readonly organizationId: string; readonly enrollmentId: string }> =
@@ -197,6 +199,23 @@ it('the real sign-in host approves one machine ID and releases one redemption', 
 			machine_label: 'Proof Mac',
 			organization_id: organizationId,
 		};
+		const discovery = fleetLoginDiscoveryResponseSchema.parse(
+			await assertMachineDeviceReplayResponse(
+				'discovery',
+				await harness.auth('/.well-known/fleet-login'),
+			),
+		);
+		expect(discovery.client_id).toBe(routerClientId);
+		function pollDevice(issuedDeviceCode: string): Promise<Response> {
+			return harness.auth(
+				'/api/auth/oauth2/token',
+				publicForm({
+					grant_type: 'urn:ietf:params:oauth:grant-type:device_code',
+					client_id: routerClientId,
+					device_code: issuedDeviceCode,
+				}),
+			);
+		}
 		for (const retiredKey of ['machine_installation_id', 'machine_peer_id']) {
 			const refused = await harness.auth(
 				'/api/auth/device/code',
@@ -207,8 +226,24 @@ it('the real sign-in host approves one machine ID and releases one redemption', 
 		}
 		expect(await harness.database.select({ id: deviceCode.id }).from(deviceCode)).toEqual([]);
 		const started = await harness.auth('/api/auth/device/code', publicForm(deviceRequest));
-		expect(started.status).toBe(200);
-		const code = deviceStartSchema.parse(await started.json());
+		const code = deviceStartSchema.parse(
+			await assertMachineDeviceReplayResponse('device-code-start', started),
+		);
+		const pendingStart = await harness.auth(
+			'/api/auth/device/code',
+			publicForm({
+				...deviceRequest,
+				machine_id: controlledSignInIds.nextId(),
+				machine_label: 'Unapproved fixture Mac',
+			}),
+		);
+		const pendingCode = deviceStartSchema.parse(
+			await assertMachineDeviceReplayResponse('device-code-start', pendingStart),
+		);
+		await assertMachineDeviceReplayResponse(
+			'poll-authorization_pending',
+			await pollDevice(pendingCode.device_code),
+		);
 		const pathname = `/device?user_code=${encodeURIComponent(code.user_code)}`;
 		offerDirectory();
 		const page = await harness.auth(pathname);
@@ -290,16 +325,7 @@ it('the real sign-in host approves one machine ID and releases one redemption', 
 			harness.centralAdmin.arrivals.filter(({ route }) => route === 'ListWorkspaces'),
 		).toHaveLength(6);
 
-		const poll = (): Promise<Response> =>
-			harness.auth(
-				'/api/auth/oauth2/token',
-				publicForm({
-					grant_type: 'urn:ietf:params:oauth:grant-type:device_code',
-					client_id: routerClientId,
-					device_code: code.device_code,
-				}),
-			);
-		const polled = await Promise.all([poll(), poll()]);
+		const polled = await Promise.all([pollDevice(code.device_code), pollDevice(code.device_code)]);
 		const redeemFailures = await Promise.all(
 			polled
 				.filter((response) => !response.ok)
@@ -315,7 +341,9 @@ it('the real sign-in host approves one machine ID and releases one redemption', 
 		if (winner === undefined) throw new Error('No poller received a token');
 		expect(winner.headers.has('set-cookie')).toBe(false);
 		expect(winner.headers.has('authorization')).toBe(false);
-		const tokens = machineTokenResponseSchema.strict().parse(await winner.json());
+		const tokens = machineTokenResponseSchema
+			.strict()
+			.parse(await assertMachineDeviceReplayResponse('token-success', winner));
 		const claims = machineTokenClaimsSchema.parse(decodeJwt(tokens.access_token));
 		expect(claims.principal).toEqual({
 			kind: 'machine',
@@ -340,9 +368,14 @@ it('the real sign-in host approves one machine ID and releases one redemption', 
 				}),
 			);
 		const renewed = await refresh(tokens.refresh_token);
-		expect(renewed.status).toBe(200);
-		const replacement = machineTokenResponseSchema.strict().parse(await renewed.json());
+		const replacement = machineTokenResponseSchema
+			.strict()
+			.parse(await assertMachineDeviceReplayResponse('refresh-success', renewed));
 		expect(replacement.refresh_token !== tokens.refresh_token).toBe(true);
+		await assertMachineDeviceReplayResponse(
+			'refresh-invalid_grant',
+			await refresh('fixture-only-unissued-refresh-token'),
+		);
 		expect(mintBodies).toHaveLength(2);
 		const revoked = await harness.auth('/api/auth/organization-admin/revoke-machine-enrollment', {
 			method: 'POST',

@@ -1,0 +1,14 @@
+{
+	"status": 200,
+	"headers": {
+		"cache-control": "no-store"
+	},
+	"body": {
+		"device_code": "fixture-only-device-code",
+		"user_code": "ABCD-EFGH",
+		"verification_uri": "https://sign-in.example.invalid/device",
+		"verification_uri_complete": "https://sign-in.example.invalid/device?user_code=ABCD-EFGH",
+		"expires_in": 600,
+		"interval": 5
+	}
+}
