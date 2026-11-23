@@ -42,8 +42,9 @@ import {
 useControlledSignInClock();
 type Harness = Awaited<ReturnType<typeof startLocalAuthHarness>>;
 const adminAudience = 'https://central.example.invalid/admin';
-// PD 2530c3a3's nine route permissions, sorted; an owner holds them all.
+// PD 2530c3a3's route permissions and C3's `approval:decide`, sorted; an owner holds them all.
 const ownerPermissions = [
+	'approval:decide',
 	'machine:enroll',
 	'machine:revoke',
 	'machine:setTokenLifetime',
