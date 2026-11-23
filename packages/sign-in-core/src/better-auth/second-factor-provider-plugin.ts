@@ -65,6 +65,8 @@ const nativeConfirmationSchema = z.object({
 
 /** The passkey plugin's challenge cookie name: its default, which sign-in does not override. */
 const passkeyChallengeCookieName = 'better-auth-passkey';
+/** The verification row the challenge cookie names, as the adapter returns it. */
+const storedVerificationRowSchema = z.object({ value: z.string(), expiresAt: z.coerce.date() });
 const storedRegistrationChallengeSchema = z.object({
 	type: z.literal('registration'),
 	expectedChallenge: z.string(),
@@ -88,38 +90,71 @@ export function createSecondFactorProviderPlugin(props: {
 		requireFactorChange({ clock: props.platform.clock, factors: actor.factors, change });
 	}
 	/**
+	 * The live registration challenge the signed cookie names, read without any write: one adapter
+	 * `findOne` on `verification`. An expired row counts as absent, as the plugin's own consume treats
+	 * it. (`internalAdapter.findVerificationValue` is not used: it deletes expired rows table-wide.)
+	 */
+	async function readLiveRegistrationChallenge(
+		context: Parameters<Parameters<typeof createAuthMiddleware>[0]>[0],
+		actor: FactorActor,
+	): Promise<string | null> {
+		const cookie = context.context.createAuthCookie(passkeyChallengeCookieName);
+		const token = await context.getSignedCookie(cookie.name, context.context.secret);
+		if (!token) return null;
+		const row = storedVerificationRowSchema.safeParse(
+			await context.context.adapter.findOne({
+				model: 'verification',
+				where: [{ field: 'identifier', value: token }],
+			}),
+		);
+		if (!row.success || row.data.expiresAt.getTime() < props.platform.clock.now()) return null;
+		let storedJson: unknown;
+		try {
+			storedJson = JSON.parse(row.data.value);
+		} catch {
+			return null;
+		}
+		const challenge = storedRegistrationChallengeSchema.safeParse(storedJson);
+		return challenge.success && challenge.data.userData.id === actor.personId
+			? challenge.data.expectedChallenge
+			: null;
+	}
+	/**
 	 * Verify the registration the way the passkey plugin will, without consuming its challenge, so a
-	 * client fault answers 4xx. The plugin turns every verifier throw into 500. A missing or foreign
-	 * challenge is left to the plugin's own 4xx answers.
+	 * known client fault answers 400 instead of the plugin's 500. A missing, expired or foreign
+	 * challenge is left to the plugin's own 4xx answers; a verifier failure no credential error
+	 * explains answers 500 here, before the plugin consumes anything.
 	 */
 	async function refuseUnverifiableRegistration(
 		context: Parameters<Parameters<typeof createAuthMiddleware>[0]>[0],
 		actor: FactorActor,
 	): Promise<void> {
-		const cookie = context.context.createAuthCookie(passkeyChallengeCookieName);
-		const token = await context.getSignedCookie(cookie.name, context.context.secret);
-		if (!token) return;
-		const stored = await context.context.internalAdapter.findVerificationValue(token);
-		if (!stored) return;
-		let storedJson: unknown;
-		try {
-			storedJson = JSON.parse(stored.value);
-		} catch {
-			return;
-		}
-		const challenge = storedRegistrationChallengeSchema.safeParse(storedJson);
-		if (!challenge.success || challenge.data.userData.id !== actor.personId) return;
+		const expectedChallenge = await readLiveRegistrationChallenge(context, actor);
+		if (expectedChallenge === null) return;
 		const body = z.object({ response: z.unknown() }).safeParse(context.body);
 		const verification = await verifyPasskeyRegistrationResponse({
 			response: body.success ? body.data.response : undefined,
-			expected: { challenge: challenge.data.expectedChallenge, ...props.passkeyRelyingParty },
+			expected: { challenge: expectedChallenge, ...props.passkeyRelyingParty },
 		});
-		if (verification.kind === 'verified') return;
-		throw new APIError('BAD_REQUEST', {
-			error: 'invalid_request',
-			reason: verification.reason,
-			message: describePasskeyRegistrationRefusal(verification.reason),
-		});
+		switch (verification.kind) {
+			case 'verified':
+				return;
+			case 'refused':
+				throw new APIError('BAD_REQUEST', {
+					error: 'invalid_request',
+					reason: verification.reason,
+					message: describePasskeyRegistrationRefusal(verification.reason),
+				});
+			case 'verifier-failed':
+				context.context.logger.error('Passkey registration verifier failed', verification.failure);
+				throw new APIError('INTERNAL_SERVER_ERROR', {
+					message: 'passkey-registration-verifier-failed',
+				});
+			default: {
+				const unreachable: never = verification;
+				throw new Error(`Unhandled verification outcome ${JSON.stringify(unreachable)}`);
+			}
+		}
 	}
 	return {
 		id: 'sign-in-second-factors',

@@ -15,9 +15,15 @@ export type PasskeyRegistrationRefusalReason =
 	| 'publicKey'
 	| 'malformed';
 
+/**
+ * What one verification run concluded. `verifier-failed` is not a client fault: the verifier failed
+ * in a way no known credential error explains (WebCrypto unavailable or throwing, for one), so the
+ * caller answers it as the server error it is.
+ */
 export type PasskeyRegistrationVerification =
 	| { readonly kind: 'verified' }
-	| { readonly kind: 'refused'; readonly reason: PasskeyRegistrationRefusalReason };
+	| { readonly kind: 'refused'; readonly reason: PasskeyRegistrationRefusalReason }
+	| { readonly kind: 'verifier-failed'; readonly failure: unknown };
 
 export interface PasskeyRegistrationExpectation {
 	readonly challenge: string;
@@ -36,41 +42,88 @@ const registrationResponseWireSchema = z.object({
 	response: z.object({ clientDataJSON: z.string(), attestationObject: z.string() }),
 });
 
-/** Where each refusal reason is recognised: the message @simplewebauthn/server 13.3.3 throws. */
-const refusalReasonByMessage: readonly {
+/**
+ * The known credential errors, by what @simplewebauthn/server 13.3.3 and the libraries it calls
+ * throw for client-supplied input. Anything not listed here is not assumed to be the client's fault.
+ */
+interface ThrownError {
+	readonly name: string;
+	readonly message: string;
+}
+
+/** The name and message of a thrown value. DOMException is read the same way on every runtime. */
+function readThrownError(error: unknown): ThrownError | null {
+	if (typeof error !== 'object' || error === null || !('name' in error) || !('message' in error))
+		return null;
+	const { name, message } = error;
+	return typeof name === 'string' && typeof message === 'string' ? { name, message } : null;
+}
+
+const knownCredentialFaults: readonly {
 	readonly reason: PasskeyRegistrationRefusalReason;
-	readonly pattern: RegExp;
+	readonly matches: (error: ThrownError) => boolean;
 }[] = [
-	{ reason: 'challenge', pattern: /^Unexpected registration response challenge /u },
-	{ reason: 'origin', pattern: /^Unexpected registration response origin /u },
-	{ reason: 'rpId', pattern: /^Unexpected RP ID hash$/u },
+	{
+		reason: 'challenge',
+		matches: (error) => /^Unexpected registration response challenge /u.test(error.message),
+	},
+	{
+		reason: 'origin',
+		matches: (error) => /^Unexpected registration response origin /u.test(error.message),
+	},
+	{ reason: 'rpId', matches: (error) => error.name === 'UnexpectedRPIDHash' },
 	{
 		reason: 'credentialData',
-		pattern: /^No (credential ID|public key|AAGUID) (was provided|was present)/u,
+		matches: (error) =>
+			/^No (credential ID|public key) was provided by authenticator$|^No AAGUID was present during registration$/u.test(
+				error.message,
+			),
 	},
 	{
 		reason: 'publicKey',
-		// A key that decodes to something other than a COSE map fails on `.get` inside the verifier.
-		pattern:
-			/^(Credential public key was missing numeric alg|Unexpected public key alg |decodedPublicKey\.get is not a function)/u,
+		matches: (error) =>
+			// WebCrypto refuses key bytes that do not describe a key (a point off the curve): DataError.
+			error.name === 'DataError' ||
+			// A key that decodes to something other than a COSE map fails on `.get` inside the verifier.
+			/^(Credential public key was missing numeric alg|Unexpected public key alg |decodedPublicKey\.get is not a function|Public key was missing (alg|crv|x|y|n|e) \(|Public key had invalid alg |Unexpected COSE crv value of |unknown COSE curve |Signature verification with public key of kty |Could not map COSE alg value of |Unexpected RSA key algorithm )/u.test(
+				error.message,
+			),
+	},
+	{
+		reason: 'signature',
+		// The signature bytes are not a DER ECDSA signature: the ASN.1 parser refuses them.
+		matches: (error) =>
+			/^(Data does not match to ECDSASigValue ASN1 schema|Input buffer has zero length$|Invalid signature component length )/u.test(
+				error.message,
+			),
 	},
 	{
 		reason: 'attestation',
-		pattern:
-			/^(Unsupported Attestation Format|None attestation had unexpected|No attestation |Attestation statement )|\((Packed|FIDOU2F|TPM|AndroidKey|AndroidSafetyNet|Apple)/u,
+		matches: (error) =>
+			/^(Unsupported Attestation Format|None attestation had unexpected|No attestation |Attestation statement )|\((Packed|FIDOU2F|TPM|AndroidKey|AndroidSafetyNet|Apple)/u.test(
+				error.message,
+			),
+	},
+	{
+		reason: 'malformed',
+		matches: (error) =>
+			/^(Missing credential ID$|Credential ID was not base64url-encoded$|Unexpected credential type |Unexpected registration response type|Unexpected value for TokenBinding |Unexpected tokenBinding\.status |User presence was required|Authenticator data was \d+ bytes|Leftover bytes detected while parsing authenticator data$|Error decoding authenticator extensions: )/u.test(
+				error.message,
+			),
 	},
 ];
 
-function classifyVerificationFault(error: unknown): PasskeyRegistrationRefusalReason {
-	if (!(error instanceof Error)) return 'malformed';
-	for (const { reason, pattern } of refusalReasonByMessage)
-		if (pattern.test(error.message)) return reason;
-	return 'malformed';
+function classifyVerificationFault(error: unknown): PasskeyRegistrationVerification {
+	const thrown = readThrownError(error);
+	if (thrown !== null)
+		for (const { reason, matches } of knownCredentialFaults)
+			if (matches(thrown)) return { kind: 'refused', reason };
+	return { kind: 'verifier-failed', failure: error };
 }
 
 /**
- * Run the verifier the Better Auth passkey plugin will run, and name a client fault instead of
- * throwing it. Every input here comes from the client, so a throw from verification is a refusal.
+ * Run the verifier the Better Auth passkey plugin will run, and name a known client fault instead of
+ * throwing it. A failure no known credential error explains stays a verifier failure.
  */
 export async function verifyPasskeyRegistrationResponse(props: {
 	readonly response: unknown;
@@ -86,10 +139,11 @@ export async function verifyPasskeyRegistrationResponse(props: {
 			expectedRPID: props.expected.rpId,
 			requireUserVerification: false,
 		});
-		// A signature or attestation statement that checks and fails is reported as unverified, not thrown.
+		// A well-formed signature that does not verify (valid DER from the wrong key, say) is reported
+		// as `verified: false`, not thrown. The attestation formats sign-in accepts report it the same way.
 		return verification.verified ? { kind: 'verified' } : { kind: 'refused', reason: 'signature' };
 	} catch (error) {
-		return { kind: 'refused', reason: classifyVerificationFault(error) };
+		return classifyVerificationFault(error);
 	}
 }
 

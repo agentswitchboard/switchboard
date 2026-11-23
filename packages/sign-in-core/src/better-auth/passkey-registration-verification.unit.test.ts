@@ -1,7 +1,7 @@
 import { createHash, generateKeyPairSync, randomBytes, sign } from 'node:crypto';
 
 import { isoCBOR } from '@simplewebauthn/server/helpers';
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import {
 	verifyPasskeyRegistrationResponse,
@@ -33,7 +33,8 @@ interface RegistrationParts {
 	readonly attestedCredentialData?: boolean;
 	readonly credentialPublicKeyBytes?: Uint8Array;
 	readonly attestationFormat?: string;
-	readonly packedSelfSignature?: 'valid' | 'wrong-signer';
+	readonly packedSelfSignature?: 'valid' | 'wrong-signer' | 'not-der' | 'empty';
+	readonly userPresent?: boolean;
 }
 
 /** A real registration wire response, with one part changed per test. */
@@ -51,7 +52,7 @@ function registrationResponse(parts: RegistrationParts = {}): unknown {
 		createHash('sha256')
 			.update(parts.rpIdHashedInAuthData ?? expected.rpId)
 			.digest(),
-		Buffer.from([attested ? 0x41 : 0x01]),
+		Buffer.from([(attested ? 0x40 : 0) | ((parts.userPresent ?? true) ? 0x01 : 0)]),
 		Buffer.alloc(4),
 	]);
 	const credentialLength = Buffer.alloc(2);
@@ -67,15 +68,21 @@ function registrationResponse(parts: RegistrationParts = {}): unknown {
 		: header;
 	const attestationStatement = new Map<string, number | Uint8Array>();
 	if (parts.packedSelfSignature !== undefined) {
-		const signer =
-			parts.packedSelfSignature === 'valid'
-				? privateKey
-				: generateKeyPairSync('ec', { namedCurve: 'prime256v1' }).privateKey;
 		const signedBytes = Buffer.concat([authData, createHash('sha256').update(clientData).digest()]);
 		attestationStatement.set('alg', -7);
 		attestationStatement.set(
 			'sig',
-			sign('sha256', signedBytes, { key: signer, dsaEncoding: 'der' }),
+			parts.packedSelfSignature === 'not-der'
+				? new Uint8Array(70).fill(1)
+				: parts.packedSelfSignature === 'empty'
+					? new Uint8Array(0)
+					: sign('sha256', signedBytes, {
+							key:
+								parts.packedSelfSignature === 'valid'
+									? privateKey
+									: generateKeyPairSync('ec', { namedCurve: 'prime256v1' }).privateKey,
+							dsaEncoding: 'der',
+						}),
 		);
 	}
 	const attestationObject = isoCBOR.encode(
@@ -123,11 +130,32 @@ describe('verifyPasskeyRegistrationResponse', (): void => {
 		['challenge', { clientChallenge: 'b3RoZXI' }],
 		['origin', { clientOrigin: 'https://other.example.invalid' }],
 		['rpId', { rpIdHashedInAuthData: 'other.example.invalid' }],
+		// Valid DER from the wrong key: the verifier reports verified: false, which maps to signature.
 		['signature', { packedSelfSignature: 'wrong-signer' }],
+		// Bytes that are not a DER ECDSA signature: the ASN.1 parser refuses them.
+		['signature', { packedSelfSignature: 'not-der' }],
+		['signature', { packedSelfSignature: 'empty' }],
 		['attestation', { attestationFormat: 'unknown-format' }],
 		['credentialData', { attestedCredentialData: false }],
 		['publicKey', { credentialPublicKeyBytes: isoCBOR.encode(new Map([[1, 2]])) }],
 		['publicKey', { credentialPublicKeyBytes: isoCBOR.encode(7) }],
+		// A COSE EC2 key whose point is not on the curve: WebCrypto's importKey refuses it (DataError).
+		[
+			'publicKey',
+			{
+				credentialPublicKeyBytes: isoCBOR.encode(
+					new Map<number, number | Uint8Array>([
+						[1, 2],
+						[3, -7],
+						[-1, 1],
+						[-2, new Uint8Array(32).fill(7)],
+						[-3, new Uint8Array(32).fill(9)],
+					]),
+				),
+				packedSelfSignature: 'valid',
+			},
+		],
+		['malformed', { userPresent: false }],
 	];
 	it.each(faults)('refuses a %s fault with that reason', async (reason, parts): Promise<void> => {
 		expect(
@@ -142,5 +170,39 @@ describe('verifyPasskeyRegistrationResponse', (): void => {
 		expect(await verifyPasskeyRegistrationResponse({ response: undefined, expected })).toEqual(
 			refusal('malformed'),
 		);
+	});
+
+	describe('a verifier failure no credential error explains', (): void => {
+		afterEach((): void => {
+			vi.restoreAllMocks();
+		});
+
+		// A packed self-attestation, so verification imports the credential key through WebCrypto.
+		// (Failing the RP ID digest instead hangs: SimpleWebAuthn 13.3.3's matchExpectedRPID never
+		// settles when that digest rejects.)
+		const packedRegistration = (): unknown =>
+			registrationResponse({ packedSelfSignature: 'valid' });
+
+		it('is a verifier failure, not a refusal, when WebCrypto throws', async (): Promise<void> => {
+			const failure = new DOMException('Injected WebCrypto failure', 'OperationError');
+			vi.spyOn(globalThis.crypto.subtle, 'importKey').mockRejectedValue(failure);
+			expect(
+				await verifyPasskeyRegistrationResponse({ response: packedRegistration(), expected }),
+			).toEqual({ kind: 'verifier-failed', failure });
+		});
+
+		it('is a verifier failure when WebCrypto is unavailable', async (): Promise<void> => {
+			// What SimpleWebAuthn's getWebCrypto rejects with when the runtime has no Crypto API.
+			const failure = Object.assign(
+				new Error('An instance of the Crypto API could not be located'),
+				{
+					name: 'MissingWebCrypto',
+				},
+			);
+			vi.spyOn(globalThis.crypto.subtle, 'importKey').mockRejectedValue(failure);
+			expect(
+				await verifyPasskeyRegistrationResponse({ response: packedRegistration(), expected }),
+			).toEqual({ kind: 'verifier-failed', failure });
+		});
 	});
 });
