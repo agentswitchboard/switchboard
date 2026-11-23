@@ -13,6 +13,7 @@ Consumer copies from codex-router `24dfd34898776612347a25e973921f7f70e405dd`, ce
 
 - `approval-intent-vector.json` and `approval-person-reply-vectors.json` are central's byte vectors from `contracts/`: the request body, canonical intent and digest for list, read and decide, and the canonical bytes of each reply variant. The SHA-256 values above are of the producer bytes as copied; these files use Switchboard formatting (oxfmt), and their parsed JSON equals the producer files. The canonical strings inside them are unchanged.
 - `specimen-literals.json` holds the bodies central's `8670195` specimens test writes inline: one accepted last page and the malformed list bodies it refuses. Its two `factorRequired` decide literals were dropped at `24dfd348`, when the owner removed the second-factor reply from C3.
+- `src/central-link/approval-person-results.ts` records, as typed constants, the HTTP status each reply variant and refusal arrives with, from `approval-person-results.md`.
 
 `POST /organization-admin/v1/approval-{list,read,decide}` travels the private link with `Authorization: DPoP <person-fleet token>` and `DPoP: <proof>`, like the admin routes. The proof's `intent` is base64url(SHA-256(JCS(intent))) over central's `ApprovalIntent`. All three need `approval:decide`, which only the organization owner holds. Approvals need no second factor.
 
