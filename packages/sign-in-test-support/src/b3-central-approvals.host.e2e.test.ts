@@ -28,6 +28,16 @@ import { webSignInCrypto } from '#sign-in-test-support/test-fixtures/recording-s
 
 useControlledSignInClock();
 
+/*
+ * C3 live check against real central. Known gap, accepted by the Sign-in Lead (23 Nov): real
+ * central lists and decides only requests a Router raised over the machine link, and the
+ * machine-link client is the Mac Lead's work. So this file cannot save a decision or answer a
+ * second approve alreadyDecided against real central; both stay proven against the stand-in on
+ * both hosts (approval-person-relay.host.e2e.test.ts). What runs here is everything that needs no
+ * raised request: list, read and decide notVisible, the retained retry, operationConflict, and a
+ * member's notPermitted.
+ */
+
 /** Central main 1ede5c1b9's native build (c3CentralProofPin), started as the Tokio pair's central. */
 const centralExecutable = process.env.C3_CENTRAL_SERVE;
 const tokioPair = process.env.SIGN_IN_TEST_HOST === 'node';
