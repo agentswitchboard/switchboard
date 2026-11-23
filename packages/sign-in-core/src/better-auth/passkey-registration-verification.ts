@@ -50,7 +50,9 @@ const refusalReasonByMessage: readonly {
 	},
 	{
 		reason: 'publicKey',
-		pattern: /^(Credential public key was missing numeric alg|Unexpected public key alg )/u,
+		// A key that decodes to something other than a COSE map fails on `.get` inside the verifier.
+		pattern:
+			/^(Credential public key was missing numeric alg|Unexpected public key alg |decodedPublicKey\.get is not a function)/u,
 	},
 	{
 		reason: 'attestation',
@@ -85,9 +87,7 @@ export async function verifyPasskeyRegistrationResponse(props: {
 			requireUserVerification: false,
 		});
 		// A signature or attestation statement that checks and fails is reported as unverified, not thrown.
-		return verification.verified
-			? { kind: 'verified' }
-			: { kind: 'refused', reason: 'signature' };
+		return verification.verified ? { kind: 'verified' } : { kind: 'refused', reason: 'signature' };
 	} catch (error) {
 		return { kind: 'refused', reason: classifyVerificationFault(error) };
 	}
