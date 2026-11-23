@@ -66,10 +66,11 @@ export {
 	approvalRequestIdSchema,
 	offeredOptionIdSchema,
 	questionFieldIdSchema,
+	questionAnswerSchema,
 	questionNumberSchema,
 } from '#sign-in-core/contracts/approval-wire-values';
 export {
 	personFleetTokenBindingSchema,
 	type PersonFleetTokenClaims,
 } from '#sign-in-core/contracts/person-fleet-token';
-export type { CanonicalJsonValue } from '#sign-in-core/contracts/canonical-json';
+export { canonicalJson, type CanonicalJsonValue } from '#sign-in-core/contracts/canonical-json';

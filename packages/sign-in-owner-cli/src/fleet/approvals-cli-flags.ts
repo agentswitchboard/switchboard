@@ -11,7 +11,7 @@ const subcommandFlags = {
 	show: [],
 	approve: ['option', 'operation-id'],
 	deny: ['option', 'operation-id'],
-	answer: ['field', 'operation-id'],
+	answer: ['field', 'answer', 'operation-id'],
 } as const satisfies Record<ApprovalsSubcommand, readonly string[]>;
 
 /** The first supplied flag this subcommand does not take, or null when every flag is its own. */

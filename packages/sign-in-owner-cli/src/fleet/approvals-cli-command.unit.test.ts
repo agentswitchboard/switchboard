@@ -1,5 +1,11 @@
-import { approvalPersonIntentDigest } from '@agent-collaboration/sign-in-core';
+import {
+	approvalPersonIntent,
+	approvalPersonIntentDigest,
+	approvalPersonOperationSchema,
+	canonicalJson,
+} from '@agent-collaboration/sign-in-core';
 import { describe, expect, it } from 'vitest';
+import { z } from 'zod';
 
 import {
 	decideReplyWords,
@@ -355,7 +361,7 @@ describe('approvals approve and deny', (): void => {
 			['answer', requestId],
 			{ option: '1', field: ['1=x'] },
 			'option',
-			'takes --field, --operation-id',
+			'takes --field, --answer, --operation-id',
 		],
 		[
 			'approve',
@@ -422,7 +428,22 @@ describe('recovery with --operation-id (no read)', (): void => {
 		[
 			'answer',
 			{ field: ['1=latency'] },
-			/questions cannot be recovered this way yet\. Nothing was sent\.$/u,
+			/--field and --answer|must repeat the exact answer: --answer '<json>'.*Nothing was sent\.$/u,
+		],
+		[
+			'answer',
+			{ answer: '{"kind":"answered","fields":[' },
+			/must repeat the exact answer: --answer '<json>'.*Nothing was sent\.$/u,
+		],
+		[
+			'answer',
+			{ answer: '{"kind":"answered","fields":[],"note":"x"}' },
+			/must repeat the exact answer: --answer '<json>'.*Nothing was sent\.$/u,
+		],
+		[
+			'answer',
+			{ answer: '{"kind":"answered","fields":[{"fieldId":1,"value":{"kind":"text"}}]}' },
+			/must repeat the exact answer: --answer '<json>'.*Nothing was sent\.$/u,
 		],
 		[
 			'approve',
@@ -544,5 +565,95 @@ describe('arguments', (): void => {
 		[['reply', requestId]],
 	])('refuses %j before any request', async (args): Promise<void> => {
 		await expect(approvals(args, [])).rejects.toThrow();
+	});
+});
+
+describe('question recovery with --answer', (): void => {
+	const operationId = '019a3dce-2000-7000-8000-0000000000f1';
+	const questionAnswer = {
+		kind: 'answered',
+		fields: [
+			{ fieldId: 2, value: { kind: 'selectedOptions', selectedOptionIds: [2] } },
+			{ fieldId: 1, value: { kind: 'text', value: "it's latency" } },
+		],
+	} as const;
+
+	it('answer --operation-id --answer sends the decide straight away with that exact answer', async (): Promise<void> => {
+		const result = await approvals(
+			['answer', requestId],
+			[savedAnswer({ kind: 'question', answer: questionAnswer })],
+			{ 'operation-id': operationId, answer: JSON.stringify(questionAnswer) },
+		);
+		expect(result.exitCode).toBe(0);
+		expect(result.calls.map((call) => call.path)).toEqual([
+			'/api/auth/organization-admin/v1/approval-decide',
+		]);
+		expect(result.calls[0]?.body).toEqual({
+			organization,
+			requestId,
+			operationId,
+			answer: { kind: 'question', answer: questionAnswer },
+		});
+	});
+
+	it.each([
+		[{ answer: JSON.stringify(questionAnswer) }, /needs --operation-id\. Nothing was sent\.$/u],
+		[
+			{ 'operation-id': operationId, answer: JSON.stringify(questionAnswer), field: ['1=x'] },
+			/--field and --answer cannot be used together\. Nothing was sent\.$/u,
+		],
+	] as const)(
+		'refuses %j before any credential or request',
+		async (flags, words): Promise<void> => {
+			const result = await approvals(['answer', requestId], [], flags);
+			expect(result.exitCode).toBe(2);
+			expect(result.lines).toEqual([expect.stringMatching(words)]);
+			expect(result.calls).toEqual([]);
+			expect(result.refreshes).toBe(0);
+		},
+	);
+
+	it('the no-answer advice prints the question repeat whose --answer round-trips to the same canonical bytes', async (): Promise<void> => {
+		// Arrange: a first answer, built from --field arguments, gets no answer twice.
+		const result = await approvals(
+			['answer', requestId],
+			[readRequest(questionView), unavailable, unavailable],
+			{ field: ['2=2', "1=it's latency"] },
+		);
+		expect(result.exitCode).toBe(1);
+		const firstBody = z
+			.object({ operationId: z.string(), answer: z.unknown() })
+			.parse(result.calls[1]?.body);
+		const [advice = ''] = result.lines;
+		// Act: read the printed --answer word as a POSIX shell would, then recover with it.
+		const printed = /--answer '((?:[^']|'\\'')*)'\./u.exec(advice)?.[1]?.replaceAll("'\\''", "'");
+		expect(advice).toContain(
+			`approvals answer ${requestId} --operation-id ${firstBody.operationId} --answer '`,
+		);
+		const recovered = await approvals(
+			['answer', requestId],
+			[savedAnswer({ kind: 'question', answer: questionAnswer })],
+			{ 'operation-id': firstBody.operationId, answer: printed },
+		);
+		// Assert: the recovery's answer, and so its signed intent, is the first send's, byte for byte.
+		const recoveredBody = z
+			.object({ operationId: z.string(), answer: z.unknown() })
+			.parse(recovered.calls[0]?.body);
+		expect(recoveredBody).toEqual(firstBody);
+		const intent = (body: typeof firstBody): string =>
+			canonicalJson(
+				approvalPersonIntent(
+					approvalPersonOperationSchema.parse({
+						operation: 'ApprovalDecide',
+						organization,
+						requestId,
+						...body,
+					}),
+				),
+			);
+		expect(intent(recoveredBody)).toBe(intent(firstBody));
+		expect(decodeJwt(recovered.calls[0]?.proof ?? '')['intent']).toBe(
+			decodeJwt(result.calls[1]?.proof ?? '')['intent'],
+		);
 	});
 });

@@ -1,5 +1,7 @@
 import {
+	canonicalJson,
 	offeredOptionIdSchema,
+	questionAnswerSchema,
 	questionFieldIdSchema,
 	questionNumberSchema,
 	type ApprovalPersonOperation,
@@ -292,25 +294,40 @@ export function questionRefusalWords(
 }
 
 /**
- * PR #24 review B1: a recovery with `--operation-id` sends the decide straight away, with no
- * read, so central can return a result it retained even after `approval:decide` was removed. The
- * answer must therefore be stated in full: `--option N` for a provider approval, or the verb
- * alone (approve allows, deny declines) for an unproven call. A question's fields cannot be typed
- * without reading the question, so question recovery is refused (held for the Sign-in Lead).
- * Nothing is stored locally.
+ * PR #24 review B1 and the Lead's step 2d decision: a recovery with `--operation-id` sends the
+ * decide straight away, with no read, so central can return a result it retained even after
+ * `approval:decide` was removed. The answer must be stated in full: `--option N` for a provider
+ * approval, the verb alone (approve allows, deny declines) for an unproven call, and for a
+ * question the complete answer as one `--answer '<json>'`, exactly as the no-answer advice
+ * printed it. The JSON is read with the step-1 QuestionAnswer schema (strict, equal to the
+ * generated type) and sent through the same canonical intent builder, so its bytes match the
+ * first send. Nothing is stored locally.
  */
 export function recoveryAnswer(props: {
 	readonly verb: 'approve' | 'deny' | 'answer';
 	readonly option: string | undefined;
+	readonly answerJson: string | undefined;
 }):
 	| { readonly kind: 'answer'; readonly answer: DecideAnswer }
 	| { readonly kind: 'refused'; readonly words: string } {
-	if (props.verb === 'answer')
-		return {
+	if (props.verb === 'answer') {
+		const refused = {
 			kind: 'refused',
 			words:
-				"A recovery with --operation-id sends the decide without reading the request, so it must repeat the exact answer; a question's fields cannot be typed exactly without reading it, so questions cannot be recovered this way yet. Nothing was sent.",
-		};
+				"A question's recovery with --operation-id sends the decide without reading the request, so it must repeat the exact answer: --answer '<json>' as the first decide's advice printed it. Nothing was sent.",
+		} as const;
+		if (props.answerJson === undefined) return refused;
+		let decoded: unknown;
+		try {
+			decoded = JSON.parse(props.answerJson);
+		} catch {
+			return refused;
+		}
+		const answer = questionAnswerSchema.safeParse(decoded);
+		return answer.success
+			? { kind: 'answer', answer: { kind: 'question', answer: answer.data } }
+			: refused;
+	}
 	if (props.option === undefined)
 		return {
 			kind: 'answer',
@@ -328,15 +345,21 @@ export function recoveryAnswer(props: {
 			};
 }
 
+/** One POSIX shell word: single-quoted, with each `'` closed, escaped and reopened. */
+function shellWord(text: string): string {
+	return `'${text.replaceAll("'", "'\\''")}'`;
+}
+
 /**
  * The exact command that repeats this decide: the same operation id and the same answer, sent
- * without a read. Null for a question, which cannot be recovered that way yet.
+ * without a read. A question's answer is printed whole as `--answer '<json>'` (its canonical
+ * JSON, shell-quoted), since its fields cannot be retyped without the question.
  */
 export function repeatCommand(props: {
 	readonly requestId: string;
 	readonly operationId: string;
 	readonly answer: DecideAnswer;
-}): string | null {
+}): string {
 	const base = `--operation-id ${props.operationId}`;
 	switch (props.answer.kind) {
 		case 'unprovenCall':
@@ -344,7 +367,7 @@ export function repeatCommand(props: {
 		case 'approval':
 			return `approvals approve ${props.requestId} ${base} --option ${props.answer.optionId}`;
 		case 'question':
-			return null;
+			return `approvals answer ${props.requestId} ${base} --answer ${shellWord(canonicalJson(props.answer.answer))}`;
 		default:
 			return props.answer satisfies never;
 	}

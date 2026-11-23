@@ -1,6 +1,7 @@
 import { writeFile } from 'node:fs/promises';
 import path from 'node:path';
 
+import { canonicalJson } from '@agent-collaboration/sign-in-core';
 import {
 	createMemoryProofKeyStore,
 	runOwnerCli,
@@ -39,6 +40,7 @@ function flagsFor(options: ApprovalsCommandOptions): readonly string[] {
 		...(options.option === undefined ? [] : ['--option', options.option]),
 		...(options['operation-id'] === undefined ? [] : ['--operation-id', options['operation-id']]),
 		...(options.field ?? []).flatMap((field) => ['--field', field]),
+		...(options.answer === undefined ? [] : ['--answer', options.answer]),
 	];
 }
 
@@ -651,6 +653,59 @@ it("approvals: the stand-in keeps central's order: a contract-invalid body behin
 				},
 			}),
 		).toEqual({ kind: 'refused', reason: 'refreshRequired' });
+	} finally {
+		await harness.close();
+	}
+});
+
+it("approvals: after the grant is lost, a question's repeat with --operation-id --answer gets the retained result", async () => {
+	// Arrange: the owner answers a question with --field; central retains the result.
+	const fixture = await setupFleetCli();
+	const { harness, target } = fixture;
+	try {
+		const organizationId = target.organizationId;
+		const asked = ids.nextId();
+		harness.centralApprovals.seedQuestion({
+			organizationId,
+			requestId: asked,
+			raisedAtMillis: initialTime - minute,
+			offer: {
+				prompt: 'Why and where?',
+				fields: [
+					{ kind: 'text', fieldId: 1, label: 'Reason', description: null, required: true },
+					{ kind: 'number', fieldId: 2, label: 'Replicas', description: null, required: false },
+				],
+			},
+		});
+		const approvals = approvalsCli({ fixture, io: fixture.io, organizationId });
+		expect(await approvals(['answer', asked], { field: ["1=it's latency", '2=3'] })).toEqual({
+			exitCode: 0,
+			lines: ['Decision saved: answered.'],
+		});
+		const first = harness.centralApprovals.arrivals.at(-1);
+		const operationId = z.uuidv7().parse(first?.operationId);
+		const ownerId = z.uuidv7().parse(first?.personId);
+		// The exact answer, as the no-answer advice prints it: the canonical JSON of what was sent.
+		const answered = {
+			kind: 'answered',
+			fields: [
+				{ fieldId: 1, value: { kind: 'text', value: "it's latency" } },
+				{ fieldId: 2, value: { kind: 'number', value: '3' } },
+			],
+		};
+		await setRole(fixture, ownerId, 'member');
+		const arrivalsBefore = harness.centralApprovals.arrivals.length;
+		// Act
+		const recovered = await approvals(['answer', asked], {
+			'operation-id': operationId,
+			answer: canonicalJson(answered),
+		});
+		// Assert: straight to Decide, under a token without the grant, with the retained result.
+		expect(recovered).toEqual({ exitCode: 0, lines: ['Decision saved: answered.'] });
+		const after = harness.centralApprovals.arrivals.slice(arrivalsBefore);
+		expect(after.map((arrival) => arrival.route)).toEqual(['ApprovalDecide']);
+		expect(after[0]?.permissions).not.toContain('approval:decide');
+		expect(after[0]?.outcome).toEqual(first?.outcome);
 	} finally {
 		await harness.close();
 	}

@@ -44,6 +44,8 @@ export interface ApprovalsCommandOptions {
 	readonly option?: string | undefined;
 	/** `FIELD_ID=VALUE`, once per answered field of a question. */
 	readonly field?: readonly string[] | undefined;
+	/** A question's complete answer as JSON: only in a recovery, with `--operation-id`. */
+	readonly answer?: string | undefined;
 }
 
 type ReadView = Extract<
@@ -136,12 +138,27 @@ export async function runApprovalsCommand(props: {
 		environment.write(unsupportedFlagWords(parsed[0], unsupported));
 		return 2;
 	}
+	// --answer is a recovery's stated answer: only with --operation-id, never with --field.
+	if (props.options.answer !== undefined && props.options['operation-id'] === undefined) {
+		environment.write(
+			"--answer repeats a question's exact answer in a recovery, so it needs --operation-id. Nothing was sent.",
+		);
+		return 2;
+	}
+	if (props.options.answer !== undefined && props.options.field !== undefined) {
+		environment.write('--field and --answer cannot be used together. Nothing was sent.');
+		return 2;
+	}
 	// B1: a decide repeated with its operation id goes straight to Decide, with no read.
 	const recovery =
 		parsed[0] !== 'list' && parsed[0] !== 'show' && props.options['operation-id'] !== undefined
 			? {
 					operationId: approvalOperationIdSchema.parse(props.options['operation-id']),
-					answer: recoveryAnswer({ verb: parsed[0], option: props.options.option }),
+					answer: recoveryAnswer({
+						verb: parsed[0],
+						option: props.options.option,
+						answerJson: props.options.answer,
+					}),
 				}
 			: null;
 	if (recovery?.answer.kind === 'refused') {
@@ -248,11 +265,8 @@ async function decideAndReport(props: {
 		},
 	});
 	if (decided.kind === 'unknown') {
-		const repeat = repeatCommand(props);
 		environment.write(
-			repeat === null
-				? `Central did not answer; this answer may have been saved under operation id ${props.operationId}. A question cannot be repeated with --operation-id yet.`
-				: `Central did not answer. Repeat with: ${repeat}. A repeat sends the decide without reading the request, so it must carry this exact answer; it will not be decided twice.`,
+			`Central did not answer. Repeat with: ${repeatCommand(props)}. A repeat sends the decide without reading the request, so it must carry this exact answer; it will not be decided twice.`,
 		);
 		return 1;
 	}
