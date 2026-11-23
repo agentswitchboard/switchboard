@@ -1,31 +1,29 @@
-import { z } from 'zod';
-
 import {
 	createMePageDocumentTracker,
 	type MePageWaitBlock,
 } from '#sign-in-test-support/test-fixtures/me-page-request-tracker';
 import type { PlaywrightBrowserPage } from '#sign-in-test-support/test-fixtures/playwright-browser';
 
-const startupSignalSchema = z.object({ pathname: z.string(), rendered: z.boolean() });
-
 let observerCount = 0;
 
 /**
  * In every document created while the observer is installed, reports once the island has mounted
- * and shows no loading skeleton, which is the page's final content: by then it has issued every
- * request that startup needs, so a named request that is still missing is never coming.
+ * and shows no loading skeleton, which is the page's final content. The report carries nothing but
+ * itself: the CDP execution-context id of the call says which document made it.
+ *
+ * This is an observed ordering, not a proof that startup has issued every fetch it will issue: the
+ * page publishes no such event, and adding one is a product change. See the tracker.
  */
 function startupSignalScript(bindingName: string): string {
 	return `(()=>{
-	let last='';
+	let last=false;
 	new MutationObserver(()=>{
 		const mounted=document.querySelector('[data-sign-in-island-mounted]')!==null;
 		const loading=document.querySelector('[data-slot="skeleton"]')!==null;
-		const rendered=mounted&&!loading;
-		const state=location.pathname+':'+rendered;
-		if(state===last)return;
+		const state=mounted&&!loading;
+		if(state===last||!state)return;
 		last=state;
-		window[${JSON.stringify(bindingName)}](JSON.stringify({pathname:location.pathname,rendered}));
+		window[${JSON.stringify(bindingName)}]('rendered');
 	}).observe(document,{subtree:true,attributes:true,childList:true});
 })()`;
 }
@@ -57,9 +55,12 @@ export async function observeMePageDocument(props: {
 	observerCount += 1;
 	const bindingName = `meDocumentSignal${observerCount}`;
 	const committed = (event: {
-		frame: { parentId?: string; loaderId: string; url: string };
+		frame: { id: string; parentId?: string; loaderId: string; url: string };
 	}): void => {
 		if (event.frame.parentId !== undefined) return;
+		mainFrameId = event.frame.id;
+		committedLoaderId = event.frame.loaderId;
+		pairDocumentContext();
 		tracker.observeMainFrameCommitted({
 			loaderId: event.frame.loaderId,
 			pathname: new URL(event.frame.url).pathname,
@@ -90,10 +91,37 @@ export async function observeMePageDocument(props: {
 			outcome: 'failed',
 			cancelled: event.canceled === true,
 		});
-	const signalled = (event: { name: string; payload: string }): void => {
-		if (event.name !== bindingName) return;
-		const signal = startupSignalSchema.parse(JSON.parse(event.payload));
-		if (signal.rendered && signal.pathname === '/me') tracker.observeStartupRendered();
+	// Chromium clears the contexts, commits the document, then creates its default context, so the
+	// next default context of the main frame after a commit belongs to that commit's document.
+	let committedLoaderId: string | null = null;
+	let mainFrameId: string | null = null;
+	let defaultContext: { readonly id: number; readonly frameId: string } | null = null;
+	function pairDocumentContext(): void {
+		if (
+			committedLoaderId === null ||
+			defaultContext === null ||
+			defaultContext.frameId !== mainFrameId
+		)
+			return;
+		tracker.observeDocumentContext({ loaderId: committedLoaderId, contextId: defaultContext.id });
+		committedLoaderId = null;
+		defaultContext = null;
+	}
+	const contextsCleared = (): void => {
+		committedLoaderId = null;
+		defaultContext = null;
+	};
+	const contextCreated = (event: {
+		context: { id: number; auxData?: { frameId?: string; isDefault?: boolean } };
+	}): void => {
+		const { frameId, isDefault } = event.context.auxData ?? {};
+		if (isDefault !== true || frameId === undefined) return;
+		defaultContext = { id: event.context.id, frameId };
+		pairDocumentContext();
+	};
+	const signalled = (event: { name: string; executionContextId: number }): void => {
+		if (event.name === bindingName)
+			tracker.observeStartupRendered({ contextId: event.executionContextId });
 	};
 	const pageError = (error: Error): void => tracker.observeScriptError(error.message);
 	const closed = (): void => tracker.observePageLost('page closed');
@@ -102,6 +130,8 @@ export async function observeMePageDocument(props: {
 	protocol.on('Network.requestWillBeSent', issued);
 	protocol.on('Network.loadingFinished', finished);
 	protocol.on('Network.loadingFailed', failed);
+	protocol.on('Runtime.executionContextsCleared', contextsCleared);
+	protocol.on('Runtime.executionContextCreated', contextCreated);
 	protocol.on('Runtime.bindingCalled', signalled);
 	page.on('pageerror', pageError);
 	page.on('close', closed);
@@ -119,6 +149,8 @@ export async function observeMePageDocument(props: {
 			protocol.off('Network.requestWillBeSent', issued);
 			protocol.off('Network.loadingFinished', finished);
 			protocol.off('Network.loadingFailed', failed);
+			protocol.off('Runtime.executionContextsCleared', contextsCleared);
+			protocol.off('Runtime.executionContextCreated', contextCreated);
 			protocol.off('Runtime.bindingCalled', signalled);
 			page.off('pageerror', pageError);
 			page.off('close', closed);

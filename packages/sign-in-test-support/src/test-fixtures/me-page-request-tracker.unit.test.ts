@@ -194,13 +194,77 @@ it('fails with mountFailed when the document throws', async () => {
 	expect(await failureOf(tracker.settled)).toEqual({ kind: 'mountFailed', detail: 'boom' });
 });
 
-it('fails with startupWithoutRequest when the island finished rendering and a path was never requested', async () => {
+it('fails with startupWithoutRequest when the island of the claimed document finished rendering and a path was never requested', async () => {
 	const { tracker, issue } = newTracker();
 	tracker.observeMainFrameCommitted({ loaderId: 'me', pathname: '/me' });
+	tracker.observeDocumentContext({ loaderId: 'me', contextId: 7 });
 	issue('me', 'session', sessionPath);
-	tracker.observeStartupRendered();
+	tracker.observeStartupRendered({ contextId: 7 });
 	expect(await failureOf(tracker.settled)).toEqual({
 		kind: 'startupWithoutRequest',
 		missingPaths: [listPath],
 	});
+});
+
+it('ignores a render report from any context but that of the claimed document', async () => {
+	const { tracker, issue } = newTracker();
+	// The previous document was also at /me; its island reports a render while this one is still starting.
+	tracker.observeDocumentContext({ loaderId: 'old', contextId: 3 });
+	tracker.observeMainFrameCommitted({ loaderId: 'new', pathname: '/me' });
+	tracker.observeDocumentContext({ loaderId: 'new', contextId: 5 });
+	issue('new', 'session', sessionPath);
+	tracker.observeStartupRendered({ contextId: 3 });
+	tracker.observeStartupRendered({ contextId: 99 });
+	let settled = false;
+	void tracker.settled.then(
+		() => {
+			settled = true;
+		},
+		() => {
+			settled = true;
+		},
+	);
+	await Promise.resolve();
+	expect(settled).toBe(false);
+	tracker.observeStartupRendered({ contextId: 5 });
+	expect(await failureOf(tracker.settled)).toMatchObject({ kind: 'startupWithoutRequest' });
+});
+
+it('ignores a render report before the context of the claimed document is known', async () => {
+	const { tracker } = newTracker();
+	tracker.observeMainFrameCommitted({ loaderId: 'me', pathname: '/me' });
+	tracker.observeStartupRendered({ contextId: 5 });
+	let settled = false;
+	void tracker.settled.then(
+		() => {
+			settled = true;
+		},
+		() => {
+			settled = true;
+		},
+	);
+	await Promise.resolve();
+	expect(settled).toBe(false);
+});
+
+it('counts a request that finished before its document was claimed as finished', async () => {
+	const { tracker, issue } = newTracker();
+	issue('me', 'session', sessionPath);
+	issue('me', 'list', listPath);
+	// Both ended before the commit event reached the tracker; no completion is left to observe.
+	tracker.observeRequestTerminal({ requestId: 'session', outcome: 'finished', cancelled: false });
+	tracker.observeRequestTerminal({ requestId: 'list', outcome: 'failed', cancelled: false });
+	tracker.observeMainFrameCommitted({ loaderId: 'me', pathname: '/me' });
+	expect([...(await tracker.settled)]).toEqual([
+		[sessionPath, 'finished'],
+		[listPath, 'failed'],
+	]);
+});
+
+it('fails with mountFailed for a script that failed before its document was claimed', async () => {
+	const { tracker, issue } = newTracker();
+	issue('me', 'island', '/assets/island.js', 'Script');
+	tracker.observeRequestTerminal({ requestId: 'island', outcome: 'failed', cancelled: false });
+	tracker.observeMainFrameCommitted({ loaderId: 'me', pathname: '/me' });
+	expect(await failureOf(tracker.settled)).toMatchObject({ kind: 'mountFailed' });
 });

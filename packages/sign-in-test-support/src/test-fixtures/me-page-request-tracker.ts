@@ -58,8 +58,16 @@ export function createMePageDocumentTracker(props: {
 		readonly outcome: MePageRequestOutcome;
 		readonly cancelled: boolean;
 	}) => void;
-	/** The claimed document's island has mounted and shows no loading skeleton. */
-	readonly observeStartupRendered: () => void;
+	/** The execution context (CDP id) that Chromium created for a committed main-frame document. */
+	readonly observeDocumentContext: (document: {
+		readonly loaderId: string;
+		readonly contextId: number;
+	}) => void;
+	/**
+	 * The island of the document that runs in `contextId` has mounted and shows no loading skeleton.
+	 * Only the claimed document's context counts; any other context's report is ignored.
+	 */
+	readonly observeStartupRendered: (render: { readonly contextId: number }) => void;
 	readonly observeScriptError: (detail: string) => void;
 	readonly observePageLost: (reason: string) => void;
 	/** The journey that reaches Me has returned; from now on blocking is reported. */
@@ -73,6 +81,12 @@ export function createMePageDocumentTracker(props: {
 		readonly isScript: boolean;
 	}
 	const requests = new Map<string, IssuedRequest>();
+	/** Every terminal event by request id, kept so a request that ended before its loader was claimed still counts. */
+	const terminals = new Map<
+		string,
+		{ readonly outcome: MePageRequestOutcome; readonly cancelled: boolean }
+	>();
+	const contextOfLoader = new Map<string, number>();
 	const admittedByPath = new Map<string, string>();
 	const outcomes = new Map<string, MePageRequestOutcome>();
 	const settled = Promise.withResolvers<ReadonlyMap<string, MePageRequestOutcome>>();
@@ -112,6 +126,20 @@ export function createMePageDocumentTracker(props: {
 			? request.path
 			: null;
 	}
+	function applyTerminal(requestId: string): void {
+		if (ended) return;
+		const terminal = terminals.get(requestId);
+		const request = requests.get(requestId);
+		if (terminal === undefined || request === undefined || request.loaderId !== claimedLoaderId)
+			return;
+		if (request.isScript && terminal.outcome === 'failed' && !terminal.cancelled) {
+			fail({ kind: 'mountFailed', detail: 'a script of the document failed to load' });
+			return;
+		}
+		const path = admitted(requestId);
+		if (path === null || outcomes.has(path)) return;
+		outcomes.set(path, terminal.outcome);
+	}
 	return {
 		observeMainFrameCommitted(commit): void {
 			if (ended) return;
@@ -131,6 +159,7 @@ export function createMePageDocumentTracker(props: {
 				)
 					admittedByPath.set(request.path, requestId);
 			}
+			for (const requestId of requests.keys()) applyTerminal(requestId);
 			evaluate();
 		},
 		observeRequestIssued(request): void {
@@ -151,20 +180,16 @@ export function createMePageDocumentTracker(props: {
 			evaluate();
 		},
 		observeRequestTerminal(terminal): void {
-			if (ended) return;
-			const request = requests.get(terminal.requestId);
-			if (request === undefined || request.loaderId !== claimedLoaderId) return;
-			if (request.isScript && terminal.outcome === 'failed' && !terminal.cancelled) {
-				fail({ kind: 'mountFailed', detail: 'a script of the document failed to load' });
-				return;
-			}
-			const path = admitted(terminal.requestId);
-			if (path === null || outcomes.has(path)) return;
-			outcomes.set(path, terminal.outcome);
+			terminals.set(terminal.requestId, terminal);
+			applyTerminal(terminal.requestId);
 			evaluate();
 		},
-		observeStartupRendered(): void {
+		observeDocumentContext(document): void {
+			contextOfLoader.set(document.loaderId, document.contextId);
+		},
+		observeStartupRendered(render): void {
 			if (ended || claimedLoaderId === null) return;
+			if (contextOfLoader.get(claimedLoaderId) !== render.contextId) return;
 			const missing = missingPaths();
 			if (missing.length > 0) fail({ kind: 'startupWithoutRequest', missingPaths: missing });
 		},
