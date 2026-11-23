@@ -253,26 +253,26 @@ export async function awaitMePageRequestsAfter(
 	}
 }
 
-/** The page's browser context waits forever by default; every request has already ended here, so the
- * terminal state is a render away and a stuck skeleton should fail within seconds. */
-const passkeySectionTerminalStateTimeoutMilliseconds = 10_000;
-
 /**
  * The Me passkey section is at rest once it shows a real terminal state (the list rows, "No passkeys
  * yet.", or the error alert with Retry) and the loading skeleton is gone. A page stuck on the
  * skeleton, or showing it beside the alert or the rows, fails this wait instead of passing on the
  * requests alone.
+ * Neither wait has a clock: each ends on the DOM event, or rejects when the page closes, which the
+ * scenario abort does.
  */
-async function awaitPasskeySectionTerminalState(page: Page): Promise<void> {
+export async function awaitPasskeySectionTerminalState(page: Page): Promise<void> {
 	const section = page.getByRole('region', { name: 'Passkey list' });
-	const timeout = passkeySectionTerminalStateTimeoutMilliseconds;
 	await section
 		.getByRole('listitem')
 		.or(section.getByText('No passkeys yet.', { exact: true }))
 		.or(section.getByRole('alert').getByRole('button', { name: 'Retry', exact: true }))
 		.first()
-		.waitFor({ timeout });
-	await section.locator('[data-slot="skeleton"]').first().waitFor({ state: 'detached', timeout });
+		.waitFor({ timeout: 0 });
+	await section
+		.locator('[data-slot="skeleton"]')
+		.first()
+		.waitFor({ state: 'detached', timeout: 0 });
 }
 
 export function followReadyLinkToMe(

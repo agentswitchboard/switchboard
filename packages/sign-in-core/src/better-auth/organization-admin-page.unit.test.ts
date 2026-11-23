@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { expect, it, vi } from 'vitest';
+import { expect, it } from 'vitest';
 
 import { organizationAdminPage } from '#sign-in-core/better-auth/organization-admin-page';
 
@@ -70,13 +70,20 @@ it('labels each change record with the origin it names: the person and permissio
 		}).text();
 		const served = new DOMParser().parseFromString(html, 'text/html');
 		document.body.innerHTML = served.body.innerHTML;
+		const listed = (): string[] =>
+			[...document.querySelectorAll('#change-records li')].map((entry) => entry.textContent ?? '');
+		// The rows arrive as the page renders them: end on that DOM event, not on a clock.
+		const rowsRendered = Promise.withResolvers<void>();
+		const observer = new MutationObserver((): void => {
+			if (listed().length === records.length) rowsRendered.resolve();
+		});
+		observer.observe(document.body, { childList: true, subtree: true });
 		// Act: run the served page script against the stubbed forwarding route.
 		const script = document.createElement('script');
 		script.textContent = served.querySelector('script')?.textContent ?? '';
 		document.body.append(script);
-		const listed = (): string[] =>
-			[...document.querySelectorAll('#change-records li')].map((entry) => entry.textContent ?? '');
-		await vi.waitFor((): void => expect(listed()).toHaveLength(3));
+		await rowsRendered.promise;
+		observer.disconnect();
 		// Assert
 		expect(listed()).toEqual([
 			`${timestamp} organizationProvisioned ${organizationId} by sign-in`,
