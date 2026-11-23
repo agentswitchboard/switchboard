@@ -1,3 +1,4 @@
+import { machineTokenResponseSchema } from '@agent-collaboration/sign-in-core/better-auth';
 import * as hegel from '@hegeldev/hegel';
 import { expect } from 'vitest';
 
@@ -185,6 +186,21 @@ export async function runRequestGroup(props: {
 			before,
 			after,
 		});
+		if (answer.status === 200 && generated.variant.flow === 'machine-refresh') {
+			// Probe the returned credential after the first rotation's storage assertions.
+			const { machine_client_id, refresh_token } = machineTokenResponseSchema.parse(answer.body);
+			const followUp = await fixture.harness.auth(family.route.path, {
+				method: 'POST',
+				headers: { 'content-type': 'application/x-www-form-urlencoded' },
+				body: new URLSearchParams({
+					grant_type: 'refresh_token',
+					client_id: machine_client_id,
+					refresh_token,
+				}),
+			});
+			await followUp.body?.cancel();
+			expect(followUp.status, 'S2 returned machine refresh credential is accepted').toBe(200);
+		}
 		if (answer.status >= 400 || answer.headers.get('location')?.includes('error='))
 			assertRequestRefusalEffects({
 				classification,
