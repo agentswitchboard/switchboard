@@ -25,7 +25,7 @@ function isFuzzHostRoute(pathname: string, method: string): boolean {
 /** The Worker carrier runs before the sign-in core's HTTP route predicate. */
 export function discoverWorkerOuterRoutes(): readonly OuterRouteIdentity[] {
 	const root = 'packages/sign-in-host-cloudflare';
-	const config = ts.readConfigFile(`${root}/tsconfig.json`, ts.sys.readFile);
+	const config = ts.readConfigFile(`${root}/tsconfig.json`, (path) => ts.sys.readFile(path));
 	const parsed = ts.parseJsonConfigFileContent(config.config, ts.sys, root);
 	const program = ts.createProgram(parsed.fileNames, parsed.options);
 	const checker = program.getTypeChecker();
