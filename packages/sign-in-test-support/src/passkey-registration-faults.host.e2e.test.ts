@@ -24,6 +24,8 @@ const ownerEmail = 'owner@example.invalid';
 const authenticatorDataHeaderBytes = 37;
 const credentialIdLengthOffset = authenticatorDataHeaderBytes + 16;
 const attestedCredentialFlag = 0x40;
+const backupEligibleFlag = 0x08;
+const backupStateFlag = 0x10;
 
 interface ValidAttestation {
 	readonly attestation: Map<string, CBORType>;
@@ -83,7 +85,7 @@ function credentialPublicKeyOffset(authData: Uint8Array): number {
 	return credentialIdLengthOffset + 2 + credentialIdLength;
 }
 
-type Reason = 'challenge' | 'origin' | 'signature' | 'credentialData' | 'publicKey';
+type Reason = 'challenge' | 'origin' | 'signature' | 'credentialData' | 'publicKey' | 'malformed';
 const faultCases: readonly {
 	readonly label: string;
 	readonly reason: Reason;
@@ -136,6 +138,18 @@ const faultCases: readonly {
 				const header = authData.slice(0, authenticatorDataHeaderBytes);
 				header[32] = (header[32] ?? 0) & ~attestedCredentialFlag;
 				attestation.set('authData', header);
+				return attestation;
+			}),
+	},
+	{
+		label: 'authData claiming a backup of a single-device credential',
+		reason: 'malformed',
+		alter: (valid) =>
+			withAttestation(valid, ({ attestation, authData }) => {
+				// Backed up (BS) without backup eligibility (BE): SimpleWebAuthn's InvalidBackupFlags.
+				const changed = Uint8Array.from(authData);
+				changed[32] = ((changed[32] ?? 0) | backupStateFlag) & ~backupEligibleFlag;
+				attestation.set('authData', changed);
 				return attestation;
 			}),
 	},

@@ -59,6 +59,54 @@ function readThrownError(error: unknown): ThrownError | null {
 	return typeof name === 'string' && typeof message === 'string' ? { name, message } : null;
 }
 
+/** The attestation formats' own suffixes on the messages they throw. */
+const attestationFormatSuffix = String.raw`\((?:Packed|Packed\|Full|FIDOU2F|Android Key|Apple|SafetyNet|TPM|TPM\|RSA|TPM\|ECC)\)`;
+
+/**
+ * The attestation statement failures that are the client's: each format's own checks of the
+ * statement and its certificates, by exact message. A certificate-path failure is the client's only
+ * when the client's chain is at fault (not chained, out of validity, revoked); a fault in the
+ * server's trust anchors or in the path-building dependency falls through to a verifier failure.
+ * Android Key differs: it validates the chain against the root the client sends, so a bad anchor
+ * there is the client's.
+ */
+const knownAttestationFaultPatterns: readonly RegExp[] = [
+	/^Unsupported Attestation Format: /u,
+	/^None attestation had unexpected attestation statement$/u,
+	new RegExp(
+		String.raw`^(?:No attestation (?:signature|certificate) provided in attestation statement|Attestation statement did not contain (?:alg|pubArea|certInfo)|Attestation statement contained invalid alg -?\d+) ${attestationFormatSuffix}$`,
+		'u',
+	),
+	// Packed full attestation: the leaf certificate's subject and validity.
+	/^(?:Certificate OU was not "Authenticator Attestation"|Certificate CN was empty|Certificate O was empty|Certificate C was not two-character ISO 3166 code|Certificate basic constraints CA was not `false`|Certificate version was not `3` \(ASN\.1 value of 2\)|Certificate not good (?:before|after) ".*"|Metadata does not indicate support for full attestations) \(Packed\|Full\)$/u,
+	// The leaf's AAGUID extension disagrees with the authenticator data.
+	/^Certificate extension id-fido-gen-ce-aaguid \([\d.]+\) value of "[\da-f]*" was present but not equal to attestation statement AAGUID value of "[\da-f]*" \((?:Packed\|Full|TPM)\)$/u,
+	// The client's certificate chain, as validateCertificatePath reports it.
+	new RegExp(
+		String.raw`^(?:x5c could not be chained to any specified trust anchor|Found certificate out of validity period in x5c:\n[\s\S]*|Found revoked certificate in x5c:\n[\s\S]*) ${attestationFormatSuffix}$`,
+		'u',
+	),
+	/^(?:Could not parse trust anchor certificate:\n[\s\S]*|No specified trust anchor was valid for verifying x5c) \(Android Key\)$/u,
+	// FIDO U2F.
+	/^AAGUID "[\da-f]*" was not expected value$/u,
+	// Android Key.
+	/^(?:Credential public key does not equal leaf cert public key|Certificate did not contain extKeyStore|Attestation challenge was not equal to client data hash|teeEnforced contained "allApplications \[600\]" tag|x5c root certificate was not a known root certificate) \(Android Key\)$/u,
+	// Apple.
+	/^(?:credCert missing extensions|credCert missing "1\.2\.840\.113635\.100\.8\.2" extension|credCert nonce was not expected value|Credential public key does not equal credCert public key) \(Apple\)$/u,
+	// Android SafetyNet.
+	/^(?:No ver value in attestation|No response was included in attStmt by authenticator|Payload timestamp "\d+" was later than "\d+"|Payload timestamp "\d+" has expired|Could not verify payload nonce|Could not verify device integrity|Certificate common name was not "attest\.android\.com") \(SafetyNet\)$/u,
+	// TPM.
+	/^(?:Unexpected ver ".*", expected "2\.0"|No certificates present in x5c array|Certificate basic constraints CA was not `false`|Certificate version was not `3` \(ASN\.1 value of 2\)|Certificate subject was not empty|Certificate was missing extensions|Certificate did not contain subjectAltName extension|Certificate subjectAltName extension directoryName was empty|Certificate contained incomplete subjectAltName data|Certificate did not contain ExtendedKeyUsage extension|Could not match TPM manufacturer ".*"|Unexpected extKeyUsage ".*", expected "2\.23\.133\.8\.3"|Unexpected magic value ".*", expected "0xff544347"|Unexpected type ".*", expected "TPM_ST_ATTEST_CERTIFY"|Attested name comparison failed|CertInfo extra data did not equal hashed attestation|Certificate not good (?:before|after) ".*"|Unexpected type ".*") \(TPM\)$/u,
+	/^(?:COSE public key missing (?:n|e) \(TPM\|RSA\)|PubArea unique is not same as credentialPublicKey \(TPM\|RSA\)|Parsed pubArea type is RSA, but missing parameters\.rsa \(TPM\|RSA\)|Unexpected public key exp -?\d+, expected -?\d+ \(TPM\|RSA\)|COSE public key missing (?:crv|x|y) \(TPM\|ECC\)|PubArea unique is not same as public key x and y \(TPM\|ECC\)|Parsed pubArea type is ECC, but missing parameters\.ecc \(TPM\|ECC\)|Public area key curve ID ".*" mapped to ".*" which did not match public key crv of ".*" \(TPM\|ECC\))$/u,
+	/^(?:Credential public key with kty .* did not match .*|Unsupported pubArea\.type ".*"|Unexpected TPM attested name alg .*)$/u,
+	// An attestation certificate that is not X.509, or whose public key is not one the verifier reads.
+	/^Data does not match to Certificate ASN1 schema/u,
+	/^(?:Certificate public key was missing parameters \(EC2\)|Certificate public key contained unexpected namedCurve .* \(EC2\)|Certificate public key contained unexpected algorithm ID .*)$/u,
+];
+function isKnownAttestationFault(error: ThrownError): boolean {
+	return knownAttestationFaultPatterns.some((pattern) => pattern.test(error.message));
+}
+
 const knownCredentialFaults: readonly {
 	readonly reason: PasskeyRegistrationRefusalReason;
 	readonly matches: (error: ThrownError) => boolean;
@@ -97,16 +145,12 @@ const knownCredentialFaults: readonly {
 				error.message,
 			),
 	},
-	{
-		reason: 'attestation',
-		matches: (error) =>
-			/^(Unsupported Attestation Format|None attestation had unexpected|No attestation |Attestation statement )|\((Packed|FIDOU2F|TPM|AndroidKey|AndroidSafetyNet|Apple)/u.test(
-				error.message,
-			),
-	},
+	{ reason: 'attestation', matches: isKnownAttestationFault },
 	{
 		reason: 'malformed',
 		matches: (error) =>
+			// A single-device credential that claims a backup (BS without BE).
+			error.name === 'InvalidBackupFlags' ||
 			/^(Missing credential ID$|Credential ID was not base64url-encoded$|Unexpected credential type |Unexpected registration response type|Unexpected value for TokenBinding |Unexpected tokenBinding\.status |User presence was required|Authenticator data was \d+ bytes|Leftover bytes detected while parsing authenticator data$|Error decoding authenticator extensions: )/u.test(
 				error.message,
 			),

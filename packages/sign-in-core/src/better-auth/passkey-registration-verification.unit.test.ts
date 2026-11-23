@@ -1,5 +1,6 @@
 import { createHash, generateKeyPairSync, randomBytes, sign } from 'node:crypto';
 
+import { SettingsService } from '@simplewebauthn/server';
 import { isoCBOR } from '@simplewebauthn/server/helpers';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
@@ -35,6 +36,10 @@ interface RegistrationParts {
 	readonly attestationFormat?: string;
 	readonly packedSelfSignature?: 'valid' | 'wrong-signer' | 'not-der' | 'empty';
 	readonly userPresent?: boolean;
+	/** Backup state set without backup eligibility: a single-device credential claiming a backup. */
+	readonly backedUpSingleDevice?: boolean;
+	/** A full packed attestation: the x5c chain (DER) sent with the self signature. */
+	readonly packedAttestationCertificates?: readonly Uint8Array[];
 }
 
 /** A real registration wire response, with one part changed per test. */
@@ -52,7 +57,11 @@ function registrationResponse(parts: RegistrationParts = {}): unknown {
 		createHash('sha256')
 			.update(parts.rpIdHashedInAuthData ?? expected.rpId)
 			.digest(),
-		Buffer.from([(attested ? 0x40 : 0) | ((parts.userPresent ?? true) ? 0x01 : 0)]),
+		Buffer.from([
+			(attested ? 0x40 : 0) |
+				((parts.userPresent ?? true) ? 0x01 : 0) |
+				(parts.backedUpSingleDevice === true ? 0x10 : 0),
+		]),
 		Buffer.alloc(4),
 	]);
 	const credentialLength = Buffer.alloc(2);
@@ -66,7 +75,9 @@ function registrationResponse(parts: RegistrationParts = {}): unknown {
 				parts.credentialPublicKeyBytes ?? isoCBOR.encode(coseKey),
 			])
 		: header;
-	const attestationStatement = new Map<string, number | Uint8Array>();
+	const attestationStatement = new Map<string, number | Uint8Array | readonly Uint8Array[]>();
+	if (parts.packedAttestationCertificates !== undefined)
+		attestationStatement.set('x5c', parts.packedAttestationCertificates);
 	if (parts.packedSelfSignature !== undefined) {
 		const signedBytes = Buffer.concat([authData, createHash('sha256').update(clientData).digest()]);
 		attestationStatement.set('alg', -7);
@@ -86,11 +97,13 @@ function registrationResponse(parts: RegistrationParts = {}): unknown {
 		);
 	}
 	const attestationObject = isoCBOR.encode(
-		new Map<string, string | Map<string, number | Uint8Array> | Uint8Array>([
-			['fmt', parts.attestationFormat ?? (parts.packedSelfSignature ? 'packed' : 'none')],
-			['attStmt', attestationStatement],
-			['authData', authData],
-		]),
+		new Map<string, string | Map<string, number | Uint8Array | readonly Uint8Array[]> | Uint8Array>(
+			[
+				['fmt', parts.attestationFormat ?? (parts.packedSelfSignature ? 'packed' : 'none')],
+				['attStmt', attestationStatement],
+				['authData', authData],
+			],
+		),
 	);
 	const credential = credentialId.toString('base64url');
 	return {
@@ -104,11 +117,27 @@ function registrationResponse(parts: RegistrationParts = {}): unknown {
 	};
 }
 
+/*
+ * Synthetic certificates generated with OpenSSL (LibreSSL) for these tests, valid until 2126. No
+ * private key is kept. The leaf meets the packed full-attestation subject rules (OU 'Authenticator
+ * Attestation', CN, O, two-letter C, CA:false, version 3); the anchor is an unrelated CA.
+ */
+const packedAttestationLeafDer = Buffer.from(
+	'MIICMjCCAdegAwIBAgIUAaBHEyzOwRgaRLy9E+Eg+vpGLZ8wCgYIKoZIzj0EAwIwfzELMAkGA1UEBhMCVVMxJTAjBgNVBAoMHFN5bnRoZXRpYyBUZXN0IEF1dGhlbnRpY2F0b3IxIjAgBgNVBAsMGUF1dGhlbnRpY2F0b3IgQXR0ZXN0YXRpb24xJTAjBgNVBAMMHFN5bnRoZXRpYyBQYWNrZWQgQXR0ZXN0YXRpb24wIBcNMjYxMTIzMTY0MTM3WhgPMjEyNjEwMzAxNjQxMzdaMH8xCzAJBgNVBAYTAlVTMSUwIwYDVQQKDBxTeW50aGV0aWMgVGVzdCBBdXRoZW50aWNhdG9yMSIwIAYDVQQLDBlBdXRoZW50aWNhdG9yIEF0dGVzdGF0aW9uMSUwIwYDVQQDDBxTeW50aGV0aWMgUGFja2VkIEF0dGVzdGF0aW9uMFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAE6fx4+PR2QbqJFHeD8MoNKKd8mY8yGSUqZF3TGOir9Pvm7tNRmLuBoYNEBQUKhX2dYo6VzLZDsl3vMMA7R8ec4qMvMC0wHQYDVR0OBBYEFLUhBfRIiRC7dSKu0/Z+tKXviJTQMAwGA1UdEwEB/wQCMAAwCgYIKoZIzj0EAwIDSQAwRgIhAM2Ef+sj85LSpxE7HePRsohtUhAjtw2a+6regjU+hI0aAiEAq/ClZuVEq0oKjPTTK1vKma8JAz2qzC8CpFWmbyNwgSU=',
+	'base64',
+);
+const unrelatedTrustAnchorPem =
+	'-----BEGIN CERTIFICATE-----\nMIIB4jCCAYigAwIBAgIUVz5vC7ac+P6PP7i7hCtqo4MTfzUwCgYIKoZIzj0EAwIw\nVjELMAkGA1UEBhMCVVMxHDAaBgNVBAoME1N5bnRoZXRpYyBUZXN0IFJvb3QxKTAn\nBgNVBAMMIFN5bnRoZXRpYyBVbnJlbGF0ZWQgVHJ1c3QgQW5jaG9yMCAXDTI2MTEy\nMzE2NDE1MloYDzIxMjYxMDMwMTY0MTUyWjBWMQswCQYDVQQGEwJVUzEcMBoGA1UE\nCgwTU3ludGhldGljIFRlc3QgUm9vdDEpMCcGA1UEAwwgU3ludGhldGljIFVucmVs\nYXRlZCBUcnVzdCBBbmNob3IwWTATBgcqhkjOPQIBBggqhkjOPQMBBwNCAARGIRNa\ntAwQB3RqZ8TtxvAuqZwvxr4m1ocBicd8Xb2HxBaRsWJ/+wZIqEyeuuZShKvsF0RW\nwXaKwOlTLVgS92H6ozIwMDAdBgNVHQ4EFgQU+fQaNWuiDoxkoEe68gBXJiVeuRcw\nDwYDVR0TAQH/BAUwAwEB/zAKBggqhkjOPQQDAgNIADBFAiB28eD21P/MOWj8aZ0R\n4d4KnvrIceJIYVs0oFP6dWFS2wIhAIMKoI4nuy4N3YezWVceXWfx1HuvEcLy/XlH\n5+Y9SFnU\n-----END CERTIFICATE-----\n';
+
 function refusal(reason: PasskeyRegistrationRefusalReason): PasskeyRegistrationVerification {
 	return { kind: 'refused', reason };
 }
 
 describe('verifyPasskeyRegistrationResponse', (): void => {
+	afterEach((): void => {
+		SettingsService.setRootCertificates({ identifier: 'packed', certificates: [] });
+	});
+
 	it('verifies a well-formed registration', async (): Promise<void> => {
 		expect(
 			await verifyPasskeyRegistrationResponse({ response: registrationResponse(), expected }),
@@ -156,8 +185,19 @@ describe('verifyPasskeyRegistrationResponse', (): void => {
 			},
 		],
 		['malformed', { userPresent: false }],
+		// SimpleWebAuthn's InvalidBackupFlags: backed up (BS) but not backup eligible (BE).
+		['malformed', { backedUpSingleDevice: true }],
+		// A full attestation whose x5c does not chain to the configured trust anchor.
+		[
+			'attestation',
+			{ packedSelfSignature: 'valid', packedAttestationCertificates: [packedAttestationLeafDer] },
+		],
 	];
 	it.each(faults)('refuses a %s fault with that reason', async (reason, parts): Promise<void> => {
+		SettingsService.setRootCertificates({
+			identifier: 'packed',
+			certificates: [unrelatedTrustAnchorPem],
+		});
 		expect(
 			await verifyPasskeyRegistrationResponse({ response: registrationResponse(parts), expected }),
 		).toEqual(refusal(reason));
@@ -203,6 +243,25 @@ describe('verifyPasskeyRegistrationResponse', (): void => {
 			expect(
 				await verifyPasskeyRegistrationResponse({ response: packedRegistration(), expected }),
 			).toEqual({ kind: 'verifier-failed', failure });
+		});
+
+		it("is a verifier failure when the server's trust anchor does not parse", async (): Promise<void> => {
+			// A server configuration fault, which SimpleWebAuthn wraps as '… (Packed|Full)'.
+			SettingsService.setRootCertificates({
+				identifier: 'packed',
+				certificates: [
+					'-----BEGIN CERTIFICATE-----\nbm90IGEgY2VydGlmaWNhdGU=\n-----END CERTIFICATE-----\n',
+				],
+			});
+			expect(
+				await verifyPasskeyRegistrationResponse({
+					response: registrationResponse({
+						packedSelfSignature: 'valid',
+						packedAttestationCertificates: [packedAttestationLeafDer],
+					}),
+					expected,
+				}),
+			).toMatchObject({ kind: 'verifier-failed' });
 		});
 	});
 });
