@@ -27,8 +27,12 @@ it.each(stuckSections)(
 		const wait = awaitPasskeySectionTerminalState(proof.page);
 		let state = 'pending';
 		const outcome = wait.then(
-			() => void (state = 'settled'),
-			() => void (state = 'rejected'),
+			(): void => {
+				state = 'settled';
+			},
+			(): void => {
+				state = 'rejected';
+			},
 		);
 		// The page's commands are ordered: each round trip returns after the earlier command's reply, so
 		// after three the wait's two steps (marker, then skeleton gone) have each had theirs.
