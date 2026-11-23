@@ -2,7 +2,7 @@ import { fileURLToPath } from 'node:url';
 
 import { member, passkey, session, twoFactor, user } from '@agent-collaboration/sign-in-core';
 import { and, eq } from 'drizzle-orm';
-import type { Request } from 'playwright';
+import type { Page, Request } from 'playwright';
 import { expect } from 'vitest';
 import { z } from 'zod';
 
@@ -242,12 +242,33 @@ export async function awaitMePageRequestsAfter(
 		// Not the rendered rows: N4 makes more than the 10 passkey requests a minute that request class
 		// admits, so a late visit's list is a 429 and its skeleton never clears. The request being over,
 		// finished or failed after its headers, is the outcome this wait owns.
-		return await rejectWhenAborted(tracker.settled, signal);
+		const outcomes = await rejectWhenAborted(tracker.settled, signal);
+		await rejectWhenAborted(awaitPasskeySectionTerminalState(proof.page), signal);
+		return outcomes;
 	} finally {
 		proof.page.off('request', issued);
 		proof.page.off('requestfinished', finished);
 		proof.page.off('requestfailed', failed);
 	}
+}
+
+/** The page's browser context waits forever by default; every request has already ended here, so the
+ * terminal state is a render away and a stuck skeleton should fail within seconds. */
+const passkeySectionTerminalStateTimeoutMilliseconds = 10_000;
+
+/**
+ * The Me passkey section is at rest once it shows a real terminal state: the list rows, "No passkeys
+ * yet.", or the error alert with Retry. The skeleton is none of these, so a page stuck on it fails
+ * this wait instead of passing on the requests alone.
+ */
+function awaitPasskeySectionTerminalState(page: Page): Promise<void> {
+	const section = page.getByRole('region', { name: 'Passkey list' });
+	return section
+		.getByRole('listitem')
+		.or(section.getByText('No passkeys yet.', { exact: true }))
+		.or(section.getByRole('alert').getByRole('button', { name: 'Retry', exact: true }))
+		.first()
+		.waitFor({ timeout: passkeySectionTerminalStateTimeoutMilliseconds });
 }
 
 export function followReadyLinkToMe(
