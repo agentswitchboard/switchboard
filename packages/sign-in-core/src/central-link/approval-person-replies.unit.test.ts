@@ -9,6 +9,7 @@ import {
 	approvalPersonReplySchemas,
 	approvalReadReplySchema,
 } from '#sign-in-core/central-link/approval-person-replies';
+import { canonicalJson } from '#sign-in-core/contracts/canonical-json';
 import { approvalPersonRequestBodySchemas } from '#sign-in-core/organizations/approval-person-operation';
 
 // Synthetic replies shaped by the generated C3 types; central's own byte vectors are checked
@@ -93,7 +94,7 @@ const providerQuestion = {
 				},
 			},
 		},
-		endedAt: '2026-11-22T10:59:59.999999999Z',
+		endedAt: '2026-11-22T10:59:59Z',
 		delivery: { kind: 'receivedByHolder' },
 	},
 	window,
@@ -113,7 +114,7 @@ const unprovenCall = {
 	state: {
 		kind: 'ended',
 		ending: { kind: 'cancelled', reason: { kind: 'stopped', cause: 'callWithdrawn' } },
-		endedAt: '2026-11-22T10:30:00.001Z',
+		endedAt: '2026-11-22T10:30:00Z',
 		delivery: { kind: 'owed' },
 	},
 	window,
@@ -171,10 +172,9 @@ describe('C3 replies sign-in accepts', (): void => {
 
 	it.each([
 		'2026-11-22T10:00:00Z',
-		'2026-11-22T10:00:00.001Z',
-		'2026-11-22T10:00:00.000001Z',
-		'2026-11-22T10:00:00.999999999Z',
+		'2026-11-23T12:15:00Z',
 		'2028-02-29T23:59:59Z',
+		'0001-01-01T00:00:00Z',
 	])('the CentralTime spelling %s', (at): void => {
 		expect(
 			approvalDecideReplySchema.safeParse({ kind: 'alreadyDecided', by: person, at }).success,
@@ -183,15 +183,11 @@ describe('C3 replies sign-in accepts', (): void => {
 
 	it.each([
 		['across a day', '2026-11-22T23:30:00Z', '2026-11-23T00:30:00Z'],
-		['across a year', '2026-12-31T23:59:59.500Z', '2027-01-01T00:59:59.500Z'],
+		['across a year', '2026-12-31T23:59:59Z', '2027-01-01T00:59:59Z'],
 		['into a leap day', '2028-02-28T23:15:00Z', '2028-02-29T00:15:00Z'],
 		['out of a leap day', '2028-02-29T23:15:00Z', '2028-03-01T00:15:00Z'],
 		['out of February in a common year', '2027-02-28T23:15:00Z', '2027-03-01T00:15:00Z'],
-		[
-			'out of a century leap day',
-			'2000-02-29T23:00:00.000000001Z',
-			'2000-03-01T00:00:00.000000001Z',
-		],
+		['out of a century leap day', '2000-02-29T23:00:00Z', '2000-03-01T00:00:00Z'],
 	])('the one-hour window %s', (_name, raisedAt, deadline): void => {
 		const view = { ...providerApproval, window: { raisedAt, deadline } };
 		expect(approvalReadReplySchema.safeParse({ kind: 'request', view }).success).toBe(true);
@@ -265,8 +261,13 @@ describe('C3 replies sign-in refuses', (): void => {
 		['an offset other than Z', '2026-11-22T10:00:00+00:00'],
 		['a lowercase z', '2026-11-22T10:00:00z'],
 		['a space separator', '2026-11-22 10:00:00Z'],
+		['a millisecond fraction', '2026-11-22T10:00:00.001Z'],
+		['a microsecond fraction', '2026-11-22T10:00:00.000001Z'],
+		['a nanosecond fraction', '2026-11-22T10:00:00.999999999Z'],
+		['a zero fraction', '2026-11-22T10:00:00.000Z'],
 		['a two-digit fraction', '2026-11-22T10:00:00.50Z'],
-		['a twelve-digit fraction', '2026-11-22T10:00:00.000000000001Z'],
+		['a minute without seconds', '2026-11-22T10:00Z'],
+		['a year before 1', '0000-12-31T00:00:00Z'],
 		['a day off the calendar', '2026-02-30T00:00:00Z'],
 		['hour 24', '2026-11-22T24:00:00Z'],
 		['a leap second', '2026-12-31T23:59:60Z'],
@@ -351,12 +352,12 @@ describe('C3 replies sign-in refuses', (): void => {
 			},
 		],
 		[
-			'a deadline with a different fraction',
+			'a window spelled with fractions',
 			{
 				kind: 'request',
 				view: {
 					...providerApproval,
-					window: { raisedAt: '2026-11-22T10:00:00.001Z', deadline: '2026-11-22T11:00:00Z' },
+					window: { raisedAt: '2026-11-22T10:00:00.001Z', deadline: '2026-11-22T11:00:00.001Z' },
 				},
 			},
 		],
@@ -533,5 +534,129 @@ describe("central's own specimen literals (contract-fixtures/central-person-appr
 		// Act / Assert
 		expect(checks.map((check) => check.success)).toEqual(checks.map(() => false));
 		expect(checks).toHaveLength(6);
+	});
+});
+
+// Central's reply bytes (contract-fixtures/central-person-approvals, codex-router 8670195).
+const centralReplyVectors = z
+	.strictObject({
+		ApprovalListReply: z.array(z.string()).min(1),
+		ApprovalReadReply: z.array(z.string()).min(1),
+		ApprovalDecideReply: z.array(z.string()).min(1),
+	})
+	.parse(
+		JSON.parse(
+			await readFile(
+				new URL(
+					'../../contract-fixtures/central-person-approvals/approval-person-reply-vectors.json',
+					import.meta.url,
+				),
+				'utf8',
+			),
+		),
+	);
+const centralReplySchemas = {
+	ApprovalListReply: approvalListReplySchema,
+	ApprovalReadReply: approvalReadReplySchema,
+	ApprovalDecideReply: approvalDecideReplySchema,
+} as const;
+type CentralReplyName = keyof typeof centralReplySchemas;
+const centralReplyNames = [
+	'ApprovalListReply',
+	'ApprovalReadReply',
+	'ApprovalDecideReply',
+] as const;
+const jsonObjectSchema = z.record(z.string(), z.unknown());
+
+/** One of central's reply vectors, parsed as a plain object for mutation. */
+function centralReply(name: CentralReplyName, kind: string): Record<string, unknown> {
+	const found = centralReplyVectors[name]
+		.map((bytes) => jsonObjectSchema.parse(JSON.parse(bytes)))
+		.find((reply) => reply['kind'] === kind);
+	if (found === undefined) throw new Error(`Central has no ${name} vector of kind ${kind}`);
+	return found;
+}
+function refusedBy(name: CentralReplyName, reply: unknown): boolean {
+	return !centralReplySchemas[name].safeParse(reply).success;
+}
+
+describe("C3 replies against central's byte vectors", (): void => {
+	it.each(
+		centralReplyNames.flatMap((name) =>
+			centralReplyVectors[name].map((bytes, index) => ({ name, index, bytes })),
+		),
+	)('$name $index parses and re-encodes to central canonical bytes', ({ name, bytes }): void => {
+		// Arrange / Act
+		const parsed = centralReplySchemas[name].safeParse(JSON.parse(bytes));
+		// Assert
+		expect(parsed.success).toBe(true);
+		if (parsed.success) expect(canonicalJson(parsed.data)).toBe(bytes);
+	});
+
+	it('covers every decide reply variant central defines', (): void => {
+		// Central sends one vector per invalid reason, so compare the set of kinds.
+		const centralKinds = new Set(
+			centralReplyVectors.ApprovalDecideReply.map((bytes) =>
+				z.string().parse(jsonObjectSchema.parse(JSON.parse(bytes))['kind']),
+			),
+		);
+		expect([...centralKinds].toSorted()).toEqual(
+			approvalDecideReplySchema.options.map((option) => option.shape.kind.value).toSorted(),
+		);
+	});
+
+	it.each(centralReplyNames)('%s: an unknown kind is refused', (name): void => {
+		const first = jsonObjectSchema.parse(JSON.parse(centralReplyVectors[name][0] ?? 'null'));
+		expect(refusedBy(name, { ...first, kind: 'unknownKind' })).toBe(true);
+	});
+
+	it.each(centralReplyNames)('%s: an extra field is refused', (name): void => {
+		const first = jsonObjectSchema.parse(JSON.parse(centralReplyVectors[name][0] ?? 'null'));
+		expect(refusedBy(name, { ...first, extra: true })).toBe(true);
+	});
+
+	it('an extra field inside a nested object is refused', (): void => {
+		const decided = centralReply('ApprovalDecideReply', 'alreadyDecided');
+		const by = jsonObjectSchema.parse(decided['by']);
+		expect(refusedBy('ApprovalDecideReply', { ...decided, by: { ...by, role: 'owner' } })).toBe(
+			true,
+		);
+	});
+
+	it('a page without next is refused, and a null next is not', (): void => {
+		const { next: _next, ...withoutNext } = centralReply('ApprovalListReply', 'page');
+		expect(refusedBy('ApprovalListReply', withoutNext)).toBe(true);
+		expect(refusedBy('ApprovalListReply', { ...withoutNext, next: null })).toBe(false);
+	});
+
+	it.each([901, 899, 0, '900', null])('withinSeconds %j is refused', (withinSeconds): void => {
+		const factor = centralReply('ApprovalDecideReply', 'factorRequired');
+		expect(refusedBy('ApprovalDecideReply', { ...factor, withinSeconds })).toBe(true);
+	});
+
+	it.each([
+		'2026-11-23T12:15:00.000Z',
+		'2026-11-23T12:15:00.123456789Z',
+		'2026-11-23T12:15:00+00:00',
+		'2026-11-23T12:15Z',
+		'2026-11-31T12:15:00Z',
+	])('a bad time %s is refused wherever central sends a time', (badTime): void => {
+		const decided = centralReply('ApprovalDecideReply', 'alreadyDecided');
+		const page = centralReply('ApprovalListReply', 'page');
+		const items = z.array(jsonObjectSchema).parse(page['items']);
+		const request = centralReply('ApprovalReadReply', 'request');
+		const view = jsonObjectSchema.parse(request['view']);
+		const window = jsonObjectSchema.parse(view['window']);
+		expect([
+			refusedBy('ApprovalDecideReply', { ...decided, at: badTime }),
+			refusedBy('ApprovalListReply', {
+				...page,
+				items: items.map((item) => ({ ...item, raisedAt: badTime })),
+			}),
+			refusedBy('ApprovalReadReply', {
+				...request,
+				view: { ...view, window: { ...window, deadline: badTime } },
+			}),
+		]).toEqual([true, true, true]);
 	});
 });

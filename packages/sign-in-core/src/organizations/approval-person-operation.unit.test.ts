@@ -1,6 +1,8 @@
 import { createHash } from 'node:crypto';
+import { readFile } from 'node:fs/promises';
 
 import { describe, expect, it } from 'vitest';
+import { z } from 'zod';
 
 import { canonicalJson } from '#sign-in-core/contracts/canonical-json';
 import {
@@ -156,4 +158,54 @@ describe('C3 canonical intents through the admin frame and digest', (): void => 
 	])('refuses %s', (_name, operation): void => {
 		expect(approvalPersonOperationSchema.safeParse(operation).success).toBe(false);
 	});
+});
+
+// Central's own bytes (contract-fixtures/central-person-approvals, codex-router 8670195):
+// the expected canonical strings and digests never come from sign-in's builder.
+const centralIntentVectorSchema = z
+	.array(
+		z.strictObject({
+			body: z.record(z.string(), z.unknown()),
+			canonical: z.string(),
+			digest: z.string(),
+		}),
+	)
+	.length(3);
+const centralIntentVectors = centralIntentVectorSchema.parse(
+	JSON.parse(
+		await readFile(
+			new URL(
+				'../../contract-fixtures/central-person-approvals/approval-intent-vector.json',
+				import.meta.url,
+			),
+			'utf8',
+		),
+	),
+);
+/** Central's specimens test pairs its vectors with list, read and decide in this order. */
+const centralVectorOperations = ['ApprovalList', 'ApprovalRead', 'ApprovalDecide'] as const;
+
+describe("C3 intents against central's byte vectors", (): void => {
+	it.each(centralVectorOperations.map((operation, index) => ({ operation, index })))(
+		'$operation: canonical bytes and digest equal central',
+		async ({ operation, index }): Promise<void> => {
+			// Arrange
+			const vector = centralIntentVectors[index];
+			if (vector === undefined) throw new Error(`Missing central vector ${index}`);
+			const body = approvalPersonRequestBodySchemas[operation].parse(vector.body);
+			const parsed = approvalPersonOperationSchema.parse(
+				operation === 'ApprovalList'
+					? { operation, ...body, cursor: vector.body['cursor'] ?? null }
+					: { operation, ...body },
+			);
+			// Act
+			const canonical = canonicalJson(approvalPersonIntent(parsed));
+			const digest = await approvalPersonIntentDigest(globalThis.crypto, parsed);
+			// Assert
+			expect(approvalPersonRequestBody(parsed)).toEqual(vector.body);
+			expect(canonical).toBe(vector.canonical);
+			expect(digest).toBe(vector.digest);
+			expect(independentDigest(vector.canonical)).toBe(vector.digest);
+		},
+	);
 });

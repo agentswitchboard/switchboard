@@ -1,0 +1,32 @@
+[
+	{
+		"body": {
+			"organization": "019a3dce-2000-7000-8000-000000000001",
+			"filter": "waiting",
+			"cursor": "019a3dce-2000-7000-8000-000000000002"
+		},
+		"canonical": "{\"operation\":\"ApprovalList\",\"operationId\":null,\"organization\":\"019a3dce-2000-7000-8000-000000000001\",\"params\":{\"cursor\":\"019a3dce-2000-7000-8000-000000000002\",\"filter\":\"waiting\"},\"target\":\"019a3dce-2000-7000-8000-000000000001\",\"v\":1}",
+		"digest": "v0XQJMbDMQooRUgXGc8Mc-QLVgHcQHih95C5KgldYVA"
+	},
+	{
+		"body": {
+			"organization": "019a3dce-2000-7000-8000-000000000001",
+			"requestId": "019a3dce-2000-7000-8000-000000000002"
+		},
+		"canonical": "{\"operation\":\"ApprovalRead\",\"operationId\":null,\"organization\":\"019a3dce-2000-7000-8000-000000000001\",\"params\":{},\"target\":\"019a3dce-2000-7000-8000-000000000002\",\"v\":1}",
+		"digest": "0aML3qBRPJA-PW8mcrLMTzOA1GhIWU9CFZqRclCp6Yw"
+	},
+	{
+		"body": {
+			"organization": "019a3dce-2000-7000-8000-000000000001",
+			"requestId": "019a3dce-2000-7000-8000-000000000002",
+			"operationId": "019a3dce-2000-7000-8000-000000000003",
+			"answer": {
+				"kind": "unprovenCall",
+				"decision": "allow"
+			}
+		},
+		"canonical": "{\"operation\":\"ApprovalDecide\",\"operationId\":\"019a3dce-2000-7000-8000-000000000003\",\"organization\":\"019a3dce-2000-7000-8000-000000000001\",\"params\":{\"answer\":{\"decision\":\"allow\",\"kind\":\"unprovenCall\"}},\"target\":\"019a3dce-2000-7000-8000-000000000002\",\"v\":1}",
+		"digest": "atfRi4XxdNm341HTqovNGfTEZLqLJj9nSBUDhWznNmM"
+	}
+]

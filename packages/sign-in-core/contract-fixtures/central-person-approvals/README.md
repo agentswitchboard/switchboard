@@ -7,9 +7,11 @@ Consumer copies from codex-router `8670195564d6af00d4e21d80c806b8ebc28f7a6f`, wh
 | `central-sign-in.ts` (vendored as `src/central-link/generated/central-sign-in.gen.ts`) | `e8dd8517a7c8f1af1bb1799e926672761039cfb7a15c307029cc8453ddd452ba` |
 | `approval_person_wire.rs` | `4e2f47c3145171d34bf7b3008df3bf2fad3f0be7157bc475d7a12d01febd3577` |
 | `signin_approval_wire_specimens_test.rs` | `ff1b832c948ffd630216a0c5693c7f632b1fa35974803bbb85ae598be089c515` |
+| `contracts/approval-intent-vector.json` | `7cd5f18f05dd95c8a7d5fd098614f732448cd25c2a54d17949fc5e4180454ae7` |
+| `contracts/approval-person-reply-vectors.json` | `ad494f602e1f5227478408600ad40591d9b62fb549c89a5b39f2b95be0cf2912` |
 
 - `specimen-literals.json` holds the reply and request bodies central's specimens test writes inline, exactly as written there: one accepted last page and the malformed bodies it refuses.
-- Central's byte vectors for the three canonical intents and for each reply variant live in that commit's `contracts/approval-intent-vector.json` and `contracts/approval-person-reply-vectors.json`. They are not copied here yet; see the DEL-06 handback.
+- `approval-intent-vector.json` and `approval-person-reply-vectors.json` are central's byte vectors from `contracts/` at that commit: the request body, canonical intent and digest for list, read and decide, and the canonical bytes of each reply variant. The SHA-256 values above are of the producer bytes as copied; these files use Switchboard formatting (oxfmt), and their parsed JSON equals the producer files. The canonical strings inside them are unchanged.
 
 `POST /organization-admin/v1/approval-{list,read,decide}` travels the private link with `Authorization: DPoP <person-fleet token>` and `DPoP: <proof>`, like the admin routes. The proof's `intent` is base64url(SHA-256(JCS(intent))) over central's `ApprovalIntent`. All three need `approval:decide`.
 
