@@ -109,18 +109,43 @@ export function optionRefusalWords(
 	}
 }
 
-const fieldKindWords = {
-	text: 'text',
-	number: 'number',
-	boolean: 'true or false',
-	singleChoice: 'one option id',
-	multiChoice: 'several option ids (not answerable from the CLI yet)',
-} as const satisfies Record<QuestionField['kind'], string>;
+type MultiChoiceField = Extract<QuestionField, { readonly kind: 'multiChoice' }>;
+
+/** Central's count range for a multi-choice field: min defaults to 0, max to every option. */
+function multiChoiceCounts(field: MultiChoiceField): {
+	readonly min: number;
+	readonly max: number;
+} {
+	return {
+		min: field.selection.min ?? 0,
+		max: field.selection.max ?? field.selection.options.length,
+	};
+}
+
+/** What a field's value is, as `show` and the refusals list it. */
+function fieldKindWords(field: QuestionField): string {
+	switch (field.kind) {
+		case 'text':
+			return 'text';
+		case 'number':
+			return 'number';
+		case 'boolean':
+			return 'true or false';
+		case 'singleChoice':
+			return 'one option id';
+		case 'multiChoice': {
+			const { min, max } = multiChoiceCounts(field);
+			return `option ids, comma-separated (${min} to ${max})`;
+		}
+		default:
+			return field satisfies never;
+	}
+}
 
 /** One line per field (with its choice options): its id, what value fits, required or not, label. */
 export function fieldLines(offer: QuestionOffer): readonly string[] {
 	return offer.fields.flatMap((field) => {
-		const line = `  field ${field.fieldId}  ${fieldKindWords[field.kind]}  ${field.required ? 'required' : 'optional'}  ${field.label}`;
+		const line = `  field ${field.fieldId}  ${fieldKindWords(field)}  ${field.required ? 'required' : 'optional'}  ${field.label}`;
 		const choices =
 			field.kind === 'singleChoice'
 				? field.options
@@ -137,11 +162,22 @@ export type QuestionAnswerBuild =
 	| { readonly kind: 'unknown-field'; readonly fieldId: string }
 	| { readonly kind: 'repeated-field'; readonly fieldId: number }
 	| { readonly kind: 'wrong-value'; readonly fieldId: number }
-	| { readonly kind: 'multi-choice'; readonly fieldId: number }
+	| { readonly kind: 'unknown-choice'; readonly fieldId: number; readonly choice: string }
+	| { readonly kind: 'repeated-choice'; readonly fieldId: number; readonly optionId: number }
+	| {
+			readonly kind: 'choice-count';
+			readonly fieldId: number;
+			readonly count: number;
+			readonly min: number;
+			readonly max: number;
+	  }
 	| { readonly kind: 'missing-required'; readonly fieldId: number };
 
 /** One field's value as the field's declared kind takes it; null when it does not fit. */
-function fieldValue(field: QuestionField, text: string): QuestionFieldAnswer['value'] | null {
+function fieldValue(
+	field: Exclude<QuestionField, MultiChoiceField>,
+	text: string,
+): QuestionFieldAnswer['value'] | null {
 	switch (field.kind) {
 		case 'text':
 			return text.isWellFormed() ? { kind: 'text', value: text } : null;
@@ -159,17 +195,40 @@ function fieldValue(field: QuestionField, text: string): QuestionFieldAnswer['va
 				? { kind: 'selectedOptions', selectedOptionIds: [optionId] }
 				: null;
 		}
-		case 'multiChoice':
-			return null;
 		default:
 			return field satisfies never;
 	}
 }
 
 /**
+ * A multi-choice value `a,b`: option ids (numbers, so never containing a comma), each offered,
+ * none repeated, and as many as central's count range allows. An empty value selects none.
+ */
+function multiChoiceValue(
+	field: MultiChoiceField,
+	text: string,
+): { readonly kind: 'value'; readonly value: QuestionFieldAnswer['value'] } | QuestionAnswerBuild {
+	const fieldId = field.fieldId;
+	const choices = text === '' ? [] : text.split(',').map((choice) => choice.trim());
+	const selected: number[] = [];
+	for (const choice of choices) {
+		const optionId = /^\d+$/u.test(choice) ? Number(choice) : Number.NaN;
+		if (!field.selection.options.some((option) => option.optionId === optionId))
+			return { kind: 'unknown-choice', fieldId, choice };
+		if (selected.includes(optionId)) return { kind: 'repeated-choice', fieldId, optionId };
+		selected.push(optionId);
+	}
+	const { min, max } = multiChoiceCounts(field);
+	if (selected.length < min || selected.length > max)
+		return { kind: 'choice-count', fieldId, count: selected.length, min, max };
+	return { kind: 'value', value: { kind: 'selectedOptions', selectedOptionIds: selected } };
+}
+
+/**
  * `--field ID=VALUE` arguments as central's QuestionAnswer, in the order given. Refused before
  * sending: a malformed argument, an unknown or repeated field id, a value that does not fit the
- * field's declared kind, any multi-choice field, and a required field left out.
+ * field's declared kind, a multi-choice value with an unknown or repeated option or a count out
+ * of range, and a required field left out.
  */
 export function buildQuestionAnswer(props: {
 	readonly offer: QuestionOffer;
@@ -189,18 +248,21 @@ export function buildQuestionAnswer(props: {
 		if (field === undefined) return { kind: 'unknown-field', fieldId: idText };
 		if (answered.some((prior) => prior.fieldId === field.fieldId))
 			return { kind: 'repeated-field', fieldId: field.fieldId };
-		if (field.kind === 'multiChoice') return { kind: 'multi-choice', fieldId: field.fieldId };
-		const value = fieldValue(field, argument.slice(separator + 1));
+		const text = argument.slice(separator + 1);
+		if (field.kind === 'multiChoice') {
+			const choice = multiChoiceValue(field, text);
+			if (choice.kind !== 'value') return choice;
+			answered.push({ fieldId: field.fieldId, value: choice.value });
+			continue;
+		}
+		const value = fieldValue(field, text);
 		if (value === null) return { kind: 'wrong-value', fieldId: field.fieldId };
 		answered.push({ fieldId: field.fieldId, value });
 	}
 	const missing = props.offer.fields.find(
 		(field) => field.required && !answered.some((prior) => prior.fieldId === field.fieldId),
 	);
-	if (missing !== undefined)
-		return missing.kind === 'multiChoice'
-			? { kind: 'multi-choice', fieldId: missing.fieldId }
-			: { kind: 'missing-required', fieldId: missing.fieldId };
+	if (missing !== undefined) return { kind: 'missing-required', fieldId: missing.fieldId };
 	return { kind: 'built', answer: { kind: 'answered', fields: answered } };
 }
 
@@ -216,8 +278,12 @@ export function questionRefusalWords(
 			return `Field ${build.fieldId} is given more than once. Nothing was sent.`;
 		case 'wrong-value':
 			return `The value for field ${build.fieldId} does not fit that field. Nothing was sent.`;
-		case 'multi-choice':
-			return `Field ${build.fieldId} takes several options; the CLI cannot answer multi-choice fields yet. Nothing was sent.`;
+		case 'unknown-choice':
+			return `Field ${build.fieldId} has no option "${build.choice}". Nothing was sent.`;
+		case 'repeated-choice':
+			return `Field ${build.fieldId} lists option ${build.optionId} more than once. Nothing was sent.`;
+		case 'choice-count':
+			return `Field ${build.fieldId} takes ${build.min} to ${build.max} options, not ${build.count}. Nothing was sent.`;
 		case 'missing-required':
 			return `Field ${build.fieldId} is required. Nothing was sent.`;
 		default:

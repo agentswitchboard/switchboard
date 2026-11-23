@@ -439,3 +439,87 @@ it('approvals: provider approvals resolve one option or refuse locally; question
 		await harness.close();
 	}
 });
+
+it('approvals: a multi-choice field takes a comma list; duplicates, unknown ids and counts out of range are refused locally', async () => {
+	// Arrange: a question whose one field takes one or two of three options.
+	const fixture = await setupFleetCli();
+	const { harness, target } = fixture;
+	try {
+		const organizationId = target.organizationId;
+		const asked = ids.nextId();
+		harness.centralApprovals.seedQuestion({
+			organizationId,
+			requestId: asked,
+			raisedAtMillis: initialTime - minute,
+			offer: {
+				prompt: 'Which zones?',
+				fields: [
+					{
+						kind: 'multiChoice',
+						fieldId: 1,
+						label: 'Zones',
+						description: null,
+						required: true,
+						selection: {
+							options: [
+								{ optionId: 1, label: 'North' },
+								{ optionId: 2, label: 'South' },
+								{ optionId: 3, label: 'Central' },
+							],
+							min: 1,
+							max: 2,
+						},
+					},
+				],
+			},
+		});
+		const approvals = approvalsCli({ fixture, io: fixture.io, organizationId });
+		const fields = [
+			'Fields:',
+			'  field 1  option ids, comma-separated (1 to 2)  required  Zones',
+			'    option 1  North',
+			'    option 2  South',
+			'    option 3  Central',
+		];
+		const decides = (): number =>
+			harness.centralApprovals.arrivals.filter((arrival) => arrival.route === 'ApprovalDecide')
+				.length;
+
+		// Act / Assert: each refusal lists the field's options and sends nothing.
+		for (const [value, words] of [
+			['1,2,3', 'Field 1 takes 1 to 2 options, not 3. Nothing was sent.'],
+			['2,2', 'Field 1 lists option 2 more than once. Nothing was sent.'],
+			['1,7', 'Field 1 has no option "7". Nothing was sent.'],
+		] as const)
+			expect(await approvals(['answer', asked], { field: [`1=${value}`] })).toEqual({
+				exitCode: 2,
+				lines: [words, ...fields],
+			});
+		expect(decides()).toBe(0);
+		// Two offered options within the count are answered, in the order given.
+		expect(await approvals(['answer', asked], { field: ['1=3,1'] })).toEqual({
+			exitCode: 0,
+			lines: ['Decision saved: answered.'],
+		});
+		expect(harness.centralApprovals.arrivals.at(-1)?.outcome).toEqual({
+			kind: 'replied',
+			delivered: true,
+			reply: expect.objectContaining({
+				kind: 'savedDecision',
+				decision: expect.objectContaining({
+					answer: {
+						kind: 'question',
+						answer: {
+							kind: 'answered',
+							fields: [
+								{ fieldId: 1, value: { kind: 'selectedOptions', selectedOptionIds: [3, 1] } },
+							],
+						},
+					},
+				}),
+			}),
+		});
+	} finally {
+		await harness.close();
+	}
+});

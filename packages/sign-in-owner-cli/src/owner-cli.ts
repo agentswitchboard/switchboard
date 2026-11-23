@@ -61,7 +61,7 @@ Commands: login | add-agent --persona PROFILE --request-id UUID [--client-id ID 
 Fleet commands: fleet-login | fleet-create-workspace --operation-id UUID --name NAME [--description TEXT] | fleet-workspace-lookup --workspace-id UUID | fleet-change-records [--after ID] [--limit N]
 Approvals (organization owner, fleet credential): approvals list [--all] [--cursor ID] | approvals show REQUEST_ID | approvals approve REQUEST_ID [--option ID] [--operation-id UUID] | approvals deny REQUEST_ID [--option ID] [--operation-id UUID] | approvals answer REQUEST_ID --field FIELD_ID=VALUE... [--operation-id UUID]
 approve/deny: an unproven call is allowed or declined; a provider approval takes its single allow (approve) or decline (deny) option, or the --option named, as show lists them.
-answer: a question's fields as FIELD_ID=VALUE (text, a decimal number, true or false, or one option id); multi-choice fields are not answerable from the CLI yet.
+answer: a question's fields as FIELD_ID=VALUE (text, a decimal number, true or false, one option id, or comma-separated option ids for a multi-choice field).
 Fleet target JSON also needs: centralAdminAudience, centralPublicOrigin, ownerFleetCliClientId.
 The fleet key and its key-bound refresh credential live in the macOS Keychain; elsewhere, or with --memory-only, in memory for that command only (never a file).
 Target JSON: issuer, managementAudience, gatewayUrl, organizationId, workspaceId, ownerCliClientId, ownerCliRedirectUri, tokenCachePath.

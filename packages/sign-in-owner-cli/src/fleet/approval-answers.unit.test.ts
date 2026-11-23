@@ -61,7 +61,15 @@ const question: QuestionOffer = {
 			label: 'Zones',
 			description: null,
 			required: false,
-			selection: { options: [{ optionId: 1, label: 'a' }], min: null, max: null },
+			selection: {
+				options: [
+					{ optionId: 1, label: 'North' },
+					{ optionId: 2, label: 'South' },
+					{ optionId: 3, label: 'Central' },
+				],
+				min: 1,
+				max: 2,
+			},
 		},
 	],
 };
@@ -163,13 +171,72 @@ describe('building a question answer from --field arguments', (): void => {
 		['a boolean other than true or false', ['1=a', '3=yes'], { kind: 'wrong-value', fieldId: 3 }],
 		['a choice not offered', ['1=a', '4=3'], { kind: 'wrong-value', fieldId: 4 }],
 		['a choice by label', ['1=a', '4=East'], { kind: 'wrong-value', fieldId: 4 }],
-		['a multi-choice field', ['1=a', '5=1'], { kind: 'multi-choice', fieldId: 5 }],
+		[
+			'a multi-choice option not offered',
+			['1=a', '5=1,9'],
+			{ kind: 'unknown-choice', fieldId: 5, choice: '9' },
+		],
+		[
+			'a multi-choice option by label',
+			['1=a', '5=North'],
+			{ kind: 'unknown-choice', fieldId: 5, choice: 'North' },
+		],
+		[
+			'a multi-choice empty entry',
+			['1=a', '5=1,,2'],
+			{ kind: 'unknown-choice', fieldId: 5, choice: '' },
+		],
+		[
+			'a repeated multi-choice option',
+			['1=a', '5=2,2'],
+			{ kind: 'repeated-choice', fieldId: 5, optionId: 2 },
+		],
+		[
+			'too many multi-choice options',
+			['1=a', '5=1,2,3'],
+			{ kind: 'choice-count', fieldId: 5, count: 3, min: 1, max: 2 },
+		],
+		[
+			'too few multi-choice options',
+			['1=a', '5='],
+			{ kind: 'choice-count', fieldId: 5, count: 0, min: 1, max: 2 },
+		],
 		['a missing required field', ['2=3'], { kind: 'missing-required', fieldId: 1 }],
 	] as const)('refuses %s', (_name, fieldArguments, expected): void => {
 		expect(buildQuestionAnswer({ offer: question, fieldArguments })).toEqual(expected);
 	});
 
-	it('refuses a question whose required field is multi-choice', (): void => {
+	it('answers a multi-choice field with a comma list, in the order given', (): void => {
+		expect(buildQuestionAnswer({ offer: question, fieldArguments: ['1=a', '5=3, 1'] })).toEqual({
+			kind: 'built',
+			answer: {
+				kind: 'answered',
+				fields: [
+					{ fieldId: 1, value: { kind: 'text', value: 'a' } },
+					{ fieldId: 5, value: { kind: 'selectedOptions', selectedOptionIds: [3, 1] } },
+				],
+			},
+		});
+	});
+
+	it("uses central's defaults: no min allows none, no max allows every option", (): void => {
+		const open = {
+			...question,
+			fields: question.fields.map((field) =>
+				field.kind === 'multiChoice'
+					? { ...field, selection: { ...field.selection, min: null, max: null } }
+					: field,
+			),
+		};
+		expect(buildQuestionAnswer({ offer: open, fieldArguments: ['1=a', '5='] })).toMatchObject({
+			kind: 'built',
+		});
+		expect(buildQuestionAnswer({ offer: open, fieldArguments: ['1=a', '5=1,2,3'] })).toMatchObject({
+			kind: 'built',
+		});
+	});
+
+	it('refuses a question whose required multi-choice field is left out', (): void => {
 		const required = {
 			...question,
 			fields: question.fields.map((field) =>
@@ -177,7 +244,7 @@ describe('building a question answer from --field arguments', (): void => {
 			),
 		};
 		expect(buildQuestionAnswer({ offer: required, fieldArguments: ['1=a'] })).toEqual({
-			kind: 'multi-choice',
+			kind: 'missing-required',
 			fieldId: 5,
 		});
 	});
@@ -190,8 +257,10 @@ describe('building a question answer from --field arguments', (): void => {
 			'  field 4  one option id  optional  Region',
 			'    option 1  East',
 			'    option 2  West',
-			'  field 5  several option ids (not answerable from the CLI yet)  optional  Zones',
-			'    option 1  a',
+			'  field 5  option ids, comma-separated (1 to 2)  optional  Zones',
+			'    option 1  North',
+			'    option 2  South',
+			'    option 3  Central',
 		]);
 	});
 });
