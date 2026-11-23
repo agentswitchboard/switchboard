@@ -26,6 +26,21 @@ const factorActions: Readonly<Record<string, string>> = {
 	'/api/auth/passkey/confirm': 'passkey-confirmed',
 };
 
+const storedRegistrationChallengeSchema = z.object({
+	type: z.literal('registration'),
+	userData: z.object({ id: z.string() }),
+});
+/** A passkey plugin registration challenge the person's own options request stored. */
+function isOwnRegistrationChallenge(row: StoredRow, personId: string): boolean {
+	if (typeof row.value !== 'string') return false;
+	try {
+		const challenge = storedRegistrationChallengeSchema.safeParse(JSON.parse(row.value));
+		return challenge.success && challenge.data.userData.id === personId;
+	} catch {
+		return false;
+	}
+}
+
 function withoutFields(row: StoredRow, fields: readonly string[]): string {
 	return rowBytes(Object.fromEntries(Object.entries(row).filter(([key]) => !fields.includes(key))));
 }
@@ -219,6 +234,8 @@ export function assertRequestRefusalEffects(props: {
 		if (table === 'verification' && additions.length === 0) {
 			const allowed = removals.every(
 				(row) =>
+					(permissions.includes('consume-passkey-registration-challenge') &&
+						isOwnRegistrationChallenge(row, fixture.context.personId)) ||
 					(permissions.includes('consume-passkey-challenge') &&
 						row.identifier ===
 							`passkey-confirm:${fixture.sessionId}:${fixture.context.challengeId}`) ||

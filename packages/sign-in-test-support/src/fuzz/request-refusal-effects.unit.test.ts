@@ -358,3 +358,34 @@ it('S1 closure: a push Central received and a stored acknowledgement are not an 
 		),
 	).not.toThrow();
 });
+
+it('allows a verify-registration refusal to consume only the caller’s own registration challenge', (): void => {
+	const registrationRoute: RouteClassification = {
+		...classification,
+		path: '/api/auth/passkey/verify-registration',
+		permittedRefusalEffects: ['consume-passkey-registration-challenge', 'factor-intent'],
+	};
+	const registrationChallengeFor = (ownerId: string): { identifier: string; value: string } => ({
+		identifier: 'signed-challenge-token',
+		value: JSON.stringify({
+			type: 'registration',
+			expectedChallenge: 'challenge',
+			userData: { id: ownerId },
+		}),
+	});
+	const checkRegistration = (ownerId: string, route = registrationRoute): void =>
+		assertRequestRefusalEffects({
+			classification: route,
+			fixture,
+			before: { ...before, verification: [registrationChallengeFor(ownerId), unrelated] },
+			after: { ...before, verification: [unrelated] },
+		});
+	expect(() => checkRegistration(personId)).not.toThrow();
+	expect(() => checkRegistration('019a3dce-2000-7000-8000-0000000000ee')).toThrow('verification');
+	expect(() =>
+		checkRegistration(personId, {
+			...registrationRoute,
+			permittedRefusalEffects: ['factor-intent'],
+		}),
+	).toThrow('verification');
+});

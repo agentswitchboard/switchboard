@@ -30,9 +30,15 @@ function readValidAttestation(valid: RegistrationResponseJSON): ValidAttestation
 	const decoded: unknown = decodeAttestationObject(
 		Uint8Array.from(Buffer.from(valid.response.attestationObject, 'base64url')),
 	);
-	const attestation = z.instanceof(Map).parse(decoded);
-	const authData = z.instanceof(Uint8Array).parse(attestation.get('authData'));
-	return { attestation: new Map<string, CBORType>(attestation), authData };
+	const entries = z.instanceof(Map).parse(decoded);
+	const authData = z.instanceof(Uint8Array).parse(entries.get('authData'));
+	// The software authenticator's 'none' attestation: an empty statement.
+	const attestation = new Map<string, CBORType>([
+		['fmt', 'none'],
+		['attStmt', new Map<string, CBORType>()],
+		['authData', authData],
+	]);
+	return { attestation, authData };
 }
 function withAttestation(
 	valid: RegistrationResponseJSON,

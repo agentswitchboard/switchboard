@@ -262,6 +262,19 @@ export async function createRequestCaseFixture(props: {
 				),
 			};
 		}
+		if (props.path.startsWith('/api/auth/passkey/') && props.caller === 'signed-out') {
+			// Refused before verification, but the family still builds its nested variants from a real credential.
+			context = {
+				...context,
+				passkeyRegistrationResponse: z.record(z.string(), z.unknown()).parse(
+					(await createSoftwarePasskeyAuthenticator()).registrationResponse({
+						challenge: 'dW5pc3N1ZWQtY2hhbGxlbmdl',
+						rpId: new URL(harness.issuer).hostname,
+						origin: harness.issuer,
+					}),
+				),
+			};
+		}
 		if (props.path.startsWith('/api/auth/oauth2/') && props.caller === 'owner') {
 			const bootstrap = await auth('/api/auth/owner/bootstrap', {
 				method: 'POST',
