@@ -37,6 +37,117 @@ export type AdminRefusal = "nameInUse" | "notPermitted" | "secondFactorRequired"
 /**  The original approval's ordered workspace snapshot. */
 export type AllowedWorkspaces = WorkspaceId[];
 
+export type Answer = { kind: "approval"; optionId: OfferedOptionId } | { kind: "question"; answer: QuestionAnswer } | { kind: "unprovenCall"; decision: SessionCallDecision };
+
+export type ApprovalDecideIntentParams = {
+	answer: Answer,
+};
+
+export type ApprovalDecideReply = { kind: "savedDecision"; decision: GiverDecision<Answer> } |
+/**  An actual saved decision. Its time is an RFC 3339 CentralTime string. */
+{ kind: "alreadyDecided"; by: DecidedBy; at: string } |
+/**  The request ended before this answer, through expiry or holder/provider closure. */
+{ kind: "tooLate" } | { kind: "factorRequired"; withinSeconds: 900 } | { kind: "invalid"; reason: ApprovalInvalidReason } | { kind: "notVisible" } | { kind: "operationConflict" };
+
+export type ApprovalDecideRequest = {
+	organization: OrganizationId,
+	requestId: ApprovalRequestId,
+	operationId: string,
+	answer: Answer,
+};
+
+export type ApprovalDescription = string;
+
+export type ApprovalDigestError = "serialization" | "nonInteger";
+
+export type ApprovalIntent = ApprovalIntent_Serialize | ApprovalIntent_Deserialize;
+
+export type ApprovalIntent_Deserialize = { operation: "ApprovalList"; v: 1; organization: OrganizationId; target: OrganizationId; operationId: null; params: ApprovalListIntentParams_Deserialize } | { operation: "ApprovalRead"; v: 1; organization: OrganizationId; target: ApprovalRequestId; operationId: null; params: EmptyApprovalIntentParams } | { operation: "ApprovalDecide"; v: 1; organization: OrganizationId; target: ApprovalRequestId; operationId: string; params: ApprovalDecideIntentParams };
+
+export type ApprovalIntent_Serialize = { operation: "ApprovalList"; v: 1; organization: OrganizationId; target: OrganizationId; operationId: null; params: ApprovalListIntentParams_Serialize } | { operation: "ApprovalRead"; v: 1; organization: OrganizationId; target: ApprovalRequestId; operationId: null; params: EmptyApprovalIntentParams } | { operation: "ApprovalDecide"; v: 1; organization: OrganizationId; target: ApprovalRequestId; operationId: string; params: ApprovalDecideIntentParams };
+
+export type ApprovalInvalidReason = { kind: "invalidAnswer"; reason: InvalidAnswer } | { kind: "invalidApprovalEnding"; reason: InvalidApprovalEnding };
+
+export type ApprovalListFilter = "waiting" | "all";
+
+export type ApprovalListIntentParams = ApprovalListIntentParams_Serialize | ApprovalListIntentParams_Deserialize;
+
+export type ApprovalListIntentParams_Deserialize = {
+	filter: ApprovalListFilter,
+	cursor: ApprovalRequestId | null,
+};
+
+export type ApprovalListIntentParams_Serialize = {
+	filter: ApprovalListFilter,
+	cursor: ApprovalRequestId | null,
+};
+
+export type ApprovalListReply = ApprovalListReply_Serialize | ApprovalListReply_Deserialize;
+
+export type ApprovalListReply_Deserialize = { kind: "page"; items: RequestSummary[]; next: ApprovalRequestId | null };
+
+export type ApprovalListReply_Serialize = { kind: "page"; items: RequestSummary[]; next: ApprovalRequestId | null };
+
+export type ApprovalListRequest = ApprovalListRequest_Serialize | ApprovalListRequest_Deserialize;
+
+export type ApprovalListRequest_Deserialize = {
+	organization: OrganizationId,
+	filter: ApprovalListFilter,
+	cursor?: ApprovalRequestId | null,
+};
+
+export type ApprovalListRequest_Serialize = {
+	organization: OrganizationId,
+	filter: ApprovalListFilter,
+	cursor?: ApprovalRequestId,
+};
+
+export type ApprovalOffer = ApprovalOffer_Serialize | ApprovalOffer_Deserialize;
+
+export type ApprovalOffer_Deserialize = {
+	title: Title,
+	description?: ApprovalDescription | null,
+	subject?: Subject | null,
+	options: OfferedOptions,
+};
+
+export type ApprovalOffer_Serialize = {
+	title: Title,
+	description: ApprovalDescription | null,
+	subject: Subject | null,
+	options: OfferedOptions,
+};
+
+export type ApprovalReadReply = ApprovalReadReply_Serialize | ApprovalReadReply_Deserialize;
+
+export type ApprovalReadReply_Deserialize =
+/**  Window and ending timestamps are RFC 3339 CentralTime strings. */
+{ kind: "request"; view: RequestView_Deserialize } | { kind: "notVisible" };
+
+export type ApprovalReadReply_Serialize =
+/**  Window and ending timestamps are RFC 3339 CentralTime strings. */
+{ kind: "request"; view: RequestView_Serialize } | { kind: "notVisible" };
+
+export type ApprovalReadRequest = {
+	organization: OrganizationId,
+	requestId: ApprovalRequestId,
+};
+
+/**  One approval request raised by a Router. */
+export type ApprovalRequestId = string;
+
+export type ApprovalSummaryEnding = "decided" | "cancelled" | "timedOut";
+
+export type ApprovalSummaryState = { kind: "waiting" } | { kind: "ended"; ending: ApprovalSummaryEnding };
+
+/**  The immutable first-save time and exact one-hour deadline. */
+export type ApprovalWindow = ApprovalWindowFields;
+
+export type ApprovalWindowFields = {
+	raisedAt: string,
+	deadline: string,
+};
+
 export type AuthorizationRevision = { kind: "organization"; organizationId: OrganizationId; revision: number; state: OrganizationFenceState; permissionPolicyDigest: PermissionPolicyDigest } | { kind: "person"; organizationId: OrganizationId; personId: RecordId; subjectId: RecordId; revision: number; state: PersonFenceState };
 
 export type AuthorizationRevisionAcknowledgement = {
@@ -44,8 +155,32 @@ export type AuthorizationRevisionAcknowledgement = {
 	acknowledgedRevision: number,
 };
 
+export type CallCancellation = { kind: "stopped"; cause: CallStopCause } | { kind: "requesterGone" } | { kind: "enrollmentEnded" };
+
+/**  Offers the fixed choices Allow and Decline for this request only. */
+export type CallOffer = {
+	operation: SessionCallOperation,
+};
+
+export type CallStopCause = "callWithdrawn" |
+/**
+ *  The holder has selected a final local refusal for the requester; whether it
+ *  reached the provider is a separate observation.
+ */
+"holderRefusedLocally";
+
+/**  The never-reused Central identity of one provider session incarnation. */
+export type CentralSessionId = string;
+
 /**  The operation's own identity; a repeat of that operation finds this row. */
 export type ChangeRequestId = string;
+
+export type ChoiceOption = {
+	optionId: OfferedOptionId,
+	label: Label,
+};
+
+export type ChoiceOptions = ChoiceOption[];
 
 export type ClientId = RecordId;
 
@@ -109,13 +244,21 @@ export type DecideMachineToken = {
 	clientId: ClientId,
 };
 
+export type DecidedBy = { kind: "person"; personId: string } | { kind: "session"; session: CentralSessionId };
+
+export type Delivery = { kind: "owed" } | { kind: "receivedByHolder" } | { kind: "closedWithoutReceipt" };
+
 export type Description = string;
+
+export type DestinationEnding<AcceptedAnswer, Cancellation> = { kind: "standing"; ending: StandingEnding<Cancellation> } | { kind: "giver"; decision: GiverDecision<AcceptedAnswer> };
 
 export type DeviceLoginDecision = { result: "approved"; enrollmentId: EnrollmentId; label: MachineLabel; allowedWorkspaces: AllowedWorkspaces } | { result: "refused"; reason: DeviceLoginRefusal };
 
 export type DeviceLoginRefusal = { kind: "notPermitted" } | { kind: "machineInAnotherOrganization" } | { kind: "unknownWorkspace" } | { kind: "requestConflict" } | { kind: "secondFactorRequired"; withinSeconds: number };
 
 export type DeviceLoginRequestId = RecordId;
+
+export type EmptyApprovalIntentParams = Record<string, never>;
 
 export type EndedMachineClient = {
 	enrollmentId: EnrollmentId,
@@ -182,8 +325,21 @@ export type EnrollPermission = "machine:enroll";
 
 export type EnrollmentId = RecordId;
 
+export type FleetPermission = "workspace:create" | "workspaceAdmin:allowMachine" | "workspaceAdmin:withdrawMachine" | "workspaceAdmin:removeSession" | "machine:enroll" | "machine:revoke" | "machine:setTokenLifetime" | "organization:view" | "organization:readAudit" | "approval:decide";
+
+export type GiverDecision<AcceptedAnswer> = {
+	by: DecidedBy,
+	answer: AcceptedAnswer,
+};
+
+export type InvalidAnswer = { kind: "wrongKind" } | { kind: "unofferedOption"; optionId: OfferedOptionId } | { kind: "unofferedField"; fieldId: QuestionFieldId } | { kind: "missingRequiredField"; fieldId: QuestionFieldId } | { kind: "repeatedField"; fieldId: QuestionFieldId } | { kind: "wrongValueType"; fieldId: QuestionFieldId } | { kind: "repeatedSelection"; fieldId: QuestionFieldId; optionId: OfferedOptionId } | { kind: "wrongSelectionCount"; fieldId: QuestionFieldId };
+
+export type InvalidApprovalEnding = { kind: "digest"; reason: ApprovalDigestError } | { kind: "requesterIsReader" } | { kind: "bindingMismatch" } | { kind: "answer"; reason: InvalidAnswer } | { kind: "ineligibleDecider" } | { kind: "freshFactorRequired" } | { kind: "destinationNotAdmitted" } | { kind: "retainedDecisionMismatch" } | { kind: "chronology" };
+
 /**  The provider's opaque, nonempty signing key identifier. */
 export type IssuerKeyId = string;
+
+export type Label = string;
 
 export type ListWorkspacesParams = ListWorkspacesParams_Serialize | ListWorkspacesParams_Deserialize;
 
@@ -291,6 +447,54 @@ export type MachineTokenDecision_Serialize = { result: "grant"; machineId: Machi
 
 export type MachineTokenRefusal = { kind: "enrollmentNotActive" } | { kind: "superseded" } | { kind: "wrongClient" } | { kind: "idleExpired" };
 
+export type MultiChoiceSelection = MultiChoiceSelection_Serialize | MultiChoiceSelection_Deserialize;
+
+export type MultiChoiceSelectionFields = MultiChoiceSelectionFields_Serialize | MultiChoiceSelectionFields_Deserialize;
+
+export type MultiChoiceSelectionFields_Deserialize = {
+	options: ChoiceOptions,
+	min?: number | null,
+	max?: number | null,
+};
+
+export type MultiChoiceSelectionFields_Serialize = {
+	options: ChoiceOptions,
+	min: number | null,
+	max: number | null,
+};
+
+export type MultiChoiceSelection_Deserialize = MultiChoiceSelectionFields_Deserialize;
+
+export type MultiChoiceSelection_Serialize = MultiChoiceSelectionFields_Serialize;
+
+export type OfferedOption = {
+	id: OfferedOptionId,
+	label: Label,
+	effect: OptionEffect,
+	lasts: OptionLifetime,
+};
+
+export type OfferedOptionId = number;
+
+export type OfferedOptions = OfferedOption[];
+
+export type OptionEffect = "allow" | "decline" | "abort";
+
+/**
+ *  A verified lifetime determines which storage targets can be named.
+ *  A file cannot be declared as the storage for a turn-only option.
+ *
+ *  ```compile_fail,E0308
+ *  use approval_request_protocol::{OptionLifetime, RetainedOptionStorage};
+ *  let _ = OptionLifetime::ThisTurn { kept: RetainedOptionStorage::AgentRulesFile };
+ *  ```
+ */
+export type OptionLifetime =
+/**  Only the current operation is authorized; no authorization is kept. */
+{ kind: "thisRequest" } | { kind: "thisTurn"; kept: TransientOptionStorage } | { kind: "thisSession"; kept: TransientOptionStorage } | { kind: "keptUntilChanged"; kept: RetainedOptionStorage } |
+/**  The adapter cannot verify the duration or the destination. */
+{ kind: "notVerified" };
+
 /**  The version-one T06 object whose canonical bytes a person's proof hashes. */
 export type OrganizationAdminIntent = OrganizationAdminIntent_Serialize | OrganizationAdminIntent_Deserialize;
 
@@ -377,6 +581,10 @@ export type OrganizationStatementDigestReply = {
 	signingKeyId: IssuerKeyId,
 };
 
+export type ParkedCallEndingView = { kind: "decided"; personId: string } | { kind: "giver"; decision: SessionCallDecision; personId: string } | { kind: "cancelled"; reason: CallCancellation } | { kind: "timedOut" };
+
+export type ParkedCallStateView = { kind: "waiting" } | { kind: "ended"; ending: ParkedCallEndingView; endedAt: string; delivery: Delivery };
+
 /**  Lowercase hex SHA-256 of the sign-in service's canonical permission policy. */
 export type PermissionPolicyDigest = string;
 
@@ -396,7 +604,7 @@ export type PersonClaims_Deserialize = {
 	person_revision: number,
 	organization_revision: number,
 	permission_policy_digest: string,
-	permissions: string[],
+	permissions: FleetPermission[],
 	second_factor_at?: UnixSeconds | null,
 	second_factor_method?: string | null,
 	session_expires_at_ms: UnixMillis,
@@ -418,7 +626,7 @@ export type PersonClaims_Serialize = {
 	person_revision: number,
 	organization_revision: number,
 	permission_policy_digest: string,
-	permissions: string[],
+	permissions: FleetPermission[],
 	second_factor_at: UnixSeconds | null,
 	second_factor_method: string | null,
 	session_expires_at_ms: UnixMillis,
@@ -478,12 +686,61 @@ export type ProofJwk = {
 	y: string,
 };
 
+export type ProviderCancellation = { kind: "stopped"; cause: ProviderStopCause } | { kind: "requesterGone" } | { kind: "sessionEnded" } | { kind: "enrollmentEnded" };
+
+export type ProviderStopCause = "turnStopped" | "askReplaced" |
+/**  The provider agent withdrew this waiting ask. */
+"askWithdrawn" | "sessionClosed" | "providerConnectionLost" |
+/**
+ *  The holder has selected a final local refusal for the requester; whether it
+ *  reached the provider is a separate observation.
+ */
+"holderRefusedLocally";
+
 export type ProvisionOrganization = {
 	organizationId: OrganizationId,
 	organizationStatement: OrganizationStatement,
 };
 
 export type ProvisionOrganizationResult = { result: "provisioned" };
+
+export type QuestionAnswer = { kind: "answered"; fields: QuestionFieldAnswer[] } | { kind: "declined" };
+
+export type QuestionAnswerValue = { kind: "selectedOptions"; selectedOptionIds: OfferedOptionId[] } | { kind: "text"; value: string } | { kind: "number"; value: QuestionNumber } | { kind: "boolean"; value: boolean };
+
+export type QuestionField = QuestionField_Serialize | QuestionField_Deserialize;
+
+export type QuestionFieldAnswer = {
+	fieldId: QuestionFieldId,
+	value: QuestionAnswerValue,
+};
+
+export type QuestionFieldId = number;
+
+export type QuestionField_Deserialize = { kind: "text"; fieldId: QuestionFieldId; label: Label; description?: ApprovalDescription | null; required: boolean } | { kind: "number"; fieldId: QuestionFieldId; label: Label; description?: ApprovalDescription | null; required: boolean } | { kind: "boolean"; fieldId: QuestionFieldId; label: Label; description?: ApprovalDescription | null; required: boolean } | { kind: "singleChoice"; fieldId: QuestionFieldId; label: Label; description?: ApprovalDescription | null; required: boolean; options: ChoiceOptions } | { kind: "multiChoice"; fieldId: QuestionFieldId; label: Label; description?: ApprovalDescription | null; required: boolean; selection: MultiChoiceSelection_Deserialize };
+
+export type QuestionField_Serialize = { kind: "text"; fieldId: QuestionFieldId; label: Label; description: ApprovalDescription | null; required: boolean } | { kind: "number"; fieldId: QuestionFieldId; label: Label; description: ApprovalDescription | null; required: boolean } | { kind: "boolean"; fieldId: QuestionFieldId; label: Label; description: ApprovalDescription | null; required: boolean } | { kind: "singleChoice"; fieldId: QuestionFieldId; label: Label; description: ApprovalDescription | null; required: boolean; options: ChoiceOptions } | { kind: "multiChoice"; fieldId: QuestionFieldId; label: Label; description: ApprovalDescription | null; required: boolean; selection: MultiChoiceSelection_Serialize };
+
+export type QuestionFields = QuestionFields_Serialize | QuestionFields_Deserialize;
+
+export type QuestionFields_Deserialize = QuestionField_Deserialize[];
+
+export type QuestionFields_Serialize = QuestionField_Serialize[];
+
+/**  An exact ASCII decimal spelling. The wire transports the string unchanged. */
+export type QuestionNumber = string;
+
+export type QuestionOffer = QuestionOffer_Serialize | QuestionOffer_Deserialize;
+
+export type QuestionOffer_Deserialize = {
+	prompt: ApprovalDescription,
+	fields: QuestionFields_Deserialize,
+};
+
+export type QuestionOffer_Serialize = {
+	prompt: ApprovalDescription,
+	fields: QuestionFields_Serialize,
+};
 
 export type ReadChangeRecordsParams = ReadChangeRecordsParams_Serialize | ReadChangeRecordsParams_Deserialize;
 
@@ -523,15 +780,73 @@ export type RecordId = string;
 /**  One page of change records: 1..=100. */
 export type RecordPageLimit = number;
 
+export type RequestKind = "providerApproval" | "providerQuestion" | "unprovenCall";
+
+export type RequestStateView<AcceptedAnswer, Cancellation> = { kind: "waiting"; status: WaitingStatus } | { kind: "ended"; ending: DestinationEnding<AcceptedAnswer, Cancellation>; endedAt: string; delivery: Delivery };
+
+export type RequestSummary = {
+	requestId: ApprovalRequestId,
+	kind: RequestKind,
+	state: ApprovalSummaryState,
+	/**  First saved time as an RFC 3339 CentralTime string. */
+	raisedAt: string,
+	/**  Deadline as an RFC 3339 CentralTime string. */
+	deadline: string,
+};
+
+/**
+ *  Named request-kind arms carry only the matching offer and ending.
+ *  Decoding also checks any disclosed answer against the dynamic offer contents.
+ */
+export type RequestView = RequestView_Serialize | RequestView_Deserialize;
+
+export type RequestViewFields = RequestViewFields_Serialize | RequestViewFields_Deserialize;
+
+export type RequestViewFields_Deserialize = { kind: "providerApproval"; requestId: ApprovalRequestId; offer: ApprovalOffer_Deserialize; state: RequestStateView<OfferedOptionId, ProviderCancellation>; window: ApprovalWindow } | { kind: "providerQuestion"; requestId: ApprovalRequestId; offer: QuestionOffer_Deserialize; state: RequestStateView<QuestionAnswer, ProviderCancellation>; window: ApprovalWindow } | { kind: "unprovenCall"; requestId: ApprovalRequestId; offer: CallOffer; state: ParkedCallStateView; window: ApprovalWindow };
+
+export type RequestViewFields_Serialize = { kind: "providerApproval"; requestId: ApprovalRequestId; offer: ApprovalOffer_Serialize; state: RequestStateView<OfferedOptionId, ProviderCancellation>; window: ApprovalWindow } | { kind: "providerQuestion"; requestId: ApprovalRequestId; offer: QuestionOffer_Serialize; state: RequestStateView<QuestionAnswer, ProviderCancellation>; window: ApprovalWindow } | { kind: "unprovenCall"; requestId: ApprovalRequestId; offer: CallOffer; state: ParkedCallStateView; window: ApprovalWindow };
+
+/**
+ *  Named request-kind arms carry only the matching offer and ending.
+ *  Decoding also checks any disclosed answer against the dynamic offer contents.
+ */
+export type RequestView_Deserialize = RequestViewFields_Deserialize;
+
+/**
+ *  Named request-kind arms carry only the matching offer and ending.
+ *  Decoding also checks any disclosed answer against the dynamic offer contents.
+ */
+export type RequestView_Serialize = RequestViewFields_Serialize;
+
 export type ResourceName = string;
+
+export type RetainedOptionStorage = "agentSettingsFile" | "agentRulesFile";
 
 export type RevokeMachineEnrollmentRequest = {
 	organizationId: OrganizationId,
 	enrollmentId: EnrollmentId,
 };
 
+export type SessionCallDecision = "allow" | "decline";
+
+export type SessionCallFolder = string;
+
+export type SessionCallMode = string;
+
+export type SessionCallOperation = { kind: "startSession"; agentProgram: SessionCallProgram; workingFolder: SessionCallFolder; mode: SessionCallMode; workFolders: SessionCallWorkFolders } | { kind: "endSessionForGood"; sessionId: CentralSessionId };
+
+export type SessionCallProgram = "claude" | "cursor";
+
+export type SessionCallWorkFolder = string;
+
+export type SessionCallWorkFolders = SessionCallWorkFolder[];
+
+export type StandingEnding<Cancellation> = { kind: "decided"; by: DecidedBy } | { kind: "cancelled"; reason: Cancellation } | { kind: "timedOut" };
+
 /**  A signed stamp time in nonnegative, exact JSON integer seconds. */
 export type StatementSeconds = UnixSeconds;
+
+export type Subject = string;
 
 export type TargetedOrganizationChangeKind = "organizationProvisioned" | "stampRenewed" | "workspaceCreated" | "machineEnrolled" | "machineRevoked" | "machineExpired";
 
@@ -544,9 +859,15 @@ export type TargetedOrganizationChangeRecord = {
 	createdAtMillis: UnixMillis,
 };
 
+export type Title = string;
+
+export type TransientOptionStorage = "nowhere" | "agentMemory";
+
 export type UnixMillis = number;
 
 export type UnixSeconds = number;
+
+export type WaitingStatus = "pending" | "passedOn";
 
 export type WorkspaceId = string;
 
