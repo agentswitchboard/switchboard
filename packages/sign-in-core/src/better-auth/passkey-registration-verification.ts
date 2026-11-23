@@ -59,33 +59,25 @@ function readThrownError(error: unknown): ThrownError | null {
 	return typeof name === 'string' && typeof message === 'string' ? { name, message } : null;
 }
 
-/** The attestation formats' own suffixes on the messages they throw. */
-const attestationFormatSuffix = String.raw`\((?:Packed|Packed\|Full|FIDOU2F|Android Key|Apple|SafetyNet|TPM|TPM\|RSA|TPM\|ECC)\)`;
-
 /**
  * The attestation statement failures that are the client's: each format's own checks of the
- * statement and its certificates, by exact message. A certificate-path failure is the client's only
- * when the client's chain is at fault (not chained, out of validity, revoked); a fault in the
- * server's trust anchors or in the path-building dependency falls through to a verifier failure.
+ * statement and its certificates, by exact message, with the format suffix it throws. A
+ * certificate-path failure is the client's only when the client's chain is at fault (not
+ * chained, out of validity, revoked); a fault in the server's trust anchors or in the
+ * path-building dependency falls through to a verifier failure.
  * Android Key differs: it validates the chain against the root the client sends, so a bad anchor
  * there is the client's.
  */
 const knownAttestationFaultPatterns: readonly RegExp[] = [
 	/^Unsupported Attestation Format: /u,
 	/^None attestation had unexpected attestation statement$/u,
-	new RegExp(
-		String.raw`^(?:No attestation (?:signature|certificate) provided in attestation statement|Attestation statement did not contain (?:alg|pubArea|certInfo)|Attestation statement contained invalid alg -?\d+) ${attestationFormatSuffix}$`,
-		'u',
-	),
+	/^(?:No attestation (?:signature|certificate) provided in attestation statement|Attestation statement did not contain (?:alg|pubArea|certInfo)|Attestation statement contained invalid alg -?\d+) \((?:Packed|Packed\|Full|FIDOU2F|Android Key|Apple|SafetyNet|TPM|TPM\|RSA|TPM\|ECC)\)$/u,
 	// Packed full attestation: the leaf certificate's subject and validity.
 	/^(?:Certificate OU was not "Authenticator Attestation"|Certificate CN was empty|Certificate O was empty|Certificate C was not two-character ISO 3166 code|Certificate basic constraints CA was not `false`|Certificate version was not `3` \(ASN\.1 value of 2\)|Certificate not good (?:before|after) ".*"|Metadata does not indicate support for full attestations) \(Packed\|Full\)$/u,
 	// The leaf's AAGUID extension disagrees with the authenticator data.
 	/^Certificate extension id-fido-gen-ce-aaguid \([\d.]+\) value of "[\da-f]*" was present but not equal to attestation statement AAGUID value of "[\da-f]*" \((?:Packed\|Full|TPM)\)$/u,
 	// The client's certificate chain, as validateCertificatePath reports it.
-	new RegExp(
-		String.raw`^(?:x5c could not be chained to any specified trust anchor|Found certificate out of validity period in x5c:\n[\s\S]*|Found revoked certificate in x5c:\n[\s\S]*) ${attestationFormatSuffix}$`,
-		'u',
-	),
+	/^(?:x5c could not be chained to any specified trust anchor|Found certificate out of validity period in x5c:\n[\s\S]*|Found revoked certificate in x5c:\n[\s\S]*) \((?:Packed|Packed\|Full|FIDOU2F|Android Key|Apple|SafetyNet|TPM|TPM\|RSA|TPM\|ECC)\)$/u,
 	/^(?:Could not parse trust anchor certificate:\n[\s\S]*|No specified trust anchor was valid for verifying x5c) \(Android Key\)$/u,
 	// FIDO U2F.
 	/^AAGUID "[\da-f]*" was not expected value$/u,
