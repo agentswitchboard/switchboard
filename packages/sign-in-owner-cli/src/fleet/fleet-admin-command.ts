@@ -5,6 +5,7 @@ import {
 	fleetAdminRoutePaths,
 	signFleetAdminProof,
 	type FleetAdminRequest,
+	type CanonicalJsonValue,
 	type FleetAdminResult,
 } from '@agent-collaboration/sign-in-core';
 
@@ -40,6 +41,55 @@ export type FleetAdminOutcome =
 	/** No answer: the same command, with the same operation ID, is safe to repeat. */
 	| { readonly kind: 'unknown' };
 
+/** What one signed relay send gives back, before a command reads its meaning. */
+export type SignedRelayAnswer<TReply> =
+	| { readonly kind: 'answered'; readonly reply: TReply }
+	| { readonly kind: 'unauthenticated' }
+	/** No readable answer: the same operation, with the same identifiers, is safe to repeat. */
+	| { readonly kind: 'unknown' };
+
+/**
+ * One request to a central organization-admin route through sign-in's DPoP relay, with a fresh
+ * proof each call. `htu` names central's endpoint (`centralPublicOrigin` + central's path), not
+ * this hop, and the proof binds the token and the operation's intent digest.
+ */
+export async function sendSignedRelayRequest<TReply>(props: {
+	readonly target: FleetTarget;
+	readonly session: FleetCliSession;
+	readonly io: FleetCliIo;
+	readonly centralPath: string;
+	readonly relayPath: string;
+	readonly intentDigest: string;
+	readonly body: CanonicalJsonValue;
+	readonly readReply: (payload: unknown) => TReply | null;
+}): Promise<SignedRelayAnswer<TReply>> {
+	const proof = await signFleetAdminProof(props.io.crypto, {
+		key: props.session.key,
+		htu: `${props.target.centralPublicOrigin}${props.centralPath}`,
+		requestId: props.io.nextId(),
+		issuedAtSeconds: Math.floor(props.io.now() / 1000),
+		bound: { accessToken: props.session.accessToken, intent: props.intentDigest },
+	});
+	let response: Response;
+	try {
+		response = await props.io.fetch(new URL(props.relayPath, props.target.issuer), {
+			method: 'POST',
+			headers: {
+				'content-type': 'application/json',
+				authorization: `DPoP ${props.session.accessToken}`,
+				dpop: proof,
+			},
+			body: JSON.stringify(props.body),
+		});
+	} catch {
+		return { kind: 'unknown' };
+	}
+	if (response.status === 401) return { kind: 'unauthenticated' };
+	if (!response.ok) return { kind: 'unknown' };
+	const reply = props.readReply(await response.json().catch(() => null));
+	return reply === null ? { kind: 'unknown' } : { kind: 'answered', reply };
+}
+
 async function send(props: {
 	readonly target: FleetTarget;
 	readonly session: FleetCliSession;
@@ -47,40 +97,19 @@ async function send(props: {
 	readonly io: FleetCliIo;
 }): Promise<FleetAdminOutcome> {
 	if (props.operation.operation === 'ListWorkspaces') return { kind: 'unknown' };
-	// htu names central's admin endpoint, not this hop.
-	const proof = await signFleetAdminProof(props.io.crypto, {
-		key: props.session.key,
-		htu: `${props.target.centralPublicOrigin}${fleetAdminRoutePaths[props.operation.operation]}`,
-		requestId: props.io.nextId(),
-		issuedAtSeconds: Math.floor(props.io.now() / 1000),
-		bound: {
-			accessToken: props.session.accessToken,
-			intent: await fleetAdminIntentDigest(props.io.crypto, props.operation),
+	const resultSchema = fleetAdminResultSchemas[props.operation.operation];
+	const answer = await sendSignedRelayRequest({
+		...props,
+		centralPath: fleetAdminRoutePaths[props.operation.operation],
+		relayPath: relayPaths[props.operation.operation],
+		intentDigest: await fleetAdminIntentDigest(props.io.crypto, props.operation),
+		body: fleetAdminRequestBody(props.operation),
+		readReply: (payload) => {
+			const parsed = resultSchema.safeParse(payload);
+			return parsed.success ? parsed.data : null;
 		},
 	});
-	let response: Response;
-	try {
-		response = await props.io.fetch(
-			new URL(relayPaths[props.operation.operation], props.target.issuer),
-			{
-				method: 'POST',
-				headers: {
-					'content-type': 'application/json',
-					authorization: `DPoP ${props.session.accessToken}`,
-					dpop: proof,
-				},
-				body: JSON.stringify(fleetAdminRequestBody(props.operation)),
-			},
-		);
-	} catch {
-		return { kind: 'unknown' };
-	}
-	if (response.status === 401) return { kind: 'unauthenticated' };
-	if (!response.ok) return { kind: 'unknown' };
-	const parsed = fleetAdminResultSchemas[props.operation.operation].safeParse(
-		await response.json().catch(() => null),
-	);
-	return parsed.success ? { kind: 'answered', result: parsed.data } : { kind: 'unknown' };
+	return answer.kind === 'answered' ? { kind: 'answered', result: answer.reply } : answer;
 }
 
 interface FleetAdminCommandProps {

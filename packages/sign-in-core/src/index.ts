@@ -57,7 +57,16 @@ export * from '#sign-in-core/central-link/fleet-admin-client';
 export * from '#sign-in-core/central-link/fleet-admin-proof';
 export * from '#sign-in-core/organizations/fleet-admin-create-words';
 export * from '#sign-in-core/organizations/fleet-admin-operation';
+export * from '#sign-in-core/central-link/approval-person-client';
+export * from '#sign-in-core/central-link/approval-person-replies';
+export * from '#sign-in-core/central-link/approval-person-results';
+export * from '#sign-in-core/organizations/approval-person-operation';
+export {
+	approvalOperationIdSchema,
+	approvalRequestIdSchema,
+} from '#sign-in-core/contracts/approval-wire-values';
 export {
 	personFleetTokenBindingSchema,
 	type PersonFleetTokenClaims,
 } from '#sign-in-core/contracts/person-fleet-token';
+export type { CanonicalJsonValue } from '#sign-in-core/contracts/canonical-json';

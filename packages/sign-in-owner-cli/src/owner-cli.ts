@@ -6,6 +6,10 @@ import { z } from 'zod';
 
 import { readAuthTarget, requirePrivateRuntimePath } from '#sign-in-owner-cli/auth-target';
 import {
+	approvalsCommandName,
+	runApprovalsCommand,
+} from '#sign-in-owner-cli/fleet/approvals-cli-command';
+import {
 	deviceSignInUnavailable,
 	isFleetCommand,
 	nodeFleetCliEnvironment,
@@ -38,6 +42,8 @@ export async function runOwnerCli(
 			'workspace-id': { type: 'string' },
 			after: { type: 'string' },
 			limit: { type: 'string' },
+			all: { type: 'boolean' },
+			cursor: { type: 'string' },
 		},
 	});
 	// t15d is deferred to the owner: no half-built device path runs.
@@ -51,6 +57,8 @@ export async function runOwnerCli(
 			.write(`Usage: mise exec -- node scripts/verify-auth/owner-cli.ts --target FILE COMMAND [OPTIONS]
 Commands: login | add-agent --persona PROFILE --request-id UUID [--client-id ID | --output FILE] | remove-agent --client-id ID --request-id UUID | retire-agent --client-id ID --request-id UUID | agent-status --client-id ID
 Fleet commands: fleet-login | fleet-create-workspace --operation-id UUID --name NAME [--description TEXT] | fleet-workspace-lookup --workspace-id UUID | fleet-change-records [--after ID] [--limit N]
+Approvals (organization owner, fleet credential): approvals list [--all] [--cursor ID] | approvals show REQUEST_ID | approvals approve REQUEST_ID [--operation-id UUID] | approvals deny REQUEST_ID [--operation-id UUID]
+The CLI answers unproven calls (approve allows, deny declines); provider approvals and questions are shown but not answered yet.
 Fleet target JSON also needs: centralAdminAudience, centralPublicOrigin, ownerFleetCliClientId.
 The fleet key and its key-bound refresh credential live in the macOS Keychain; elsewhere, or with --memory-only, in memory for that command only (never a file).
 Target JSON: issuer, managementAudience, gatewayUrl, organizationId, workspaceId, ownerCliClientId, ownerCliRedirectUri, tokenCachePath.
@@ -61,6 +69,19 @@ This switch makes no hardware-presence or per-command human-intent claim. Every 
 	} else {
 		try {
 			const target = await readAuthTarget(z.string().min(1).parse(values.target));
+			if (positionals[0] === approvalsCommandName)
+				return await runApprovalsCommand({
+					arguments: positionals.slice(1),
+					target,
+					options: values,
+					environment:
+						fleetEnvironment ??
+						nodeFleetCliEnvironment({
+							noBrowser: values['no-browser'] === true,
+							memoryOnly: values['memory-only'] === true,
+							openBrowser,
+						}),
+				});
 			if (isFleetCommand(positionals[0])) {
 				if (positionals.length !== 1) throw new Error('Expected exactly one fleet command');
 				return await runFleetCommand({
