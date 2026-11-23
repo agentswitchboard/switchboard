@@ -65,11 +65,11 @@ const knownCredentialFaults: readonly {
 }[] = [
 	{
 		reason: 'challenge',
-		matches: (error) => /^Unexpected registration response challenge /u.test(error.message),
+		matches: (error) => error.message.startsWith('Unexpected registration response challenge '),
 	},
 	{
 		reason: 'origin',
-		matches: (error) => /^Unexpected registration response origin /u.test(error.message),
+		matches: (error) => error.message.startsWith('Unexpected registration response origin '),
 	},
 	{ reason: 'rpId', matches: (error) => error.name === 'UnexpectedRPIDHash' },
 	{
