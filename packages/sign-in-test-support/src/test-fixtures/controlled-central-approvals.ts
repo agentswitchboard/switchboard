@@ -110,6 +110,17 @@ export interface ControlledCentralApprovals {
 	readonly fetch: (request: Request, route: ApprovalPersonOperationName) => Promise<Response>;
 }
 
+/** The fields central's three C3 bodies carry, read once the route's own schema accepted them. */
+const approvalBodyFieldsSchema = z.looseObject({
+	organization: z.string(),
+	filter: z.enum(['waiting', 'all']).optional(),
+	cursor: z.string().nullish(),
+	requestId: z.string().optional(),
+	operationId: z.string().optional(),
+	answer: z.unknown(),
+});
+type ApprovalBodyFields = z.output<typeof approvalBodyFieldsSchema>;
+
 const oneHourMillis = 3_600_000;
 const approvalPermission = 'approval:decide';
 
@@ -122,9 +133,9 @@ function centralTime(milliseconds: number): string {
 /** Central's `ApprovalPersonOperation::intent`, restated from its committed intent vectors. */
 function independentApprovalIntent(
 	route: ApprovalPersonOperationName,
-	body: Readonly<Record<string, unknown>>,
+	body: ApprovalBodyFields,
 ): string {
-	const organization = body['organization'];
+	const organization = body.organization;
 	const intent =
 		route === 'ApprovalList'
 			? {
@@ -133,14 +144,14 @@ function independentApprovalIntent(
 					organization,
 					target: organization,
 					operationId: null,
-					params: { filter: body['filter'], cursor: body['cursor'] ?? null },
+					params: { filter: body.filter, cursor: body.cursor ?? null },
 				}
 			: route === 'ApprovalRead'
 				? {
 						v: 1,
 						operation: route,
 						organization,
-						target: body['requestId'],
+						target: body.requestId,
 						operationId: null,
 						params: {},
 					}
@@ -148,9 +159,9 @@ function independentApprovalIntent(
 						v: 1,
 						operation: route,
 						organization,
-						target: body['requestId'],
-						operationId: body['operationId'],
-						params: { answer: body['answer'] },
+						target: body.requestId,
+						operationId: body.operationId,
+						params: { answer: body.answer },
 					};
 	return base64UrlSha256(sortedJson(intent));
 }
@@ -243,18 +254,18 @@ export function createControlledCentralApprovals(
 
 	function apply(
 		route: ApprovalPersonOperationName,
-		body: Readonly<Record<string, unknown>>,
+		body: ApprovalBodyFields,
 		claims: PersonTokenClaims,
 		intent: string,
 	): CentralReply {
 		const organizationId = claims.organization_id;
 		for (const stored of requests) settleDeadline(stored);
 		if (route === 'ApprovalList') {
-			const cursor = body['cursor'] ?? null;
+			const cursor = body.cursor ?? null;
 			const visible = requests
 				.filter((stored) => stored.organizationId === organizationId)
-				.filter((stored) => body['filter'] === 'all' || stored.ending === null)
-				.filter((stored) => cursor === null || stored.requestId < String(cursor))
+				.filter((stored) => body.filter === 'all' || stored.ending === null)
+				.filter((stored) => cursor === null || stored.requestId < cursor)
 				.toSorted((left, right) => right.requestId.localeCompare(left.requestId));
 			const page = visible.slice(0, pageSize);
 			return {
@@ -263,12 +274,12 @@ export function createControlledCentralApprovals(
 				next: visible.length > pageSize ? (page.at(-1)?.requestId ?? null) : null,
 			};
 		}
-		const stored = find(organizationId, body['requestId']);
+		const stored = find(organizationId, body.requestId);
 		if (route === 'ApprovalRead')
 			return stored === undefined
 				? { kind: 'notVisible' }
 				: { kind: 'request', view: view(stored) };
-		const logKey = `${claims.sub}/${String(body['operationId'])}`;
+		const logKey = `${claims.sub}/${body.operationId ?? ''}`;
 		const prior = operationLog.get(logKey);
 		if (prior !== undefined)
 			return prior.intent === intent ? prior.reply : { kind: 'operationConflict' };
@@ -279,7 +290,7 @@ export function createControlledCentralApprovals(
 
 	function decide(
 		stored: StoredRequest | undefined,
-		body: Readonly<Record<string, unknown>>,
+		body: ApprovalBodyFields,
 		claims: PersonTokenClaims,
 	): DecideReply {
 		if (stored === undefined) return { kind: 'notVisible' };
@@ -292,7 +303,7 @@ export function createControlledCentralApprovals(
 			};
 		const answer = z
 			.object({ kind: z.literal('unprovenCall'), decision: z.enum(['allow', 'decline']) })
-			.safeParse(body['answer']);
+			.safeParse(body.answer);
 		if (!answer.success)
 			return { kind: 'invalid', reason: { kind: 'invalidAnswer', reason: { kind: 'wrongKind' } } };
 		stored.ending = {
@@ -333,12 +344,12 @@ export function createControlledCentralApprovals(
 				arrivals.push({ route, outcome: { kind: 'bad-request' }, ...absent });
 				return new Response(null, { status: 400 });
 			}
-			const body = z.record(z.string(), z.unknown()).parse(parsed.data);
-			const operationId = route === 'ApprovalDecide' ? String(body['operationId']) : null;
+			const body = approvalBodyFieldsSchema.parse(parsed.data);
+			const operationId = route === 'ApprovalDecide' ? (body.operationId ?? null) : null;
 			const intent = independentApprovalIntent(route, body);
 			const verified = await verifyCentralPersonRequest(props, request, {
 				path: approvalPersonRoutePaths[route],
-				organization: String(body['organization']),
+				organization: body.organization,
 				intent,
 			});
 			if (verified.kind === 'refused') {
