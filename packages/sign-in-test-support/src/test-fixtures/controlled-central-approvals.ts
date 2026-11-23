@@ -117,7 +117,7 @@ const approvalBodyFieldsSchema = z.looseObject({
 	cursor: z.string().nullish(),
 	requestId: z.string().optional(),
 	operationId: z.string().optional(),
-	answer: z.unknown(),
+	answer: z.unknown().optional(),
 });
 type ApprovalBodyFields = z.output<typeof approvalBodyFieldsSchema>;
 
