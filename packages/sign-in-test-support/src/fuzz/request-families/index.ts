@@ -39,6 +39,9 @@ import { requestFamily as passkeyRemoveFamily } from './passkey-remove';
 import { requestFamily as passkeyUpdateFamily } from './passkey-update';
 import { requestFamily as passkeyVerifyRegistrationFamily } from './passkey-verify-registration';
 import { requestFamily as jwksFamily } from './public-jwks';
+import { requestFamily as relayApprovalDecideFamily } from './relay-approval-decide';
+import { requestFamily as relayApprovalListFamily } from './relay-approval-list';
+import { requestFamily as relayApprovalReadFamily } from './relay-approval-read';
 import { requestFamily as relayChangeRecordsFamily } from './relay-change-records';
 import { requestFamily as relayCreateWorkspaceFamily } from './relay-create-workspace';
 import { requestFamily as relayWorkspaceLookupFamily } from './relay-workspace-lookup';
@@ -88,6 +91,9 @@ export const requestFamilies = [
 	relayCreateWorkspaceFamily,
 	relayWorkspaceLookupFamily,
 	relayChangeRecordsFamily,
+	relayApprovalListFamily,
+	relayApprovalReadFamily,
+	relayApprovalDecideFamily,
 	passkeyVerifyRegistrationFamily,
 	passkeyUpdateFamily,
 	passkeyRemoveFamily,

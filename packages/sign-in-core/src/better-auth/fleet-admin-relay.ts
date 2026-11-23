@@ -35,9 +35,15 @@ function isApprovalPersonRelayRoute(pathname: string): pathname is ApprovalPerso
 	return Object.hasOwn(approvalPersonRelayRoutes, pathname);
 }
 
-/** Every DPoP relay route: the admin routes and C3's approval routes. */
+/**
+ * Every DPoP relay route: the admin routes and C3's approval routes. Both tables are read with
+ * `Object.hasOwn` directly, which F1's route scanner follows.
+ */
 export function isFleetAdminRelayRoute(pathname: string): pathname is OrganizationAdminRelayRoute {
-	return Object.hasOwn(fleetAdminRelayRoutes, pathname) || isApprovalPersonRelayRoute(pathname);
+	return (
+		Object.hasOwn(fleetAdminRelayRoutes, pathname) ||
+		Object.hasOwn(approvalPersonRelayRoutes, pathname)
+	);
 }
 
 /** Central's closed bodies are small; anything larger never reaches the link. */
