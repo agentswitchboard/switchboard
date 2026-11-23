@@ -17,6 +17,20 @@ import {
 	type ControlledCentralApprovals,
 } from '#sign-in-test-support/test-fixtures/controlled-central-approvals';
 
+/** The organization and person floors central admits a person request against. */
+export interface CentralHeldFloors {
+	readonly organization: {
+		readonly revision: number;
+		readonly state: 'active' | 'stopped' | 'deleted';
+		readonly policyDigest: string;
+	} | null;
+	readonly person: {
+		readonly revision: number;
+		readonly state: 'active' | 'inactive';
+		readonly subjectId: string;
+	} | null;
+}
+
 export type ControlledProvisioningReply =
 	| 'unavailable'
 	| 'provisioned'
@@ -101,6 +115,8 @@ export interface ControlledCentralProvisioning {
 	readonly waitForHeldAdminAbort: () => Promise<void>;
 	/** True once central holds both the organization floor and the person's floor. */
 	readonly hasFloors: (organizationId: string, personId: string) => boolean;
+	/** The floors central holds: per key, the retained push with the highest revision. */
+	readonly readFloors: (organizationId: string, personId: string) => CentralHeldFloors;
 	/** The admin routes' stand-in; until attached they answer 503, as an unconfigured central. */
 	readonly attachAdmin: (admin: ControlledCentralAdmin) => void;
 	/** C3's approval routes' stand-in; until attached they answer 503, as an unconfigured central. */
@@ -145,7 +161,10 @@ export function createControlledCentralProvisioning(
 			? `organization/${push.organizationId}`
 			: `person/${push.organizationId}/${push.personId}`;
 	}
+	/** Every push central applied (acknowledged or reply lost): what its floors are read from. */
+	const appliedPushes: AuthorizationRevisionPush[] = [];
 	function applyFloor(push: AuthorizationRevisionPush): number {
+		appliedPushes.push(push);
 		const retained = Math.max(floors.get(floorKey(push)) ?? 0, push.revision);
 		floors.set(floorKey(push), retained);
 		return retained;
@@ -202,6 +221,43 @@ export function createControlledCentralProvisioning(
 		holdStamp: (organizationId: string, stamp: ControlledStoredStamp | null): void => {
 			if (stamp === null) stamps.delete(organizationId);
 			else stamps.set(organizationId, stamp);
+		},
+		readFloors(organizationId: string, personId: string): CentralHeldFloors {
+			const retained = <Push extends AuthorizationRevisionPush>(
+				candidates: readonly Push[],
+			): Push | undefined =>
+				candidates.reduce<Push | undefined>(
+					(best, push) => (best === undefined || push.revision >= best.revision ? push : best),
+					undefined,
+				);
+			const organization = retained(
+				appliedPushes.flatMap((push) =>
+					push.kind === 'organization' && push.organizationId === organizationId ? [push] : [],
+				),
+			);
+			const person = retained(
+				appliedPushes.flatMap((push) =>
+					push.kind === 'person' &&
+					push.organizationId === organizationId &&
+					push.personId === personId
+						? [push]
+						: [],
+				),
+			);
+			return {
+				organization:
+					organization === undefined
+						? null
+						: {
+								revision: organization.revision,
+								state: organization.state,
+								policyDigest: organization.permissionPolicyDigest,
+							},
+				person:
+					person === undefined
+						? null
+						: { revision: person.revision, state: person.state, subjectId: person.subjectId },
+			};
 		},
 		hasFloors: (organizationId: string, personId: string): boolean =>
 			floors.has(`organization/${organizationId}`) &&

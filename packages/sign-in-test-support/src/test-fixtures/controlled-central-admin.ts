@@ -53,6 +53,9 @@ export type AdminVerificationFailure =
 	| 'proof-time'
 	| 'proof-key-binding'
 	| 'organization'
+	| 'expiry-bounds'
+	| 'expired'
+	| 'operation-body'
 	| 'intent';
 type FixtureAdminReply = z.input<
 	(typeof fleetAdminResultSchemas)[keyof typeof fleetAdminResultSchemas]
@@ -131,9 +134,39 @@ const tokenClaimsSchema = z.looseObject({
 	authorization_subject_id: z.string(),
 	permissions: z.array(z.string()),
 	second_factor_at: z.number().int().optional(),
+	iat: z.number().int(),
 	exp: z.number().int(),
 	cnf: z.looseObject({ jkt: z.string() }),
+	organization_revision: z.number().int(),
+	person_revision: z.number().int(),
+	permission_policy_digest: z.string(),
+	session_expires_at_ms: z.number().int(),
+	authorization_snapshot_at_ms: z.number().int(),
+	authorization_snapshot_valid_until_ms: z.number().int(),
 });
+
+/**
+ * Central's effective expiry (fleet-signin/src/person_proof/verifier.rs:286-302 at 1ede5c1b9):
+ * the earliest of the JWT expiry, the authorization snapshot's deadline and the session's, after
+ * the snapshot bounds hold (snapshot not in the future, a deadline after it within 300 s, the
+ * session ending after it). Null when the bounds fail.
+ */
+function effectiveExpiryMs(
+	claims: z.infer<typeof tokenClaimsSchema>,
+	nowMs: number,
+): number | null {
+	const snapshot = claims.authorization_snapshot_at_ms;
+	const snapshotDeadline = claims.authorization_snapshot_valid_until_ms;
+	const sessionDeadline = claims.session_expires_at_ms;
+	if (
+		snapshot > nowMs ||
+		snapshotDeadline <= snapshot ||
+		snapshotDeadline - snapshot > 300_000 ||
+		sessionDeadline <= snapshot
+	)
+		return null;
+	return Math.min(claims.exp * 1000, snapshotDeadline, sessionDeadline);
+}
 
 /** Central's oracle, written apart from sign-in's JCS: sorted keys, then compact JSON. */
 export function sortedJson(value: unknown): string {
@@ -191,10 +224,10 @@ function independentIntent(request: FleetAdminRequest): string {
 					};
 	return base64UrlSha256(sortedJson(intent));
 }
-function uuid7Milliseconds(id: string): number {
+export function uuid7Milliseconds(id: string): number {
 	return Number.parseInt(id.replaceAll('-', '').slice(0, 12), 16);
 }
-function inRequestWindow(atMilliseconds: number, nowMilliseconds: number): boolean {
+export function inRequestWindow(atMilliseconds: number, nowMilliseconds: number): boolean {
 	return atMilliseconds > nowMilliseconds - 65_000 && atMilliseconds <= nowMilliseconds + 5_000;
 }
 
@@ -222,6 +255,10 @@ export type CentralPersonVerification =
 			readonly claims: PersonTokenClaims;
 			readonly requestId: string;
 			readonly intent: string;
+			/** Central's effective expiry (verifier.rs:299), read again at applying time. */
+			readonly effectiveExpiryMs: number;
+			/** The proof's own time (iat), which central's request window checks again. */
+			readonly proofTimeMs: number;
 			readonly facts: CentralPersonRequestFacts;
 	  };
 
@@ -234,7 +271,16 @@ export type CentralPersonVerification =
 export async function verifyCentralPersonRequest(
 	settings: CentralPersonVerifierSettings,
 	request: Request,
-	target: { readonly path: string; readonly organization: string; readonly intent: string },
+	target: {
+		readonly path: string;
+		readonly organization: string;
+		/**
+		 * The signed intent's digest, or how to compute it from the full body once the proof checks
+		 * pass: central decodes the operation after verifying (approval_person_admission.rs:379-386),
+		 * and an undecodable body is refused 401 (OperationBody, organization_signin_port.rs:196).
+		 */
+		readonly intent: string | (() => string | null);
+	},
 ): Promise<CentralPersonVerification> {
 	const authorization = request.headers.get('authorization');
 	const proof = request.headers.get('dpop');
@@ -262,6 +308,9 @@ export async function verifyCentralPersonRequest(
 	} catch {
 		return { kind: 'refused', failure: 'token', facts };
 	}
+	const effectiveExpiry = effectiveExpiryMs(claims, settings.now());
+	if (effectiveExpiry === null) return { kind: 'refused', failure: 'expiry-bounds', facts };
+	if (settings.now() >= effectiveExpiry) return { kind: 'refused', failure: 'expired', facts };
 	const header = decodeProtectedHeader(proof);
 	const jwk = z.looseObject({}).safeParse(header.jwk);
 	facts.proofJwkMembers = jwk.success ? Object.keys(jwk.data).toSorted() : [];
@@ -295,9 +344,18 @@ export async function verifyCentralPersonRequest(
 		return { kind: 'refused', failure: 'proof-key-binding', facts };
 	if (claims.organization_id !== target.organization)
 		return { kind: 'refused', failure: 'organization', facts };
-	const intent = target.intent;
+	const intent = typeof target.intent === 'string' ? target.intent : target.intent();
+	if (intent === null) return { kind: 'refused', failure: 'operation-body', facts };
 	if (proofClaims.intent !== intent) return { kind: 'refused', failure: 'intent', facts };
-	return { kind: 'verified', claims, requestId: proofClaims.jti, intent, facts };
+	return {
+		kind: 'verified',
+		claims,
+		requestId: proofClaims.jti,
+		intent,
+		effectiveExpiryMs: effectiveExpiry,
+		proofTimeMs: proofClaims.iat * 1000,
+		facts,
+	};
 }
 
 export function createControlledCentralAdmin(props: {

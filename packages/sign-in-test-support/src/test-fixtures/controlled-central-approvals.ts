@@ -12,12 +12,15 @@ import { z } from 'zod';
 
 import {
 	base64UrlSha256,
+	inRequestWindow,
 	sortedJson,
+	uuid7Milliseconds,
 	verifyCentralPersonRequest,
 	type AdminVerificationFailure,
 	type CentralPersonVerifierSettings,
 	type PersonTokenClaims,
 } from '#sign-in-test-support/test-fixtures/controlled-central-admin';
+import type { CentralHeldFloors } from '#sign-in-test-support/test-fixtures/controlled-central-provisioning';
 
 /**
  * The named stand-in for central's C3 person approval routes (central main 1ede5c1b9). It
@@ -149,6 +152,14 @@ const approvalBodyFieldsSchema = z.looseObject({
 type ApprovalBodyFields = z.output<typeof approvalBodyFieldsSchema>;
 
 const oneHourMillis = 3_600_000;
+/** Central's request-log retention: a strict 24-hour cutoff (workspace_request_log.rs:22). */
+const retentionMillis = 86_400_000;
+/** Central's preflight address: `{organization}`, other members ignored (person_approval_http.rs:65-72). */
+const organizationAddressSchema = z.looseObject({
+	organization: z
+		.string()
+		.regex(/^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u),
+});
 const approvalPermission = 'approval:decide';
 
 /** RFC 3339 in UTC with `Z`: whole seconds, or exactly three fraction digits. */
@@ -244,15 +255,28 @@ function independentApprovalIntent(
 
 export function createControlledCentralApprovals(
 	props: CentralPersonVerifierSettings & {
-		/** The provisioning peer's floors: central refuses a person whose floors it lacks. */
-		readonly hasFloors: (organizationId: string, personId: string) => boolean;
+		/** The floors central holds, from the provisioning peer's applied revision pushes. */
+		readonly readFloors: (organizationId: string, personId: string) => CentralHeldFloors;
 	},
 ): ControlledCentralApprovals {
 	const arrivals: ApprovalArrival[] = [];
 	const requests: StoredRequest[] = [];
 	const usedProofIds = new Set<string>();
-	/** Central's operation log: the first result for each person's operation id and intent. */
-	const operationLog = new Map<string, { readonly intent: string; readonly reply: DecideReply }>();
+	/**
+	 * Central's organization request log for person decides, keyed by organization and operation
+	 * id: the caller, the signed intent and the first result (fleet-approvals/src/
+	 * approval_store_person_decide.rs:104-128), readable for 24 hours (fleet-runtime/src/
+	 * workspace_request_log.rs:22, a strict cutoff).
+	 */
+	const operationLog = new Map<
+		string,
+		{
+			readonly personId: string;
+			readonly intent: string;
+			readonly reply: DecideReply;
+			readonly atMillis: number;
+		}
+	>();
 	let pageSize = 100;
 	let loseNextDecide = false;
 
@@ -342,15 +366,66 @@ export function createControlledCentralApprovals(
 		};
 	}
 
-	function admit(claims: PersonTokenClaims, proofId: string): AdminRefusal | null {
-		if (props.now() >= claims.exp * 1000) return { result: 'refused', reason: 'expired' };
-		if (!props.hasFloors(claims.organization_id, claims.sub))
-			return { result: 'refused', reason: 'authorizationSyncRequired' };
+	/**
+	 * Central's applying admission for C3, in its order (fleet-signin/src/
+	 * approval_person_admission.rs:105-160; person_proof/admission.rs at 1ede5c1b9):
+	 * request time (admission.rs:191-203), the organization floor (admission.rs:205-236), the
+	 * person floor (admission.rs:153-174), the approval:decide grant (:175-179), then proof reuse
+	 * (:183-185). A Decide refused only for the missing grant is admitted retained-only
+	 * (approval_person_admission.rs:145-160): it may read back its own retained result and nothing
+	 * else. Central's reject-through watermark is not modelled by the provisioning peer.
+	 */
+	function admit(
+		route: ApprovalPersonOperationName,
+		verified: Extract<Awaited<ReturnType<typeof verifyCentralPersonRequest>>, { kind: 'verified' }>,
+	):
+		| { readonly kind: 'granted' }
+		| { readonly kind: 'retained-only' }
+		| { readonly kind: 'refused'; readonly refusal: AdminRefusal } {
+		const refused = (reason: string) =>
+			({ kind: 'refused', refusal: { result: 'refused', reason } }) as const;
+		const { claims, requestId } = verified;
+		const now = props.now();
+		if (now >= verified.effectiveExpiryMs) return refused('expired');
+		if (
+			!inRequestWindow(uuid7Milliseconds(requestId), now) ||
+			!inRequestWindow(verified.proofTimeMs, now)
+		)
+			return refused('requestTime');
+		const floors = props.readFloors(claims.organization_id, claims.sub);
+		const organization = floors.organization;
+		if (organization === null) return refused('authorizationSyncRequired');
+		if (organization.state === 'deleted') return refused('notPermitted');
+		if (claims.organization_revision > organization.revision)
+			return refused('authorizationSyncRequired');
+		if (organization.state === 'stopped') return refused('notPermitted');
+		if (claims.organization_revision < organization.revision) return refused('refreshRequired');
+		if (claims.permission_policy_digest !== organization.policyDigest)
+			return refused('refreshRequired');
+		const person = floors.person;
+		if (person === null) return refused('authorizationSyncRequired');
+		if (person.subjectId !== claims.authorization_subject_id) return refused('notPermitted');
+		if (claims.person_revision > person.revision) return refused('authorizationSyncRequired');
+		if (person.state === 'inactive') return refused('notPermitted');
+		if (claims.person_revision < person.revision) return refused('refreshRequired');
+		const reused = usedProofIds.has(requestId);
 		if (!claims.permissions.includes(approvalPermission))
-			return { result: 'refused', reason: 'notPermitted' };
-		if (usedProofIds.has(proofId)) return { result: 'refused', reason: 'requestReused' };
-		usedProofIds.add(proofId);
-		return null;
+			return route === 'ApprovalDecide' && !reused
+				? { kind: 'retained-only' }
+				: refused('notPermitted');
+		if (reused) return refused('requestReused');
+		return { kind: 'granted' };
+	}
+
+	/** The retained entry for this organization's operation id, if central still holds it. */
+	function retained(
+		organizationId: string,
+		operationId: string | undefined,
+	): (typeof operationLog extends Map<string, infer Entry> ? Entry : never) | undefined {
+		const entry = operationLog.get(`${organizationId}/${operationId ?? ''}`);
+		return entry !== undefined && entry.atMillis > props.now() - retentionMillis
+			? entry
+			: undefined;
 	}
 
 	function find(organizationId: string, requestId: unknown): StoredRequest | undefined {
@@ -386,12 +461,20 @@ export function createControlledCentralApprovals(
 			return stored === undefined
 				? { kind: 'notVisible' }
 				: { kind: 'request', view: view(stored) };
-		const logKey = `${claims.sub}/${body.operationId ?? ''}`;
-		const prior = operationLog.get(logKey);
+		// approval_store_person_decide.rs:83-100: a retained result for this operation id is
+		// replayed to its own caller with the same intent; anything else is operationConflict.
+		const prior = retained(organizationId, body.operationId);
 		if (prior !== undefined)
-			return prior.intent === intent ? prior.reply : { kind: 'operationConflict' };
+			return prior.personId === claims.sub && prior.intent === intent
+				? prior.reply
+				: { kind: 'operationConflict' };
 		const reply = decide(stored, body, claims);
-		operationLog.set(logKey, { intent, reply });
+		operationLog.set(`${organizationId}/${body.operationId ?? ''}`, {
+			personId: claims.sub,
+			intent,
+			reply,
+			atMillis: props.now(),
+		});
 		return reply;
 	}
 
@@ -440,46 +523,85 @@ export function createControlledCentralApprovals(
 			const bytes = new Uint8Array(await request.arrayBuffer());
 			const bodySha256 = createHash('sha256').update(bytes).digest('hex');
 			const absent = { personId: null, permissions: null, operationId: null, bodySha256 } as const;
+			const unauthenticated = (failure: AdminVerificationFailure): Response => {
+				arrivals.push({
+					route,
+					outcome: { kind: 'refused-unauthenticated', failure },
+					...absent,
+				});
+				return new Response(null, { status: 401 });
+			};
+			// Preflight (collaboration-central-core/src/person_approval_http.rs:55-79): both proof
+			// headers (401), then only the organization address (400). The full body waits.
+			if (!request.headers.has('authorization') || !request.headers.has('dpop'))
+				return unauthenticated('missing-headers');
 			let decoded: unknown = null;
 			try {
 				decoded = JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(bytes));
 			} catch {
 				decoded = null;
 			}
-			const parsed = approvalPersonRequestBodySchemas[route].safeParse(decoded);
-			if (!parsed.success) {
+			const address = organizationAddressSchema.safeParse(decoded);
+			if (!address.success) {
 				arrivals.push({ route, outcome: { kind: 'bad-request' }, ...absent });
 				return new Response(null, { status: 400 });
 			}
-			const body = approvalBodyFieldsSchema.parse(parsed.data);
-			const operationId = route === 'ApprovalDecide' ? (body.operationId ?? null) : null;
-			const intent = independentApprovalIntent(route, body);
+			// Verification, then the full decode and the signed intent
+			// (fleet-signin/src/approval_person_admission.rs:368-395): every failure is 401.
+			let body: ApprovalBodyFields | null = null;
 			const verified = await verifyCentralPersonRequest(props, request, {
 				path: approvalPersonRoutePaths[route],
-				organization: body.organization,
-				intent,
+				organization: address.data.organization,
+				intent: () => {
+					const parsed = approvalPersonRequestBodySchemas[route].safeParse(decoded);
+					if (!parsed.success) return null;
+					body = approvalBodyFieldsSchema.parse(parsed.data);
+					return independentApprovalIntent(route, body);
+				},
 			});
-			if (verified.kind === 'refused') {
-				arrivals.push({
-					route,
-					outcome: { kind: 'refused-unauthenticated', failure: verified.failure },
-					...absent,
-					operationId,
-				});
-				return new Response(null, { status: 401 });
-			}
+			if (verified.kind === 'refused' || body === null)
+				return unauthenticated(verified.kind === 'refused' ? verified.failure : 'operation-body');
+			const admittedBody: ApprovalBodyFields = body;
+			const operationId = route === 'ApprovalDecide' ? (admittedBody.operationId ?? null) : null;
 			const facts = {
 				personId: verified.claims.sub,
 				permissions: verified.claims.permissions,
 				operationId,
 				bodySha256,
 			};
-			const refused = admit(verified.claims, verified.requestId);
-			if (refused !== null) {
-				arrivals.push({ route, outcome: { kind: 'refused', reason: refused.reason }, ...facts });
-				return Response.json(refused);
+			const admission = admit(route, verified);
+			if (admission.kind === 'refused') {
+				arrivals.push({
+					route,
+					outcome: { kind: 'refused', reason: admission.refusal.reason },
+					...facts,
+				});
+				return Response.json(admission.refusal);
 			}
-			const reply = apply(route, body, verified.claims, intent);
+			if (admission.kind === 'retained-only') {
+				// approval_store_person_decide.rs:38-66: only this caller's retained result under the
+				// same intent comes back; otherwise notPermitted (person_approval_application.rs:96),
+				// and the proof is not reserved.
+				const prior = retained(verified.claims.organization_id, admittedBody.operationId);
+				if (
+					prior === undefined ||
+					prior.personId !== verified.claims.sub ||
+					prior.intent !== verified.intent
+				) {
+					const refusal = { result: 'refused', reason: 'notPermitted' } as const;
+					arrivals.push({ route, outcome: { kind: 'refused', reason: refusal.reason }, ...facts });
+					return Response.json(refusal);
+				}
+				usedProofIds.add(verified.requestId);
+				arrivals.push({
+					route,
+					outcome: { kind: 'replied', reply: prior.reply, delivered: true },
+					...facts,
+				});
+				return Response.json(prior.reply);
+			}
+			usedProofIds.add(verified.requestId);
+			const reply = apply(route, admittedBody, verified.claims, verified.intent);
 			const delivered = !(route === 'ApprovalDecide' && loseNextDecide);
 			if (route === 'ApprovalDecide') loseNextDecide = false;
 			arrivals.push({ route, outcome: { kind: 'replied', reply, delivered }, ...facts });

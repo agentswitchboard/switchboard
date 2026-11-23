@@ -910,7 +910,7 @@ export async function startLocalAuthHarness(
 				.object({ keys: z.array(z.looseObject({ kty: z.string() })) })
 				.parse(await (await auth('/api/auth/jwks')).json()),
 		now: () => centralAdminTime,
-		hasFloors: centralProvisioning.hasFloors,
+		readFloors: centralProvisioning.readFloors,
 	});
 	centralProvisioning.attachApprovals(centralApprovals);
 	const proofClose = createLocalAuthProofClose({

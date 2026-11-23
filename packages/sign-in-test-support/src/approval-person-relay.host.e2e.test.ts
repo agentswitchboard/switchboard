@@ -4,6 +4,8 @@ import path from 'node:path';
 import {
 	createMemoryProofKeyStore,
 	runOwnerCli,
+	sendApprovalOperation,
+	signInFleetCli,
 	type ApprovalsCommandOptions,
 	type FleetCliIo,
 } from '@agent-collaboration/sign-in-owner-cli';
@@ -354,7 +356,7 @@ it('approvals: provider approvals resolve one option or refuse locally; question
 		expect(await approvals(['approve', choose])).toEqual({
 			exitCode: 2,
 			lines: [
-				'More than one option is an allow; choose one with --option. Nothing was sent.',
+				'More than one option is an allow; choose one with --option. No decision was sent.',
 				...ambiguousOptions,
 			],
 		});
@@ -370,7 +372,7 @@ it('approvals: provider approvals resolve one option or refuse locally; question
 		expect(await approvals(['answer', asked], { field: ['1=latency', '2=North'] })).toEqual({
 			exitCode: 2,
 			lines: [
-				'The value for field 2 does not fit that field. Nothing was sent.',
+				'The value for field 2 does not fit that field. No decision was sent.',
 				'Fields:',
 				'  field 1  text  required  Reason',
 				'  field 2  one option id  optional  Region',
@@ -487,9 +489,9 @@ it('approvals: a multi-choice field takes a comma list; duplicates, unknown ids 
 
 		// Act / Assert: each refusal lists the field's options and sends nothing.
 		for (const [value, words] of [
-			['1,2,3', 'Field 1 takes 1 to 2 options, not 3. Nothing was sent.'],
-			['2,2', 'Field 1 lists option 2 more than once. Nothing was sent.'],
-			['1,7', 'Field 1 has no option "7". Nothing was sent.'],
+			['1,2,3', 'Field 1 takes 1 to 2 options, not 3. No decision was sent.'],
+			['2,2', 'Field 1 lists option 2 more than once. No decision was sent.'],
+			['1,7', 'Field 1 has no option "7". No decision was sent.'],
 		] as const)
 			expect(await approvals(['answer', asked], { field: [`1=${value}`] })).toEqual({
 				exitCode: 2,
@@ -519,6 +521,136 @@ it('approvals: a multi-choice field takes a comma list; duplicates, unknown ids 
 				}),
 			}),
 		});
+	} finally {
+		await harness.close();
+	}
+});
+
+/** The owner's role, changed through the production fenced adapter (a revision bump and push). */
+async function setRole(
+	fixture: FleetFixture,
+	personId: string,
+	role: 'owner' | 'member',
+): Promise<void> {
+	const changed = await fixture.harness.auth('/__auth-proof/authorization-fence', {
+		method: 'POST',
+		headers: { 'content-type': 'application/json', cookie: fixture.cookie },
+		body: JSON.stringify({
+			kind: 'update',
+			model: 'member',
+			where: [{ field: 'userId', value: personId }],
+			update: { role },
+		}),
+	});
+	expect(changed.status).toBe(200);
+	await fixture.harness.settleDeferredWork();
+}
+
+it('approvals: after the grant is lost, a repeat with --operation-id reaches Decide with no read and gets the retained result', async () => {
+	// Arrange: the owner approves an unproven call; central retains the result.
+	const fixture = await setupFleetCli();
+	const { harness, target } = fixture;
+	try {
+		const organizationId = target.organizationId;
+		const requestId = ids.nextId();
+		harness.centralApprovals.seedUnprovenCall({
+			organizationId,
+			requestId,
+			raisedAtMillis: initialTime - minute,
+		});
+		const approvals = approvalsCli({ fixture, io: fixture.io, organizationId });
+		expect(await approvals(['approve', requestId])).toEqual({
+			exitCode: 0,
+			lines: ['Decision saved: allow.'],
+		});
+		const first = harness.centralApprovals.arrivals.at(-1);
+		const operationId = z.uuidv7().parse(first?.operationId);
+		const ownerId = z.uuidv7().parse(first?.personId);
+		// The owner loses approval:decide: their role becomes member (revision bumped and pushed).
+		await setRole(fixture, ownerId, 'member');
+		const arrivalsBefore = harness.centralApprovals.arrivals.length;
+		// A plain approve now reads first, and central refuses the read.
+		expect(await approvals(['approve', requestId])).toEqual({
+			exitCode: 2,
+			lines: ["Not permitted: answering approvals needs the organization owner's approval:decide."],
+		});
+		// Act: the recovery states the exact answer and goes straight to Decide.
+		const recovered = await approvals(['approve', requestId], { 'operation-id': operationId });
+		// Assert
+		expect(recovered).toEqual({ exitCode: 0, lines: ['Decision saved: allow.'] });
+		const after = harness.centralApprovals.arrivals.slice(arrivalsBefore);
+		expect(after.map((arrival) => [arrival.route, arrival.outcome.kind])).toEqual([
+			['ApprovalRead', 'refused'],
+			['ApprovalDecide', 'replied'],
+		]);
+		const recovery = after[1];
+		expect(recovery?.operationId).toBe(operationId);
+		expect(recovery?.permissions).not.toContain('approval:decide');
+		expect(recovery?.outcome).toEqual(first?.outcome);
+		// A different answer under the same id is not a recovery: central refuses it.
+		expect(await approvals(['deny', requestId], { 'operation-id': operationId })).toEqual({
+			exitCode: 2,
+			lines: ["Not permitted: answering approvals needs the organization owner's approval:decide."],
+		});
+	} finally {
+		await harness.close();
+	}
+});
+
+it("approvals: the stand-in keeps central's order: a contract-invalid body behind a bad proof is 401, and a token behind its revision is refreshRequired", async () => {
+	const fixture = await setupFleetCli();
+	const { harness, target } = fixture;
+	try {
+		const organizationId = target.organizationId;
+		// Central reads only the address, verifies, then decodes the body: 401, not 400.
+		const unsigned = await fetch(
+			new URL('/api/auth/organization-admin/v1/approval-list', target.issuer),
+			{
+				method: 'POST',
+				headers: {
+					'content-type': 'application/json',
+					authorization: 'DPoP not-a-token',
+					dpop: 'not-a-proof',
+				},
+				body: JSON.stringify({ organization: organizationId, filter: 'bogus' }),
+			},
+		);
+		expect(unsigned.status).toBe(401);
+		expect(harness.centralApprovals.arrivals.at(-1)?.outcome).toEqual({
+			kind: 'refused-unauthenticated',
+			failure: 'token',
+		});
+		// A token issued before the person's revision moved is refused refreshRequired.
+		const store = createMemoryProofKeyStore(webSignInCrypto);
+		const session = await signInFleetCli({ target, store, io: fixture.io });
+		const list = await sendApprovalOperation({
+			target,
+			session,
+			io: fixture.io,
+			operation: {
+				operation: 'ApprovalList',
+				organization: organizationId,
+				filter: 'waiting',
+				cursor: null,
+			},
+		});
+		expect(list).toMatchObject({ kind: 'replied' });
+		const ownerId = z.uuidv7().parse(harness.centralApprovals.arrivals.at(-1)?.personId);
+		// The role change bumps the person's revision past the token's; the floor check comes first.
+		await setRole(fixture, ownerId, 'member');
+		expect(
+			await sendApprovalOperation({
+				target,
+				session,
+				io: fixture.io,
+				operation: {
+					operation: 'ApprovalList',
+					organization: organizationId,
+					filter: 'waiting',
+					cursor: null,
+				},
+			}),
+		).toEqual({ kind: 'refused', reason: 'refreshRequired' });
 	} finally {
 		await harness.close();
 	}

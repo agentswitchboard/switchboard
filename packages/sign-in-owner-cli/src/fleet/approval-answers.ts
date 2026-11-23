@@ -97,13 +97,13 @@ export function optionRefusalWords(
 ): string {
 	switch (resolution.kind) {
 		case 'ambiguous':
-			return `More than one option is ${effectWords[resolution.effect]}; choose one with --option. Nothing was sent.`;
+			return `More than one option is ${effectWords[resolution.effect]}; choose one with --option. No decision was sent.`;
 		case 'none':
-			return `No option is ${effectWords[resolution.effect]}; choose one with --option. Nothing was sent.`;
+			return `No option is ${effectWords[resolution.effect]}; choose one with --option. No decision was sent.`;
 		case 'unoffered':
-			return `Option ${resolution.optionId} is not offered. Nothing was sent.`;
+			return `Option ${resolution.optionId} is not offered. No decision was sent.`;
 		case 'invalid-option':
-			return '--option takes an option id from the list below. Nothing was sent.';
+			return '--option takes an option id from the list below. No decision was sent.';
 		default:
 			return resolution satisfies never;
 	}
@@ -271,22 +271,81 @@ export function questionRefusalWords(
 ): string {
 	switch (build.kind) {
 		case 'malformed-argument':
-			return `--field takes FIELD_ID=VALUE, not "${build.argument}". Nothing was sent.`;
+			return `--field takes FIELD_ID=VALUE, not "${build.argument}". No decision was sent.`;
 		case 'unknown-field':
-			return `Field ${build.fieldId} is not on this question. Nothing was sent.`;
+			return `Field ${build.fieldId} is not on this question. No decision was sent.`;
 		case 'repeated-field':
-			return `Field ${build.fieldId} is given more than once. Nothing was sent.`;
+			return `Field ${build.fieldId} is given more than once. No decision was sent.`;
 		case 'wrong-value':
-			return `The value for field ${build.fieldId} does not fit that field. Nothing was sent.`;
+			return `The value for field ${build.fieldId} does not fit that field. No decision was sent.`;
 		case 'unknown-choice':
-			return `Field ${build.fieldId} has no option "${build.choice}". Nothing was sent.`;
+			return `Field ${build.fieldId} has no option "${build.choice}". No decision was sent.`;
 		case 'repeated-choice':
-			return `Field ${build.fieldId} lists option ${build.optionId} more than once. Nothing was sent.`;
+			return `Field ${build.fieldId} lists option ${build.optionId} more than once. No decision was sent.`;
 		case 'choice-count':
-			return `Field ${build.fieldId} takes ${build.min} to ${build.max} options, not ${build.count}. Nothing was sent.`;
+			return `Field ${build.fieldId} takes ${build.min} to ${build.max} options, not ${build.count}. No decision was sent.`;
 		case 'missing-required':
-			return `Field ${build.fieldId} is required. Nothing was sent.`;
+			return `Field ${build.fieldId} is required. No decision was sent.`;
 		default:
 			return build satisfies never;
+	}
+}
+
+/**
+ * PR #24 review B1: a recovery with `--operation-id` sends the decide straight away, with no
+ * read, so central can return a result it retained even after `approval:decide` was removed. The
+ * answer must therefore be stated in full: `--option N` for a provider approval, or the verb
+ * alone (approve allows, deny declines) for an unproven call. A question's fields cannot be typed
+ * without reading the question, so question recovery is refused (held for the Sign-in Lead).
+ * Nothing is stored locally.
+ */
+export function recoveryAnswer(props: {
+	readonly verb: 'approve' | 'deny' | 'answer';
+	readonly option: string | undefined;
+}):
+	| { readonly kind: 'answer'; readonly answer: DecideAnswer }
+	| { readonly kind: 'refused'; readonly words: string } {
+	if (props.verb === 'answer')
+		return {
+			kind: 'refused',
+			words:
+				"A recovery with --operation-id sends the decide without reading the request, so it must repeat the exact answer; a question's fields cannot be typed exactly without reading it, so questions cannot be recovered this way yet. Nothing was sent.",
+		};
+	if (props.option === undefined)
+		return {
+			kind: 'answer',
+			answer: { kind: 'unprovenCall', decision: props.verb === 'approve' ? 'allow' : 'decline' },
+		};
+	const optionId = offeredOptionIdSchema.safeParse(
+		/^\d+$/u.test(props.option) ? Number(props.option) : Number.NaN,
+	);
+	return optionId.success
+		? { kind: 'answer', answer: { kind: 'approval', optionId: optionId.data } }
+		: {
+				kind: 'refused',
+				words:
+					'A recovery with --operation-id must repeat the exact answer: --option takes the option id the first decide used. Nothing was sent.',
+			};
+}
+
+/**
+ * The exact command that repeats this decide: the same operation id and the same answer, sent
+ * without a read. Null for a question, which cannot be recovered that way yet.
+ */
+export function repeatCommand(props: {
+	readonly requestId: string;
+	readonly operationId: string;
+	readonly answer: DecideAnswer;
+}): string | null {
+	const base = `--operation-id ${props.operationId}`;
+	switch (props.answer.kind) {
+		case 'unprovenCall':
+			return `approvals ${props.answer.decision === 'allow' ? 'approve' : 'deny'} ${props.requestId} ${base}`;
+		case 'approval':
+			return `approvals approve ${props.requestId} ${base} --option ${props.answer.optionId}`;
+		case 'question':
+			return null;
+		default:
+			return props.answer satisfies never;
 	}
 }

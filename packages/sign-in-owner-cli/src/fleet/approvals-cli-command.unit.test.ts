@@ -97,6 +97,8 @@ async function approvals(
 	readonly exitCode: number;
 	readonly lines: string[];
 	readonly calls: { readonly path: string; readonly body: unknown; readonly proof: string }[];
+	/** Token refreshes: zero proves nothing reached the credential setup. */
+	readonly refreshes: number;
 }> {
 	const world = await scenario(relayReplies);
 	const lines: string[] = [];
@@ -117,6 +119,7 @@ async function approvals(
 		exitCode,
 		lines,
 		calls: world.relayCalls.map((call) => ({ ...call, body: JSON.parse(call.body) })),
+		refreshes: world.refreshCalls.length,
 	};
 }
 
@@ -228,20 +231,18 @@ describe('approvals approve and deny', (): void => {
 		expect(decodeJwt(first?.proof ?? '')['jti']).not.toBe(decodeJwt(retry?.proof ?? '')['jti']);
 	});
 
-	it('names the operation id to repeat with when the retry gets no answer either', async (): Promise<void> => {
+	it('names the exact repeat command when the retry gets no answer either', async (): Promise<void> => {
 		const result = await approvals(
 			['approve', requestId],
-			[readRequest(unprovenCallView), unavailable, unavailable],
-			{ 'operation-id': '019a3dce-2000-7000-8000-0000000000f1' },
+			[readRequest(twoAllowsView), unavailable, unavailable],
+			{ option: '4' },
 		);
 		expect(result.exitCode).toBe(1);
+		const operationId = String(Reflect.get(Object(result.calls[1]?.body), 'operationId'));
 		expect(result.lines).toEqual([
-			'Central did not answer. Repeat with --operation-id 019a3dce-2000-7000-8000-0000000000f1; it will not be decided twice.',
+			`Central did not answer. Repeat with: approvals approve ${requestId} --operation-id ${operationId} --option 4. A repeat sends the decide without reading the request, so it must carry this exact answer; it will not be decided twice.`,
 		]);
-		expect(result.calls.slice(1).map((call) => call.body)).toEqual([
-			expect.objectContaining({ operationId: '019a3dce-2000-7000-8000-0000000000f1' }),
-			expect.objectContaining({ operationId: '019a3dce-2000-7000-8000-0000000000f1' }),
-		]);
+		expect(result.calls[2]?.body).toEqual(result.calls[1]?.body);
 	});
 
 	it('approves a provider approval with its single allow option', async (): Promise<void> => {
@@ -257,7 +258,7 @@ describe('approvals approve and deny', (): void => {
 		const result = await approvals(['approve', requestId], [readRequest(twoAllowsView)]);
 		expect(result.exitCode).toBe(2);
 		expect(result.lines).toEqual([
-			'More than one option is an allow; choose one with --option. Nothing was sent.',
+			'More than one option is an allow; choose one with --option. No decision was sent.',
 			'Options:',
 			'  option 1  allow  this request only  Allow once',
 			'  option 4  allow  kept until changed (in the agent settings file)  Always allow',
@@ -314,7 +315,7 @@ describe('approvals approve and deny', (): void => {
 		});
 		expect(result.exitCode).toBe(2);
 		expect(result.lines).toEqual([
-			'The value for field 2 does not fit that field. Nothing was sent.',
+			'The value for field 2 does not fit that field. No decision was sent.',
 			'Fields:',
 			'  field 1  text  required  Reason',
 			'  field 2  one option id  optional  Region',
@@ -338,18 +339,109 @@ describe('approvals approve and deny', (): void => {
 			() => readRequest(unprovenCallView),
 			{ option: '1' },
 		],
+	] as const)(
+		'refuses %s after the read, sending no decision',
+		async (_name, args, reply, options): Promise<void> => {
+			const result = await approvals(args, [reply()], options);
+			expect(result.exitCode).toBe(2);
+			expect(result.lines[0]).toMatch(/No decision was sent\.$/u);
+			expect(result.calls).toHaveLength(1);
+		},
+	);
+
+	it.each([
 		[
-			'--field on approve',
-			['approve', requestId],
-			() => readRequest(providerApprovalView),
-			{ field: ['1=x'] },
+			'answer',
+			['answer', requestId],
+			{ option: '1', field: ['1=x'] },
+			'option',
+			'takes --field, --operation-id',
 		],
-	] as const)('refuses %s locally', async (_name, args, reply, options): Promise<void> => {
-		const result = await approvals(args, [reply()], options);
-		expect(result.exitCode).toBe(2);
-		expect(result.lines[0]).toMatch(/Nothing was sent\.$/u);
-		expect(result.calls).toHaveLength(1);
-	});
+		[
+			'approve',
+			['approve', requestId],
+			{ field: ['1=x'] },
+			'field',
+			'takes --option, --operation-id',
+		],
+		['list', ['list'], { option: '1' }, 'option', 'takes --all, --cursor'],
+		[
+			'list',
+			['list'],
+			{ 'operation-id': '019a3dce-2000-7000-8000-0000000000f1' },
+			'operation-id',
+			'takes --all, --cursor',
+		],
+		['show', ['show', requestId], { all: true }, 'all', 'takes no options'],
+		['show', ['show', requestId], { field: ['1=x'] }, 'field', 'takes no options'],
+		[
+			'deny',
+			['deny', requestId],
+			{ cursor: requestId },
+			'cursor',
+			'takes --option, --operation-id',
+		],
+	] as const)(
+		'approvals %s refuses an unsupported flag before any credential or request',
+		async (subcommand, args, options, flag, takes): Promise<void> => {
+			const result = await approvals(args, [], options);
+			expect(result).toEqual({
+				exitCode: 2,
+				lines: [`approvals ${subcommand} does not take --${flag} (it ${takes}). Nothing was sent.`],
+				calls: [],
+				refreshes: 0,
+			});
+		},
+	);
+});
+
+describe('recovery with --operation-id (no read)', (): void => {
+	const operationId = '019a3dce-2000-7000-8000-0000000000f1';
+
+	it.each([
+		['approve', {}, { kind: 'unprovenCall', decision: 'allow' }],
+		['deny', {}, { kind: 'unprovenCall', decision: 'decline' }],
+		['approve', { option: '4' }, { kind: 'approval', optionId: 4 }],
+		['deny', { option: '2' }, { kind: 'approval', optionId: 2 }],
+	] as const)(
+		'%s %j sends the decide straight away with the stated answer',
+		async (verb, flags, answer): Promise<void> => {
+			const result = await approvals([verb, requestId], [savedAnswer(answer)], {
+				'operation-id': operationId,
+				...flags,
+			});
+			expect(result.exitCode).toBe(0);
+			expect(result.calls.map((call) => call.path)).toEqual([
+				'/api/auth/organization-admin/v1/approval-decide',
+			]);
+			expect(result.calls[0]?.body).toEqual({ organization, requestId, operationId, answer });
+		},
+	);
+
+	it.each([
+		[
+			'answer',
+			{ field: ['1=latency'] },
+			/questions cannot be recovered this way yet\. Nothing was sent\.$/u,
+		],
+		[
+			'approve',
+			{ option: 'four' },
+			/--option takes the option id the first decide used\. Nothing was sent\.$/u,
+		],
+	] as const)(
+		'refuses %s %j before any credential or request',
+		async (verb, flags, words): Promise<void> => {
+			const result = await approvals([verb, requestId], [], {
+				'operation-id': operationId,
+				...flags,
+			});
+			expect(result.exitCode).toBe(2);
+			expect(result.lines).toEqual([expect.stringMatching(words)]);
+			expect(result.calls).toEqual([]);
+			expect(result.refreshes).toBe(0);
+		},
+	);
 
 	it('decides nothing for a request the person may not see', async (): Promise<void> => {
 		const result = await approvals(

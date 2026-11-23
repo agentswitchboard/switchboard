@@ -13,9 +13,15 @@ import {
 	optionLines,
 	optionRefusalWords,
 	questionRefusalWords,
+	recoveryAnswer,
+	repeatCommand,
 	resolveApprovalOption,
 } from '#sign-in-owner-cli/fleet/approval-answers';
 import { decideApproval, sendApprovalOperation } from '#sign-in-owner-cli/fleet/approval-command';
+import {
+	unsupportedApprovalsFlag,
+	unsupportedFlagWords,
+} from '#sign-in-owner-cli/fleet/approvals-cli-flags';
 import type { FleetCliEnvironment } from '#sign-in-owner-cli/fleet/fleet-cli-commands';
 import { fleetCliSession } from '#sign-in-owner-cli/fleet/fleet-credential';
 
@@ -109,7 +115,10 @@ export function adminRefusalWords(reason: ApprovalPersonAdminRefusal): string {
 
 const credentialRefused = 'Central refused the fleet credential; run fleet-login again.';
 
-/** Runs one approvals command; returns the process exit code. No token or key is printed. */
+/**
+ * Runs one approvals command; returns the process exit code. No token or key is printed.
+ * `options` carries every flag the person supplied: each must be one this subcommand takes.
+ */
 export async function runApprovalsCommand(props: {
 	readonly arguments: readonly string[];
 	readonly target: AuthTarget;
@@ -117,8 +126,29 @@ export async function runApprovalsCommand(props: {
 	readonly environment: FleetCliEnvironment;
 }): Promise<number> {
 	const parsed = approvalsArgumentsSchema.parse(props.arguments);
-	const target = requireFleetTarget(props.target);
 	const { environment } = props;
+	// S3: refused before any credential or request.
+	const supplied = Object.entries(props.options)
+		.filter(([, value]) => value !== undefined)
+		.map(([flag]) => flag);
+	const unsupported = unsupportedApprovalsFlag(parsed[0], supplied);
+	if (unsupported !== null) {
+		environment.write(unsupportedFlagWords(parsed[0], unsupported));
+		return 2;
+	}
+	// B1: a decide repeated with its operation id goes straight to Decide, with no read.
+	const recovery =
+		parsed[0] !== 'list' && parsed[0] !== 'show' && props.options['operation-id'] !== undefined
+			? {
+					operationId: approvalOperationIdSchema.parse(props.options['operation-id']),
+					answer: recoveryAnswer({ verb: parsed[0], option: props.options.option }),
+				}
+			: null;
+	if (recovery?.answer.kind === 'refused') {
+		environment.write(recovery.answer.words);
+		return 2;
+	}
+	const target = requireFleetTarget(props.target);
 	const { io } = environment;
 	const store = environment.store({
 		issuer: target.issuer,
@@ -152,6 +182,15 @@ export async function runApprovalsCommand(props: {
 	}
 
 	const [command, requestId] = parsed;
+	if (recovery !== null && command !== 'show' && recovery.answer.kind === 'answer')
+		return decideAndReport({
+			...send,
+			environment,
+			organization,
+			requestId,
+			operationId: recovery.operationId,
+			answer: recovery.answer.answer,
+		});
 	const read = await sendApprovalOperation({
 		...send,
 		operation: { operation: 'ApprovalRead', organization, requestId },
@@ -174,23 +213,46 @@ export async function runApprovalsCommand(props: {
 		return 2;
 	}
 	// Minted once for this invocation and reused by its retry; a repeat names it explicitly.
-	const operationId =
-		props.options['operation-id'] === undefined
-			? io.nextId()
-			: approvalOperationIdSchema.parse(props.options['operation-id']);
-	const decided = await decideApproval({
+	return decideAndReport({
 		...send,
+		environment,
+		organization,
+		requestId,
+		operationId: io.nextId(),
+		answer: answer.answer,
+	});
+}
+
+/** One decide (with its single retry after no answer) and its words; the exit code. */
+async function decideAndReport(props: {
+	readonly target: Parameters<typeof decideApproval>[0]['target'];
+	readonly session: Parameters<typeof decideApproval>[0]['session'];
+	readonly io: Parameters<typeof decideApproval>[0]['io'];
+	readonly environment: FleetCliEnvironment;
+	readonly organization: string;
+	readonly requestId: string;
+	readonly operationId: string;
+	readonly answer: DecideAnswer;
+}): Promise<number> {
+	const { environment } = props;
+	const decided = await decideApproval({
+		target: props.target,
+		session: props.session,
+		io: props.io,
 		operation: {
 			operation: 'ApprovalDecide',
-			organization,
-			requestId,
-			operationId,
-			answer: answer.answer,
+			organization: props.organization,
+			requestId: props.requestId,
+			operationId: props.operationId,
+			answer: props.answer,
 		},
 	});
 	if (decided.kind === 'unknown') {
+		const repeat = repeatCommand(props);
 		environment.write(
-			`Central did not answer. Repeat with --operation-id ${operationId}; it will not be decided twice.`,
+			repeat === null
+				? `Central did not answer; this answer may have been saved under operation id ${props.operationId}. A question cannot be repeated with --operation-id yet.`
+				: `Central did not answer. Repeat with: ${repeat}. A repeat sends the decide without reading the request, so it must carry this exact answer; it will not be decided twice.`,
 		);
 		return 1;
 	}
@@ -229,15 +291,13 @@ function answerFor(
 	if (command === 'answer') {
 		if (view.kind !== 'providerQuestion')
 			return refused(
-				`This request is a ${kind}; answer it with approve or deny. Nothing was sent.`,
+				`This request is a ${kind}; answer it with approve or deny. No decision was sent.`,
 			);
 		const built = buildQuestionAnswer({ offer: view.offer, fieldArguments: options.field ?? [] });
 		return built.kind === 'built'
 			? { kind: 'answer', answer: { kind: 'question', answer: built.answer } }
 			: refused(questionRefusalWords(built), 'Fields:', ...fieldLines(view.offer));
 	}
-	if (options.field !== undefined)
-		return refused('--field is for approvals answer on a question. Nothing was sent.');
 	switch (view.kind) {
 		case 'unprovenCall':
 			return options.option === undefined
@@ -246,7 +306,7 @@ function answerFor(
 						answer: { kind: 'unprovenCall', decision: command === 'approve' ? 'allow' : 'decline' },
 					}
 				: refused(
-						'--option is for provider approvals; this request is an unproven call. Nothing was sent.',
+						'--option is for provider approvals; this request is an unproven call. No decision was sent.',
 					);
 		case 'providerApproval': {
 			const resolution = resolveApprovalOption({
@@ -260,7 +320,7 @@ function answerFor(
 		}
 		case 'providerQuestion':
 			return refused(
-				`This request is a question; answer it with approvals answer ${view.requestId} --field FIELD_ID=VALUE. Nothing was sent.`,
+				`This request is a question; answer it with approvals answer ${view.requestId} --field FIELD_ID=VALUE. No decision was sent.`,
 				'Fields:',
 				...fieldLines(view.offer),
 			);
