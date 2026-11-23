@@ -7,22 +7,37 @@ import {
 import { z } from 'zod';
 
 import { requireFleetTarget, type AuthTarget } from '#sign-in-owner-cli/auth-target';
+import {
+	buildQuestionAnswer,
+	fieldLines,
+	optionLines,
+	optionRefusalWords,
+	questionRefusalWords,
+	resolveApprovalOption,
+} from '#sign-in-owner-cli/fleet/approval-answers';
 import { decideApproval, sendApprovalOperation } from '#sign-in-owner-cli/fleet/approval-command';
 import type { FleetCliEnvironment } from '#sign-in-owner-cli/fleet/fleet-cli-commands';
 import { fleetCliSession } from '#sign-in-owner-cli/fleet/fleet-credential';
 
 export const approvalsCommandName = 'approvals';
 
-/** `approvals list [--all] [--cursor ID]`, `show ID`, and `approve|deny ID [--operation-id ID]`. */
+/**
+ * `approvals list [--all] [--cursor ID]`, `show ID`, `approve|deny ID [--option ID]` and
+ * `answer ID --field FIELD_ID=VALUE...`; a decide also takes `--operation-id ID` to repeat.
+ */
 const approvalsArgumentsSchema = z.union([
 	z.tuple([z.literal('list')]),
-	z.tuple([z.enum(['show', 'approve', 'deny']), approvalRequestIdSchema]),
+	z.tuple([z.enum(['show', 'approve', 'deny', 'answer']), approvalRequestIdSchema]),
 ]);
 
 export interface ApprovalsCommandOptions {
 	readonly all?: boolean | undefined;
 	readonly cursor?: string | undefined;
 	readonly 'operation-id'?: string | undefined;
+	/** An offered option id, as `show` lists it: overrides approve/deny's effect match. */
+	readonly option?: string | undefined;
+	/** `FIELD_ID=VALUE`, once per answered field of a question. */
+	readonly field?: readonly string[] | undefined;
 }
 
 type ReadView = Extract<
@@ -32,6 +47,7 @@ type ReadView = Extract<
 type DecideReply = ApprovalPersonReplyFor<'ApprovalDecide'>;
 type ListedRequest = ApprovalPersonReplyFor<'ApprovalList'>['items'][number];
 type DecidedBy = Extract<DecideReply, { readonly kind: 'alreadyDecided' }>['by'];
+type DecideAnswer = Parameters<typeof decideApproval>[0]['operation']['answer'];
 
 const requestKindWords = {
 	providerApproval: 'provider approval',
@@ -148,11 +164,13 @@ export async function runApprovalsCommand(props: {
 	const { view } = read.reply;
 	if (command === 'show') {
 		environment.write(`${view.requestId}  ${requestKindWords[view.kind]}  ${view.state.kind}`);
+		for (const line of offerLines(view)) environment.write(line);
 		environment.write(JSON.stringify(view));
 		return 0;
 	}
-	if (view.kind !== 'unprovenCall') {
-		environment.write(unanswerableWords(view));
+	const answer = answerFor(command, view, props.options);
+	if (answer.kind === 'refused') {
+		for (const line of answer.lines) environment.write(line);
 		return 2;
 	}
 	// Minted once for this invocation and reused by its retry; a repeat names it explicitly.
@@ -167,7 +185,7 @@ export async function runApprovalsCommand(props: {
 			organization,
 			requestId,
 			operationId,
-			answer: { kind: 'unprovenCall', decision: command === 'approve' ? 'allow' : 'decline' },
+			answer: answer.answer,
 		},
 	});
 	if (decided.kind === 'unknown') {
@@ -181,12 +199,81 @@ export async function runApprovalsCommand(props: {
 	return decided.reply.kind === 'savedDecision' ? 0 : 2;
 }
 
+/** What `show` lists for a request's offer: each option, or the prompt and each field. */
+function offerLines(view: ReadView): readonly string[] {
+	switch (view.kind) {
+		case 'providerApproval':
+			return [`Title: ${view.offer.title}`, 'Options:', ...optionLines(view.offer)];
+		case 'providerQuestion':
+			return [`Prompt: ${view.offer.prompt}`, 'Fields:', ...fieldLines(view.offer)];
+		case 'unprovenCall':
+			return [];
+		default:
+			return view satisfies never;
+	}
+}
+
 /**
- * Provider approvals and questions need answers the CLI cannot express yet (which offered
- * option, which field values); nothing is decided for them.
+ * The Answer a decide command sends, or why nothing is sent. An unproven call takes approve
+ * (allow) or deny (decline); a provider approval takes the one option the verb or `--option`
+ * resolves; a question takes `answer` with its fields.
  */
-function unanswerableWords(view: ReadView): string {
-	return `This request is a ${requestKindWords[view.kind]}; the CLI cannot answer it yet. Nothing was decided.`;
+function answerFor(
+	command: 'approve' | 'deny' | 'answer',
+	view: ReadView,
+	options: ApprovalsCommandOptions,
+):
+	| { readonly kind: 'answer'; readonly answer: DecideAnswer }
+	| { readonly kind: 'refused'; readonly lines: readonly string[] } {
+	const kind = requestKindWords[view.kind];
+	if (command === 'answer') {
+		if (view.kind !== 'providerQuestion')
+			return refused(
+				`This request is a ${kind}; answer it with approve or deny. Nothing was sent.`,
+			);
+		const built = buildQuestionAnswer({ offer: view.offer, fieldArguments: options.field ?? [] });
+		return built.kind === 'built'
+			? { kind: 'answer', answer: { kind: 'question', answer: built.answer } }
+			: refused(questionRefusalWords(built), 'Fields:', ...fieldLines(view.offer));
+	}
+	if (options.field !== undefined)
+		return refused('--field is for approvals answer on a question. Nothing was sent.');
+	switch (view.kind) {
+		case 'unprovenCall':
+			return options.option === undefined
+				? {
+						kind: 'answer',
+						answer: { kind: 'unprovenCall', decision: command === 'approve' ? 'allow' : 'decline' },
+					}
+				: refused(
+						'--option is for provider approvals; this request is an unproven call. Nothing was sent.',
+					);
+		case 'providerApproval': {
+			const resolution = resolveApprovalOption({
+				offer: view.offer,
+				verb: command,
+				option: options.option,
+			});
+			return resolution.kind === 'resolved'
+				? { kind: 'answer', answer: { kind: 'approval', optionId: resolution.optionId } }
+				: refused(optionRefusalWords(resolution), 'Options:', ...optionLines(view.offer));
+		}
+		case 'providerQuestion':
+			return refused(
+				`This request is a question; answer it with approvals answer ${view.requestId} --field FIELD_ID=VALUE. Nothing was sent.`,
+				'Fields:',
+				...fieldLines(view.offer),
+			);
+		default:
+			return view satisfies never;
+	}
+}
+
+function refused(...lines: readonly string[]): {
+	readonly kind: 'refused';
+	readonly lines: readonly string[];
+} {
+	return { kind: 'refused', lines };
 }
 
 function writeUnanswered(

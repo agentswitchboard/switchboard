@@ -38,7 +38,48 @@ const providerApprovalView = {
 	state: { kind: 'waiting', status: 'pending' },
 	window,
 };
+const twoAllowsView = {
+	...providerApprovalView,
+	offer: {
+		...providerApprovalView.offer,
+		options: [
+			{ id: 1, label: 'Allow once', effect: 'allow', lasts: { kind: 'thisRequest' } },
+			{
+				id: 4,
+				label: 'Always allow',
+				effect: 'allow',
+				lasts: { kind: 'keptUntilChanged', kept: 'agentSettingsFile' },
+			},
+			{ id: 2, label: 'Decline', effect: 'decline', lasts: { kind: 'thisRequest' } },
+		],
+	},
+};
+const questionView = {
+	kind: 'providerQuestion',
+	requestId,
+	offer: {
+		prompt: 'Why and where?',
+		fields: [
+			{ kind: 'text', fieldId: 1, label: 'Reason', description: null, required: true },
+			{
+				kind: 'singleChoice',
+				fieldId: 2,
+				label: 'Region',
+				description: null,
+				required: false,
+				options: [
+					{ optionId: 1, label: 'East' },
+					{ optionId: 2, label: 'West' },
+				],
+			},
+		],
+	},
+	state: { kind: 'waiting', status: 'pending' },
+	window,
+};
 const readRequest = (view: object) => (): Response => Response.json({ kind: 'request', view });
+const savedAnswer = (answer: object) => (): Response =>
+	Response.json({ kind: 'savedDecision', decision: { by: { kind: 'person', personId }, answer } });
 const saved = (decision: 'allow' | 'decline') => (): Response =>
 	Response.json({
 		kind: 'savedDecision',
@@ -203,12 +244,110 @@ describe('approvals approve and deny', (): void => {
 		]);
 	});
 
-	it('decides nothing for a provider approval it cannot express', async (): Promise<void> => {
-		const result = await approvals(['approve', requestId], [readRequest(providerApprovalView)]);
+	it('approves a provider approval with its single allow option', async (): Promise<void> => {
+		const result = await approvals(
+			['approve', requestId],
+			[readRequest(providerApprovalView), savedAnswer({ kind: 'approval', optionId: 1 })],
+		);
+		expect(result).toMatchObject({ exitCode: 0, lines: ['Decision saved: option 1.'] });
+		expect(result.calls[1]?.body).toMatchObject({ answer: { kind: 'approval', optionId: 1 } });
+	});
+
+	it('refuses an ambiguous approve locally, sends no decide, and lists the options', async (): Promise<void> => {
+		const result = await approvals(['approve', requestId], [readRequest(twoAllowsView)]);
 		expect(result.exitCode).toBe(2);
 		expect(result.lines).toEqual([
-			'This request is a provider approval; the CLI cannot answer it yet. Nothing was decided.',
+			'More than one option is an allow; choose one with --option. Nothing was sent.',
+			'Options:',
+			'  option 1  allow  this request only  Allow once',
+			'  option 4  allow  kept until changed (in the agent settings file)  Always allow',
+			'  option 2  decline  this request only  Decline',
 		]);
+		expect(result.calls).toHaveLength(1);
+	});
+
+	it('answers with the --option named, overriding the effect match', async (): Promise<void> => {
+		const result = await approvals(
+			['approve', requestId],
+			[readRequest(twoAllowsView), savedAnswer({ kind: 'approval', optionId: 4 })],
+			{ option: '4' },
+		);
+		expect(result).toMatchObject({ exitCode: 0, lines: ['Decision saved: option 4.'] });
+		expect(result.calls[1]?.body).toMatchObject({ answer: { kind: 'approval', optionId: 4 } });
+	});
+
+	it('shows every option of a provider approval', async (): Promise<void> => {
+		const result = await approvals(['show', requestId], [readRequest(twoAllowsView)]);
+		expect(result.lines.slice(0, 6)).toEqual([
+			`${requestId}  provider approval  waiting`,
+			'Title: Run the migration',
+			'Options:',
+			'  option 1  allow  this request only  Allow once',
+			'  option 4  allow  kept until changed (in the agent settings file)  Always allow',
+			'  option 2  decline  this request only  Decline',
+		]);
+	});
+
+	it('answers a question with its fields', async (): Promise<void> => {
+		const answer = {
+			kind: 'question',
+			answer: {
+				kind: 'answered',
+				fields: [
+					{ fieldId: 1, value: { kind: 'text', value: 'latency' } },
+					{ fieldId: 2, value: { kind: 'selectedOptions', selectedOptionIds: [2] } },
+				],
+			},
+		} as const;
+		const result = await approvals(
+			['answer', requestId],
+			[readRequest(questionView), savedAnswer(answer)],
+			{ field: ['1=latency', '2=2'] },
+		);
+		expect(result).toMatchObject({ exitCode: 0, lines: ['Decision saved: answered.'] });
+		expect(result.calls[1]?.body).toMatchObject({ answer });
+	});
+
+	it('refuses a bad field locally, sends no decide, and lists the fields', async (): Promise<void> => {
+		const result = await approvals(['answer', requestId], [readRequest(questionView)], {
+			field: ['1=latency', '2=North'],
+		});
+		expect(result.exitCode).toBe(2);
+		expect(result.lines).toEqual([
+			'The value for field 2 does not fit that field. Nothing was sent.',
+			'Fields:',
+			'  field 1  text  required  Reason',
+			'  field 2  one option id  optional  Region',
+			'    option 1  East',
+			'    option 2  West',
+		]);
+		expect(result.calls).toHaveLength(1);
+	});
+
+	it.each([
+		['approve on a question', ['approve', requestId], () => readRequest(questionView), {}],
+		[
+			'answer on a provider approval',
+			['answer', requestId],
+			() => readRequest(providerApprovalView),
+			{ field: ['1=x'] },
+		],
+		[
+			'--option on an unproven call',
+			['approve', requestId],
+			() => readRequest(unprovenCallView),
+			{ option: '1' },
+		],
+		[
+			'--field on approve',
+			['approve', requestId],
+			() => readRequest(providerApprovalView),
+			{ field: ['1=x'] },
+		],
+	] as const)('refuses %s locally', async (_name, args, reply, options): Promise<void> => {
+		const result = await approvals(args, [reply()], options);
+		expect(result.exitCode).toBe(2);
+		expect(result.lines[0]).toMatch(/Nothing was sent\.$/u);
 		expect(result.calls).toHaveLength(1);
 	});
 
@@ -309,7 +448,8 @@ describe('arguments', (): void => {
 		[['show']],
 		[['show', 'not-a-uuid']],
 		[['approve', requestId.toUpperCase()]],
-		[['answer', requestId]],
+		[['answer']],
+		[['reply', requestId]],
 	])('refuses %j before any request', async (args): Promise<void> => {
 		await expect(approvals(args, [])).rejects.toThrow();
 	});

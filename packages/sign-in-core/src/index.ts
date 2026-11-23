@@ -64,6 +64,9 @@ export * from '#sign-in-core/organizations/approval-person-operation';
 export {
 	approvalOperationIdSchema,
 	approvalRequestIdSchema,
+	offeredOptionIdSchema,
+	questionFieldIdSchema,
+	questionNumberSchema,
 } from '#sign-in-core/contracts/approval-wire-values';
 export {
 	personFleetTokenBindingSchema,
