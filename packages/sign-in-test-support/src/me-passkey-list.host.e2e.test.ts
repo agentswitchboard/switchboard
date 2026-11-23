@@ -1,4 +1,4 @@
-import type { Route } from 'playwright';
+import type { Locator, Route } from 'playwright';
 import { expect, it } from 'vitest';
 
 import { useControlledSignInClock } from '#sign-in-test-support/test-fixtures/controlled-node-test-clock';
@@ -17,46 +17,14 @@ useControlledSignInClock();
 const passkeyListPath = '/api/auth/passkey/list-user-passkeys';
 const matchesPasskeyList = (url: URL): boolean => url.pathname === passkeyListPath;
 
-async function observeListRecovery(browser: NavigationBrowser): Promise<void> {
-	const { harness, proof } = browser;
-	const registration = await registerBrowserPasskey({
-		harness,
-		authenticator: await createSoftwarePasskeyAuthenticator(),
-	});
-	expect(registration.status).toBe(200);
-	// The list read no longer spends the sign-in attempts budget, so the host can't be driven to 429
-	// by reloading Me. The refusal is injected for the first read; Retry's behavior is what this proves.
-	let refused = false;
-	async function refuseFirstListRequest(route: Route): Promise<void> {
-		if (refused) {
-			await route.continue();
-			return;
-		}
-		refused = true;
-		await route.fulfill({
-			status: 429,
-			headers: { 'retry-after': '1' },
-			json: { message: 'Too many requests' },
-		});
-	}
-	await proof.page.route(matchesPasskeyList, refuseFirstListRequest);
-
-	const limited = await proof.responseTo(passkeyListPath, () => visitNavigation(browser, '/me'));
-	expect(limited.response.status).toBe(429);
-	await proof.page.unroute(matchesPasskeyList, refuseFirstListRequest);
-	const passkeyList = proof.page.getByRole('region', { name: 'Passkey list' });
+async function recoverWithRetry(props: {
+	readonly browser: NavigationBrowser;
+	readonly passkeyList: Locator;
+}): Promise<void> {
+	const { proof } = props.browser;
+	const { passkeyList } = props;
 	const alert = passkeyList.getByRole('alert');
-	const errorOrAutomaticRequest = await Promise.race([
-		alert.waitFor().then(() => 'error displayed'),
-		proof.page
-			.waitForRequest((request) => new URL(request.url()).pathname === passkeyListPath)
-			.then(() => 'list requested again before Retry'),
-	]);
-	expect(errorOrAutomaticRequest).toBe('error displayed');
-	expect(await passkeyList.locator('[data-slot="skeleton"]').count()).toBe(0);
-	expect(await alert.textContent()).toContain('Passkeys are unavailable.');
 	const retry = alert.getByRole('button', { name: 'Retry', exact: true });
-
 	const releaseRetry = Promise.withResolvers<void>();
 	async function holdRetry(route: Route): Promise<void> {
 		await releaseRetry.promise;
@@ -87,6 +55,50 @@ async function observeListRecovery(browser: NavigationBrowser): Promise<void> {
 		expect(await passkeyList.evaluate((region) => region === document.activeElement)).toBe(true);
 	} finally {
 		releaseRetry.resolve();
+		await proof.page.unrouteAll({ behavior: 'wait' });
+	}
+}
+
+async function observeListRecovery(browser: NavigationBrowser): Promise<void> {
+	const { harness, proof } = browser;
+	const registration = await registerBrowserPasskey({
+		harness,
+		authenticator: await createSoftwarePasskeyAuthenticator(),
+	});
+	expect(registration.status).toBe(200);
+	// Reloading Me can no longer exhaust the sign-in attempts quota, so this test injects the refusal
+	// instead of driving the host to it. Reads can still be limited by the `other` class; the real
+	// limiter's 429 is witnessed in people-request-limits.host.e2e.test.ts. What this proves is Retry.
+	const repeatedRequest = Promise.withResolvers<void>();
+	let refused = false;
+	async function refuseFirstListRequest(route: Route): Promise<void> {
+		if (refused) {
+			repeatedRequest.resolve();
+			await route.continue();
+			return;
+		}
+		refused = true;
+		await route.fulfill({
+			status: 429,
+			headers: { 'retry-after': '1' },
+			json: { message: 'Too many requests' },
+		});
+	}
+	await proof.page.route(matchesPasskeyList, refuseFirstListRequest);
+	try {
+		const limited = await proof.responseTo(passkeyListPath, () => visitNavigation(browser, '/me'));
+		expect(limited.response.status).toBe(429);
+		const passkeyList = proof.page.getByRole('region', { name: 'Passkey list' });
+		const alert = passkeyList.getByRole('alert');
+		const errorOrAutomaticRequest = await Promise.race([
+			alert.waitFor().then(() => 'error displayed'),
+			repeatedRequest.promise.then(() => 'list requested again before Retry'),
+		]);
+		expect(errorOrAutomaticRequest).toBe('error displayed');
+		expect(await passkeyList.locator('[data-slot="skeleton"]').count()).toBe(0);
+		expect(await alert.textContent()).toContain('Passkeys are unavailable.');
+		await recoverWithRetry({ browser, passkeyList });
+	} finally {
 		await proof.page.unrouteAll({ behavior: 'wait' });
 	}
 }

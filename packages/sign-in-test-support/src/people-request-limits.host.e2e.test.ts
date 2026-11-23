@@ -614,13 +614,18 @@ it('people: control: eleven passkey ceremony starts in one window still give 429
 	try {
 		await signedInWithPasskeyInFreshWindow(harness);
 		const started: number[] = [];
-		for (let attempt = 1; attempt <= 11; attempt += 1) {
-			const response = await passkeyChallengeStart(harness);
-			started.push(response.status);
-			if (response.status === 429) expectRetryAfter(response);
-		}
-		expect(started.slice(0, 10).every((status) => status === 200)).toBe(true);
-		expect(started[10]).toBe(429);
+		for (let attempt = 1; attempt <= 10; attempt += 1)
+			started.push((await passkeyChallengeStart(harness)).status);
+		expect(started).toEqual(Array.from({ length: 10 }, () => 200));
+		const before = await harness.captchaObservations();
+		const limited = await passkeyChallengeStart(harness);
+		expect(limited.status).toBe(429);
+		expectRetryAfter(limited);
+		// The outer budget refused: its body and observation differ from the native provider's refusal.
+		expect(await limited.json()).toEqual({ error: 'rate-limited' });
+		expect((await harness.captchaObservations()).slice(before.length)).toEqual([
+			{ kind: 'request-limited', requestClass: 'callback-passkey', layer: 'outer' },
+		]);
 	} finally {
 		await harness.close();
 	}
