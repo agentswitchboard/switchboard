@@ -9,10 +9,6 @@
 			"[\"page\",[],null]",
 			"{\"kind\":\"page\",\"items\":[],\"next\":null,\"extra\":false}"
 		],
-		"ApprovalDecideReply": [
-			"{\"kind\":\"factorRequired\",\"withinSeconds\":901}",
-			"{\"kind\":\"factorRequired\",\"withinSeconds\":\"900\"}"
-		],
 		"ApprovalListRequest": ["[\"019a3dce-2000-7000-8000-000000000001\",\"waiting\",null]"]
 	}
 }

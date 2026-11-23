@@ -47,7 +47,7 @@ export type ApprovalDecideReply = { kind: "savedDecision"; decision: GiverDecisi
 /**  An actual saved decision. Its time is an RFC 3339 CentralTime string. */
 { kind: "alreadyDecided"; by: DecidedBy; at: string } |
 /**  The request ended before this answer, through expiry or holder/provider closure. */
-{ kind: "tooLate" } | { kind: "factorRequired"; withinSeconds: 900 } | { kind: "invalid"; reason: ApprovalInvalidReason } | { kind: "notVisible" } | { kind: "operationConflict" };
+{ kind: "tooLate" } | { kind: "invalid"; reason: ApprovalInvalidReason } | { kind: "notVisible" } | { kind: "operationConflict" };
 
 export type ApprovalDecideRequest = {
 	organization: OrganizationId,
@@ -325,7 +325,7 @@ export type EnrollPermission = "machine:enroll";
 
 export type EnrollmentId = RecordId;
 
-export type FleetPermission = "workspace:create" | "workspaceAdmin:allowMachine" | "workspaceAdmin:withdrawMachine" | "workspaceAdmin:removeSession" | "machine:enroll" | "machine:revoke" | "machine:setTokenLifetime" | "organization:view" | "organization:readAudit" | "approval:decide";
+export type FleetPermission = "workspace:create" | "workspaceAdmin:allowMachine" | "workspaceAdmin:withdrawMachine" | "workspaceAdmin:removeSession" | "machine:enroll" | "machine:revoke" | "machine:setTokenLifetime" | "organization:view" | "organization:readAudit" | "approval:decide" | "organization:repairWork";
 
 export type GiverDecision<AcceptedAnswer> = {
 	by: DecidedBy,
@@ -334,7 +334,7 @@ export type GiverDecision<AcceptedAnswer> = {
 
 export type InvalidAnswer = { kind: "wrongKind" } | { kind: "unofferedOption"; optionId: OfferedOptionId } | { kind: "unofferedField"; fieldId: QuestionFieldId } | { kind: "missingRequiredField"; fieldId: QuestionFieldId } | { kind: "repeatedField"; fieldId: QuestionFieldId } | { kind: "wrongValueType"; fieldId: QuestionFieldId } | { kind: "repeatedSelection"; fieldId: QuestionFieldId; optionId: OfferedOptionId } | { kind: "wrongSelectionCount"; fieldId: QuestionFieldId };
 
-export type InvalidApprovalEnding = { kind: "digest"; reason: ApprovalDigestError } | { kind: "requesterIsReader" } | { kind: "bindingMismatch" } | { kind: "answer"; reason: InvalidAnswer } | { kind: "ineligibleDecider" } | { kind: "freshFactorRequired" } | { kind: "destinationNotAdmitted" } | { kind: "retainedDecisionMismatch" } | { kind: "chronology" };
+export type InvalidApprovalEnding = { kind: "digest"; reason: ApprovalDigestError } | { kind: "requesterIsReader" } | { kind: "bindingMismatch" } | { kind: "answer"; reason: InvalidAnswer } | { kind: "ineligibleDecider" } | { kind: "destinationNotAdmitted" } | { kind: "retainedDecisionMismatch" } | { kind: "chronology" };
 
 /**  The provider's opaque, nonempty signing key identifier. */
 export type IssuerKeyId = string;

@@ -154,14 +154,13 @@ describe('C3 replies sign-in accepts', (): void => {
 		},
 		{ kind: 'alreadyDecided', by: { kind: 'session', session: sessionId }, at: window.raisedAt },
 		{ kind: 'tooLate' },
-		{ kind: 'factorRequired', withinSeconds: 900 },
 		{
 			kind: 'invalid',
 			reason: { kind: 'invalidAnswer', reason: { kind: 'unofferedOption', optionId: 9 } },
 		},
 		{
 			kind: 'invalid',
-			reason: { kind: 'invalidApprovalEnding', reason: { kind: 'freshFactorRequired' } },
+			reason: { kind: 'invalidApprovalEnding', reason: { kind: 'chronology' } },
 		},
 		{ kind: 'notVisible' },
 		{ kind: 'operationConflict' },
@@ -173,6 +172,9 @@ describe('C3 replies sign-in accepts', (): void => {
 	it.each([
 		'2026-11-22T10:00:00Z',
 		'2026-11-23T12:15:00Z',
+		'2026-11-23T12:15:00.007Z',
+		'2026-11-23T13:00:00.789Z',
+		'2026-11-23T13:00:00.000Z',
 		'2028-02-29T23:59:59Z',
 		'0001-01-01T00:00:00Z',
 	])('the CentralTime spelling %s', (at): void => {
@@ -183,6 +185,12 @@ describe('C3 replies sign-in accepts', (): void => {
 
 	it.each([
 		['across a day', '2026-11-22T23:30:00Z', '2026-11-23T00:30:00Z'],
+		['to the millisecond', '2026-11-23T12:00:00.007Z', '2026-11-23T13:00:00.007Z'],
+		[
+			'from whole seconds to a zero millisecond spelling',
+			'2026-11-23T12:00:00Z',
+			'2026-11-23T13:00:00.000Z',
+		],
 		['across a year', '2026-12-31T23:59:59Z', '2027-01-01T00:59:59Z'],
 		['into a leap day', '2028-02-28T23:15:00Z', '2028-02-29T00:15:00Z'],
 		['out of a leap day', '2028-02-29T23:15:00Z', '2028-03-01T00:15:00Z'],
@@ -198,6 +206,11 @@ describe('C3 replies sign-in accepts', (): void => {
 			'the day after February 28 in 2028 is not March 1',
 			'2028-02-28T23:15:00Z',
 			'2028-03-01T00:15:00Z',
+		],
+		[
+			'the deadline is one millisecond late',
+			'2026-11-23T12:00:00.007Z',
+			'2026-11-23T13:00:00.008Z',
 		],
 		['1900 has no February 29', '1900-02-29T00:00:00Z', '1900-02-29T01:00:00Z'],
 		['2027 has no February 29', '2027-02-29T00:00:00Z', '2027-02-29T01:00:00Z'],
@@ -220,9 +233,6 @@ describe('C3 replies sign-in refuses', (): void => {
 	it.each([
 		['an unknown kind', { kind: 'standing', ending: { kind: 'timedOut' } }],
 		['an extra top-level field', { kind: 'tooLate', retryAfter: 5 }],
-		['withinSeconds other than 900', { kind: 'factorRequired', withinSeconds: 901 }],
-		['withinSeconds as a decimal string', { kind: 'factorRequired', withinSeconds: '900' }],
-		['a missing withinSeconds', { kind: 'factorRequired' }],
 		[
 			'a person id that is not UUIDv7',
 			{ kind: 'alreadyDecided', by: { kind: 'person', personId: 'p1' }, at: window.raisedAt },
@@ -261,11 +271,14 @@ describe('C3 replies sign-in refuses', (): void => {
 		['an offset other than Z', '2026-11-22T10:00:00+00:00'],
 		['a lowercase z', '2026-11-22T10:00:00z'],
 		['a space separator', '2026-11-22 10:00:00Z'],
-		['a millisecond fraction', '2026-11-22T10:00:00.001Z'],
-		['a microsecond fraction', '2026-11-22T10:00:00.000001Z'],
-		['a nanosecond fraction', '2026-11-22T10:00:00.999999999Z'],
-		['a zero fraction', '2026-11-22T10:00:00.000Z'],
+		['a negative numeric offset', '2026-11-22T10:00:00-05:00'],
+		['milliseconds with a numeric offset', '2026-11-22T10:00:00.007+00:00'],
+		['a one-digit fraction', '2026-11-22T10:00:00.7Z'],
 		['a two-digit fraction', '2026-11-22T10:00:00.50Z'],
+		['a six-digit fraction', '2026-11-22T10:00:00.000007Z'],
+		['a nine-digit fraction', '2026-11-22T10:00:00.999999999Z'],
+		['a four-digit fraction', '2026-11-22T10:00:00.0070Z'],
+		['a bare decimal point', '2026-11-22T10:00:00.Z'],
 		['a minute without seconds', '2026-11-22T10:00Z'],
 		['a year before 1', '0000-12-31T00:00:00Z'],
 		['a day off the calendar', '2026-02-30T00:00:00Z'],
@@ -352,12 +365,15 @@ describe('C3 replies sign-in refuses', (): void => {
 			},
 		],
 		[
-			'a window spelled with fractions',
+			'a window spelled with six-digit fractions',
 			{
 				kind: 'request',
 				view: {
 					...providerApproval,
-					window: { raisedAt: '2026-11-22T10:00:00.001Z', deadline: '2026-11-22T11:00:00.001Z' },
+					window: {
+						raisedAt: '2026-11-22T10:00:00.000001Z',
+						deadline: '2026-11-22T11:00:00.000001Z',
+					},
 				},
 			},
 		],
@@ -491,7 +507,6 @@ describe("central's own specimen literals (contract-fixtures/central-person-appr
 		accepted: z.strictObject({ ApprovalListReply: z.array(z.string()).min(1) }),
 		refused: z.strictObject({
 			ApprovalListReply: z.array(z.string()).min(1),
-			ApprovalDecideReply: z.array(z.string()).min(1),
 			ApprovalListRequest: z.array(z.string()).min(1),
 		}),
 	});
@@ -524,16 +539,13 @@ describe("central's own specimen literals (contract-fixtures/central-person-appr
 			...refused.ApprovalListReply.map((bytes) =>
 				approvalListReplySchema.safeParse(JSON.parse(bytes)),
 			),
-			...refused.ApprovalDecideReply.map((bytes) =>
-				approvalDecideReplySchema.safeParse(JSON.parse(bytes)),
-			),
 			...refused.ApprovalListRequest.map((bytes) =>
 				approvalPersonRequestBodySchemas.ApprovalList.safeParse(JSON.parse(bytes)),
 			),
 		];
 		// Act / Assert
 		expect(checks.map((check) => check.success)).toEqual(checks.map(() => false));
-		expect(checks).toHaveLength(6);
+		expect(checks).toHaveLength(4);
 	});
 });
 
@@ -629,15 +641,26 @@ describe("C3 replies against central's byte vectors", (): void => {
 		expect(refusedBy('ApprovalListReply', { ...withoutNext, next: null })).toBe(false);
 	});
 
-	it.each([901, 899, 0, '900', null])('withinSeconds %j is refused', (withinSeconds): void => {
-		const factor = centralReply('ApprovalDecideReply', 'factorRequired');
-		expect(refusedBy('ApprovalDecideReply', { ...factor, withinSeconds })).toBe(true);
-	});
+	it.each(['.007Z', '.789Z'])(
+		"central's millisecond spelling %s appears in its vectors and parses",
+		(spelling): void => {
+			const carrying = centralReplyNames.flatMap((name) =>
+				centralReplyVectors[name]
+					.filter((bytes) => bytes.includes(spelling))
+					.map((bytes) => centralReplySchemas[name].safeParse(JSON.parse(bytes)).success),
+			);
+			expect(carrying.length).toBeGreaterThan(0);
+			expect(carrying).toEqual(carrying.map(() => true));
+		},
+	);
 
 	it.each([
-		'2026-11-23T12:15:00.000Z',
-		'2026-11-23T12:15:00.123456789Z',
+		'2026-11-23T12:15:00.0Z',
+		'2026-11-23T12:15:00.00Z',
+		'2026-11-23T12:15:00.007000Z',
+		'2026-11-23T12:15:00.007000000Z',
 		'2026-11-23T12:15:00+00:00',
+		'2026-11-23T12:15:00.007-05:00',
 		'2026-11-23T12:15Z',
 		'2026-11-31T12:15:00Z',
 	])('a bad time %s is refused wherever central sends a time', (badTime): void => {

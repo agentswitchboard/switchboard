@@ -46,7 +46,7 @@ export const approvalPersonRequestBodySchemas = {
 	ApprovalDecide: z.strictObject({
 		organization: centralUuid7Schema,
 		requestId: approvalRequestIdSchema,
-		/** Chosen once per decide; a step-up resend after `factorRequired` uses a new one. */
+		/** Chosen once per decide; an exact retry of the same decide, with a fresh proof, reuses it. */
 		operationId: approvalOperationIdSchema,
 		answer: approvalAnswerSchema,
 	}),

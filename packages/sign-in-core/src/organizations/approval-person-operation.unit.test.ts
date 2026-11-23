@@ -114,7 +114,7 @@ describe('C3 canonical intents through the admin frame and digest', (): void => 
 		},
 	);
 
-	it('a step-up resend with a new operation id signs a different intent', async (): Promise<void> => {
+	it('the operation id is bound into the signed decide intent', async (): Promise<void> => {
 		// Arrange
 		const first: ApprovalPersonOperation = {
 			operation: 'ApprovalDecide',
@@ -123,10 +123,10 @@ describe('C3 canonical intents through the admin frame and digest', (): void => 
 			operationId,
 			answer: { kind: 'approval', optionId: 1 },
 		};
-		const resend = { ...first, operationId: '019a3dce-2000-7000-8000-0000000000f2' };
+		const another = { ...first, operationId: '019a3dce-2000-7000-8000-0000000000f2' };
 		// Act
 		const digests = await Promise.all(
-			[first, resend].map((operation) => approvalPersonIntentDigest(globalThis.crypto, operation)),
+			[first, another].map((operation) => approvalPersonIntentDigest(globalThis.crypto, operation)),
 		);
 		// Assert
 		expect(new Set(digests).size).toBe(2);

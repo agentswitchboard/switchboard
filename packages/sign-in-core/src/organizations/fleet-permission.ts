@@ -3,8 +3,9 @@ import { z } from 'zod';
 import type { FleetPermission as CentralFleetPermission } from '#sign-in-core/central-link/generated/central-sign-in.gen';
 import type { AssertWireType, WireTypesEqual } from '#sign-in-core/central-link/wire-type-equality';
 
-// PD 2530c3a3: exactly the ten route permissions (C3 added `approval:decide`). Central's generated
-// FleetPermission must equal this set; the check below fails the build when either side moves.
+// Eleven: PD 2530c3a3's route permissions, C3's `approval:decide` and `organization:repairWork`
+// (its routes are DEL-07). Central's generated FleetPermission must equal this set; the check
+// below fails the build when either side moves.
 export const fleetPermissionSchema = z.enum([
 	'workspace:create',
 	'workspaceAdmin:allowMachine',
@@ -16,6 +17,7 @@ export const fleetPermissionSchema = z.enum([
 	'organization:view',
 	'organization:readAudit',
 	'approval:decide',
+	'organization:repairWork',
 ]);
 export type FleetPermission = z.infer<typeof fleetPermissionSchema>;
 /** Exact in both directions: a permission added on either side alone breaks the build. */

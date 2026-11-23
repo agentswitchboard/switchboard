@@ -272,7 +272,6 @@ const invalidApprovalEndingSchema = z.discriminatedUnion('kind', [
 	z.strictObject({ kind: z.literal('bindingMismatch') }),
 	z.strictObject({ kind: z.literal('answer'), reason: invalidAnswerSchema }),
 	z.strictObject({ kind: z.literal('ineligibleDecider') }),
-	z.strictObject({ kind: z.literal('freshFactorRequired') }),
 	z.strictObject({ kind: z.literal('destinationNotAdmitted') }),
 	z.strictObject({ kind: z.literal('retainedDecisionMismatch') }),
 	z.strictObject({ kind: z.literal('chronology') }),
@@ -295,7 +294,7 @@ export const approvalReadReplySchema = z.discriminatedUnion('kind', [
 	z.strictObject({ kind: z.literal('request'), view: requestViewSchema }),
 	z.strictObject({ kind: z.literal('notVisible') }),
 ]);
-/** `factorRequired` advertises only the 15-minute window; the client steps up and resends. */
+/** Approvals need no second factor (owner decision, 23 Nov): there is no step-up reply. */
 export const approvalDecideReplySchema = z.discriminatedUnion('kind', [
 	z.strictObject({
 		kind: z.literal('savedDecision'),
@@ -303,7 +302,6 @@ export const approvalDecideReplySchema = z.discriminatedUnion('kind', [
 	}),
 	z.strictObject({ kind: z.literal('alreadyDecided'), by: decidedBySchema, at: centralTimeSchema }),
 	z.strictObject({ kind: z.literal('tooLate') }),
-	z.strictObject({ kind: z.literal('factorRequired'), withinSeconds: z.literal(900) }),
 	z.strictObject({ kind: z.literal('invalid'), reason: approvalInvalidReasonSchema }),
 	z.strictObject({ kind: z.literal('notVisible') }),
 	z.strictObject({ kind: z.literal('operationConflict') }),

@@ -1,5 +1,5 @@
 export const centralSignInWireProvenance = {
-	commit: '8670195564d6af00d4e21d80c806b8ebc28f7a6f',
+	commit: '24dfd34898776612347a25e973921f7f70e405dd',
 	source: 'crates/collaboration-central-core/contracts/central-sign-in.ts',
-	sha256: 'e8dd8517a7c8f1af1bb1799e926672761039cfb7a15c307029cc8453ddd452ba',
+	sha256: '1b353b3c3af466421d932014e0bf013e3327c7f27f4274e1b8dda0d1b018a3c7',
 } as const;

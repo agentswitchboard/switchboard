@@ -37,6 +37,6 @@ describe('Fleet route permissions from the adopted PD table', () => {
 		// Arrange / Act / Assert: device-code approval is a verified service action, never a forwarded body.
 		for (const operation of ['DecideDeviceLogin', 'DecideMachineToken', 'ProvisionOrganization'])
 			expect(fleetAdminOperationSchema.safeParse(operation).success).toBe(false);
-		expect(fleetPermissionSchema.options).toHaveLength(10);
+		expect(fleetPermissionSchema.options).toHaveLength(11);
 	});
 });

@@ -21,6 +21,7 @@ const nativePermissionRequests = {
 	'organization:view': { organization: ['view'] },
 	'organization:readAudit': { organization: ['readAudit'] },
 	'approval:decide': { approval: ['decide'] },
+	'organization:repairWork': { organization: ['repairWork'] },
 } satisfies Readonly<
 	Record<FleetPermission, Parameters<typeof organizationRoles.owner.authorize>[0]>
 >;

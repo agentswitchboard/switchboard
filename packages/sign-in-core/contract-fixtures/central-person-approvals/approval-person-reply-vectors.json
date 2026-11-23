@@ -1,17 +1,20 @@
 {
 	"ApprovalListReply": [
 		"{\"items\":[{\"deadline\":\"2026-11-23T13:00:00Z\",\"kind\":\"unprovenCall\",\"raisedAt\":\"2026-11-23T12:00:00Z\",\"requestId\":\"019a3dce-2000-7000-8000-000000000002\",\"state\":{\"kind\":\"waiting\"}}],\"kind\":\"page\",\"next\":\"019a3dce-2000-7000-8000-000000000002\"}",
+		"{\"items\":[{\"deadline\":\"2026-11-23T13:00:00.007Z\",\"kind\":\"unprovenCall\",\"raisedAt\":\"2026-11-23T12:00:00.007Z\",\"requestId\":\"019a3dce-2000-7000-8000-000000000002\",\"state\":{\"kind\":\"waiting\"}}],\"kind\":\"page\",\"next\":\"019a3dce-2000-7000-8000-000000000002\"}",
 		"{\"items\":[],\"kind\":\"page\",\"next\":null}"
 	],
 	"ApprovalReadReply": [
 		"{\"kind\":\"request\",\"view\":{\"kind\":\"unprovenCall\",\"offer\":{\"operation\":{\"kind\":\"endSessionForGood\",\"sessionId\":\"019a3dce-2000-7000-8000-000000000004\"}},\"requestId\":\"019a3dce-2000-7000-8000-000000000002\",\"state\":{\"kind\":\"waiting\"},\"window\":{\"deadline\":\"2026-11-23T13:00:00Z\",\"raisedAt\":\"2026-11-23T12:00:00Z\"}}}",
+		"{\"kind\":\"request\",\"view\":{\"kind\":\"unprovenCall\",\"offer\":{\"operation\":{\"kind\":\"endSessionForGood\",\"sessionId\":\"019a3dce-2000-7000-8000-000000000004\"}},\"requestId\":\"019a3dce-2000-7000-8000-000000000002\",\"state\":{\"kind\":\"waiting\"},\"window\":{\"deadline\":\"2026-11-23T13:00:00.007Z\",\"raisedAt\":\"2026-11-23T12:00:00.007Z\"}}}",
+		"{\"kind\":\"request\",\"view\":{\"kind\":\"unprovenCall\",\"offer\":{\"operation\":{\"kind\":\"endSessionForGood\",\"sessionId\":\"019a3dce-2000-7000-8000-000000000004\"}},\"requestId\":\"019a3dce-2000-7000-8000-000000000002\",\"state\":{\"delivery\":{\"kind\":\"owed\"},\"endedAt\":\"2026-11-23T13:00:00.789Z\",\"ending\":{\"kind\":\"timedOut\"},\"kind\":\"ended\"},\"window\":{\"deadline\":\"2026-11-23T13:00:00.007Z\",\"raisedAt\":\"2026-11-23T12:00:00.007Z\"}}}",
 		"{\"kind\":\"notVisible\"}"
 	],
 	"ApprovalDecideReply": [
 		"{\"decision\":{\"answer\":{\"decision\":\"allow\",\"kind\":\"unprovenCall\"},\"by\":{\"kind\":\"person\",\"personId\":\"019a3dce-2000-7000-8000-000000000005\"}},\"kind\":\"savedDecision\"}",
 		"{\"at\":\"2026-11-23T12:15:00Z\",\"by\":{\"kind\":\"person\",\"personId\":\"019a3dce-2000-7000-8000-000000000005\"},\"kind\":\"alreadyDecided\"}",
+		"{\"at\":\"2026-11-23T12:15:00.007Z\",\"by\":{\"kind\":\"person\",\"personId\":\"019a3dce-2000-7000-8000-000000000005\"},\"kind\":\"alreadyDecided\"}",
 		"{\"kind\":\"tooLate\"}",
-		"{\"kind\":\"factorRequired\",\"withinSeconds\":900}",
 		"{\"kind\":\"invalid\",\"reason\":{\"kind\":\"invalidAnswer\",\"reason\":{\"kind\":\"wrongKind\"}}}",
 		"{\"kind\":\"invalid\",\"reason\":{\"kind\":\"invalidApprovalEnding\",\"reason\":{\"kind\":\"bindingMismatch\"}}}",
 		"{\"kind\":\"notVisible\"}",

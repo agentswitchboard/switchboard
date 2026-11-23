@@ -4,7 +4,7 @@ import { defaultStatements, ownerAc } from 'better-auth/plugins/organization/acc
 // Keep the native plugin permissions: its endpoints check these names before our hooks run.
 export const organizationAccessControl = createAccessControl({
 	...defaultStatements,
-	organization: [...defaultStatements.organization, 'view', 'readAudit'],
+	organization: [...defaultStatements.organization, 'view', 'readAudit', 'repairWork'],
 	machine: ['enroll', 'revoke', 'setTokenLifetime'],
 	workspace: ['create'],
 	workspaceAdmin: ['allowMachine', 'withdrawMachine', 'removeSession'],

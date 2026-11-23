@@ -22,15 +22,15 @@ export const centralSessionIdSchema = centralUuid7Schema;
 export const centralPersonIdSchema = centralUuid7Schema;
 export const approvalOperationIdSchema = centralUuid7Schema;
 
-/** The only CentralTime spelling central's C3 vectors use: whole seconds, UTC, `Z`. */
-const centralTimePattern = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})Z$/u;
+/** CentralTime on the C3 wire: UTC with `Z`, whole seconds or exactly three fraction digits. */
+const centralTimePattern = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.(\d{3}))?Z$/u;
 
 /**
- * CentralTime as central's C3 vectors at 8670195 spell it: `YYYY-MM-DDTHH:MM:SSZ` on the
- * calendar. A fraction, another offset or a leap second is refused. Returns whole seconds since
- * the epoch, or null.
+ * CentralTime as central 24dfd348 emits it: approval rows keep millisecond precision, so a time is
+ * `YYYY-MM-DDTHH:MM:SSZ` or `YYYY-MM-DDTHH:MM:SS.mmmZ`, on the calendar. Any other fraction
+ * width, a numeric offset or a leap second is refused. Returns milliseconds since the epoch.
  */
-function centralTimeEpochSeconds(text: string): number | null {
+function centralTimeEpochMillis(text: string): number | null {
 	const match = centralTimePattern.exec(text);
 	if (match === null) return null;
 	const [, ...spelled] = match;
@@ -48,7 +48,10 @@ function centralTimeEpochSeconds(text: string): number | null {
 		second > 59
 	)
 		return null;
-	return daysSinceEpoch(year, month, day) * 86_400 + hour * 3600 + minute * 60 + second;
+	const millis = Number(spelled[6] ?? '0');
+	return (
+		(daysSinceEpoch(year, month, day) * 86_400 + hour * 3600 + minute * 60 + second) * 1000 + millis
+	);
 }
 
 function daysInMonth(year: number, month: number): number {
@@ -69,15 +72,15 @@ function daysSinceEpoch(year: number, month: number, day: number): number {
 
 export const centralTimeSchema = z
 	.string()
-	.refine((text) => centralTimeEpochSeconds(text) !== null, 'Not an RFC 3339 CentralTime in UTC');
+	.refine((text) => centralTimeEpochMillis(text) !== null, 'Not an RFC 3339 CentralTime in UTC');
 
-/** The immutable first-save time and its deadline exactly one hour later, to the second. */
+/** The immutable first-save time and its deadline exactly one hour later, to the millisecond. */
 export const approvalWindowSchema = z
 	.strictObject({ raisedAt: centralTimeSchema, deadline: centralTimeSchema })
 	.refine((window) => {
-		const raised = centralTimeEpochSeconds(window.raisedAt);
-		const deadline = centralTimeEpochSeconds(window.deadline);
-		return raised !== null && deadline !== null && deadline - raised === 3600;
+		const raised = centralTimeEpochMillis(window.raisedAt);
+		const deadline = centralTimeEpochMillis(window.deadline);
+		return raised !== null && deadline !== null && deadline - raised === 3_600_000;
 	}, 'The approval deadline must be exactly one hour after first save');
 
 /** Rust's `chars().count()` for well-formed text: every UTF-16 unit except a pair's low half. */
