@@ -548,3 +548,80 @@ it('people: the real outer passkey binding refuses within 21 mixed-path starts a
 		await harness.close();
 	}
 });
+
+const passkeyListPath = '/api/auth/passkey/list-user-passkeys';
+
+function passkeyChallengeStart(harness: Harness): Promise<Response> {
+	return harness.auth('/api/auth/passkey/generate-authenticate-options', {
+		headers: {
+			'x-captcha-response': harness.turnstile.issueToken({
+				action: 'passkey_sign_in',
+				hostname: new URL(harness.issuer).hostname,
+				verdict: 'accepted',
+			}),
+		},
+	});
+}
+
+/** A signed-in person with one registered passkey, in a fresh controlled window for this address. */
+async function signedInWithPasskeyInFreshWindow(harness: Harness): Promise<void> {
+	await readyForLimitProof(harness);
+	await signInConfirmedPeopleBrowser({ harness, email: 'owner@example.invalid' });
+	await ensureLocalOwnerOrganization(harness);
+	expect(
+		(
+			await registerBrowserPasskey({
+				harness,
+				authenticator: await createSoftwarePasskeyAuthenticator(),
+			})
+		).status,
+	).toBe(200);
+	await harness.useControlledPasskeyWindow();
+	const nextWindow = controlledSignInClock.now() + 60_000;
+	expect(
+		(
+			await harness.auth('/__auth-proof/set-clock', {
+				method: 'POST',
+				headers: { 'content-type': 'application/json' },
+				body: JSON.stringify({ milliseconds: nextWindow }),
+			})
+		).status,
+	).toBe(200);
+}
+
+it('people: eleven passkey list reads in one window all succeed and leave the sign-in attempts budget untouched', async () => {
+	const harness = await startLocalAuthHarness();
+	try {
+		await signedInWithPasskeyInFreshWindow(harness);
+		for (let read = 1; read <= 11; read += 1) {
+			const response = await harness.auth(passkeyListPath);
+			expect(response.status, `list read ${read}`).toBe(200);
+		}
+		// The same address's next sign-in attempt is still admitted by the shared outer budget.
+		expect((await passkeyChallengeStart(harness)).status).toBe(200);
+		expect(
+			(await harness.captchaObservations()).filter(
+				(observation) => observation.kind === 'request-limited',
+			),
+		).toEqual([]);
+	} finally {
+		await harness.close();
+	}
+});
+
+it('people: control: eleven passkey ceremony starts in one window still give 429 with retry-after', async () => {
+	const harness = await startLocalAuthHarness();
+	try {
+		await signedInWithPasskeyInFreshWindow(harness);
+		const started: number[] = [];
+		for (let attempt = 1; attempt <= 11; attempt += 1) {
+			const response = await passkeyChallengeStart(harness);
+			started.push(response.status);
+			if (response.status === 429) expectRetryAfter(response);
+		}
+		expect(started.slice(0, 10).every((status) => status === 200)).toBe(true);
+		expect(started[10]).toBe(429);
+	} finally {
+		await harness.close();
+	}
+});

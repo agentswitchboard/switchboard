@@ -1,9 +1,7 @@
-import { signInRequestPolicies } from '@agent-collaboration/sign-in-core';
 import type { Route } from 'playwright';
 import { expect, it } from 'vitest';
 
 import { useControlledSignInClock } from '#sign-in-test-support/test-fixtures/controlled-node-test-clock';
-import { controlledSignInClock } from '#sign-in-test-support/test-fixtures/controlled-sign-in-clock';
 import { registerBrowserPasskey } from '#sign-in-test-support/test-fixtures/passkey-browser-ceremonies';
 import { runProofBrowserScenario } from '#sign-in-test-support/test-fixtures/playwright-browser';
 import {
@@ -19,19 +17,6 @@ useControlledSignInClock();
 const passkeyListPath = '/api/auth/passkey/list-user-passkeys';
 const matchesPasskeyList = (url: URL): boolean => url.pathname === passkeyListPath;
 
-async function setHostClock(
-	harness: NavigationBrowser['harness'],
-	milliseconds: number,
-): Promise<void> {
-	const response = await harness.auth('/__auth-proof/set-clock', {
-		method: 'POST',
-		headers: { 'content-type': 'application/json' },
-		body: JSON.stringify({ milliseconds }),
-	});
-	expect(response.status).toBe(200);
-	expect(await response.json()).toEqual({ controlledMilliseconds: milliseconds });
-}
-
 async function observeListRecovery(browser: NavigationBrowser): Promise<void> {
 	const { harness, proof } = browser;
 	const registration = await registerBrowserPasskey({
@@ -39,21 +24,26 @@ async function observeListRecovery(browser: NavigationBrowser): Promise<void> {
 		authenticator: await createSoftwarePasskeyAuthenticator(),
 	});
 	expect(registration.status).toBe(200);
-	await harness.useControlledPasskeyWindow();
-	const policy = signInRequestPolicies['callback-passkey'].outer;
-	const windowMilliseconds = policy.windowSeconds * 1000;
-	const windowStart = controlledSignInClock.now() + windowMilliseconds;
-	await setHostClock(harness, windowStart);
-	await runNavigationSteps(
-		Array.from({ length: policy.max }, (_, index) => index + 1),
-		async (readNumber): Promise<void> => {
-			const response = await harness.auth(passkeyListPath);
-			expect(response.status, `list read ${readNumber} inside the window`).toBe(200);
-		},
-	);
+	// The list read no longer spends the sign-in attempts budget, so the host can't be driven to 429
+	// by reloading Me. The refusal is injected for the first read; Retry's behavior is what this proves.
+	let refused = false;
+	async function refuseFirstListRequest(route: Route): Promise<void> {
+		if (refused) {
+			await route.continue();
+			return;
+		}
+		refused = true;
+		await route.fulfill({
+			status: 429,
+			headers: { 'retry-after': '1' },
+			json: { message: 'Too many requests' },
+		});
+	}
+	await proof.page.route(matchesPasskeyList, refuseFirstListRequest);
 
 	const limited = await proof.responseTo(passkeyListPath, () => visitNavigation(browser, '/me'));
 	expect(limited.response.status).toBe(429);
+	await proof.page.unroute(matchesPasskeyList, refuseFirstListRequest);
 	const passkeyList = proof.page.getByRole('region', { name: 'Passkey list' });
 	const alert = passkeyList.getByRole('alert');
 	const errorOrAutomaticRequest = await Promise.race([
@@ -67,7 +57,6 @@ async function observeListRecovery(browser: NavigationBrowser): Promise<void> {
 	expect(await alert.textContent()).toContain('Passkeys are unavailable.');
 	const retry = alert.getByRole('button', { name: 'Retry', exact: true });
 
-	await setHostClock(harness, windowStart + windowMilliseconds);
 	const releaseRetry = Promise.withResolvers<void>();
 	async function holdRetry(route: Route): Promise<void> {
 		await releaseRetry.promise;
