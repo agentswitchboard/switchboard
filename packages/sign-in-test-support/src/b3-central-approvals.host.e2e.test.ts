@@ -5,6 +5,7 @@ import {
 	requireFleetTarget,
 	runApprovalsCommand,
 	sendApprovalOperation,
+	type ApprovalCommandOutcome,
 	type ApprovalsCommandOptions,
 	type FleetCliIo,
 } from '@agent-collaboration/sign-in-owner-cli';
@@ -140,7 +141,9 @@ it.runIf(centralExecutable !== undefined && tokioPair)(
 				io: ownerIo,
 			});
 			const operationId = ids.nextId();
-			const decide = (decision: 'allow' | 'decline') =>
+			const decide = (
+				decision: 'allow' | 'decline',
+			): Promise<ApprovalCommandOutcome<'ApprovalDecide'>> =>
 				sendApprovalOperation({
 					target: fleetTarget,
 					session,
