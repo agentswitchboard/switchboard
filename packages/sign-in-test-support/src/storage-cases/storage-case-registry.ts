@@ -1,3 +1,5 @@
+import { fleetPermissionPolicy } from '@agent-collaboration/sign-in-core/better-auth';
+
 import { authorizationFenceStoreCases } from '#sign-in-test-support/storage-cases/authorization-fence-store-cases';
 import { authorizationRevisionDeliveryCases } from '#sign-in-test-support/storage-cases/authorization-revision-delivery-cases';
 import { concurrentFirstClientLinks } from '#sign-in-test-support/storage-cases/concurrent-client-link-case';
@@ -75,7 +77,9 @@ export const storageCaseDefinitions: readonly StorageCaseDefinition[] = [
 	{
 		name: 'people: live native permissions bind K5 to exactly one request organization and permission',
 		expected: {
-			permissionCount: 9,
+			// The case confirms every permission K5 declares; the owner role's own statements grant
+			// them all, so the two sources must agree in number, as well as answer by answer.
+			permissionCount: fleetPermissionPolicy.roles.owner.length,
 			exactOwnerAnswers: true,
 			allMemberAnswersInactive: true,
 			wrongOrganization: { active: false },
