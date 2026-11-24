@@ -1,13 +1,24 @@
-import { createSignInProvider } from '#sign-in-core/better-auth/provider-configuration';
-import { createProviderRequestState } from '#sign-in-core/better-auth/provider-request-state';
+import { betterAuth } from 'better-auth';
+import { jwt } from 'better-auth/plugins/jwt';
+
+import { authorizationFencedAdapter } from '#sign-in-core/better-auth/authorization-fenced-adapter';
+import { signInJwtOptions } from '#sign-in-core/better-auth/native-jwt-options';
 import type { SignInHttpConfiguration } from '#sign-in-core/better-auth/sign-in-http-handler';
 
-/** Reads the native public key set with the publisher's original response headers. */
-export function readSignInJwksResponse(configuration: SignInHttpConfiguration): Promise<Response> {
-	const provider = createSignInProvider({
-		...configuration,
-		authority: { kind: 'public' },
-		requestState: createProviderRequestState(),
+/** Composes the native key publisher independently of sign-in plugins and their initialization. */
+export function readSignInJwksResponse(
+	props: Pick<SignInHttpConfiguration, 'configuration' | 'openDatabase' | 'platform' | 'secret'>,
+): Promise<Response> {
+	const provider = betterAuth({
+		baseURL: props.configuration.issuer,
+		basePath: '/api/auth',
+		secret: props.secret,
+		database: authorizationFencedAdapter({
+			openDatabase: props.openDatabase,
+			platform: props.platform,
+		}),
+		advanced: { database: { generateId: () => props.platform.ids.nextId() } },
+		plugins: [jwt(signInJwtOptions(props.configuration))],
 	});
 	return provider.api.getJwks({ asResponse: true });
 }
