@@ -22,9 +22,8 @@ interface HoldableResponse {
 	readonly url: () => string;
 	readonly finished: () => Promise<unknown>;
 }
-interface HoldableNavigationRequest {
+interface HoldableAccountPageRequest {
 	readonly url: () => string;
-	readonly isNavigationRequest: () => boolean;
 	readonly frame: () => { readonly parentFrame: () => unknown };
 }
 /** The part of the browser page this fixture drives, so its exits can be exercised without a browser. */
@@ -36,11 +35,11 @@ export interface HoldablePage {
 	readonly unroute: (matches: (url: URL) => boolean) => Promise<void>;
 	readonly on: (
 		event: 'request',
-		listener: (request: HoldableNavigationRequest) => void,
+		listener: (request: HoldableAccountPageRequest) => void,
 	) => unknown;
 	readonly off: (
 		event: 'request',
-		listener: (request: HoldableNavigationRequest) => void,
+		listener: (request: HoldableAccountPageRequest) => void,
 	) => unknown;
 	readonly waitForResponse: (
 		matches: (response: HoldableResponse) => boolean,
@@ -119,10 +118,10 @@ export async function holdMePasskeyListDuring(
 			.then(sessionSettled.resolve, sessionSettled.reject);
 	}
 	// The account page answers a ready person with a redirect to Me, so an arrival is the main
-	// frame's navigation request for it, not a committed document.
-	function countReadyPageArrival(request: HoldableNavigationRequest): void {
+	// frame's request for it, not a committed document. A factor form reaches it by fetch, which
+	// follows both redirects itself before the page navigates to Me; a link reaches it by navigation.
+	function countReadyPageArrival(request: HoldableAccountPageRequest): void {
 		if (
-			!request.isNavigationRequest() ||
 			request.frame().parentFrame() !== null ||
 			new URL(request.url()).pathname !== '/owner-ready'
 		)

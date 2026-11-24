@@ -87,6 +87,24 @@ async function chooseOrganization(
 	expect((await currentSession(context)).activeOrganizationId).toBe(organizationId);
 }
 
+/**
+ * The account page while a CLI sign-in waits: the only state in which a ready person is shown it,
+ * so the chooser's own reloads (it replaces the current URL) keep the page.
+ */
+function waitingCliAccountPage(harness: OrganizationBrowserScenario['harness']): string {
+	const authorize = new URL('/api/auth/oauth2/authorize', harness.target.issuer);
+	authorize.search = new URLSearchParams({
+		client_id: harness.target.ownerCliClientId,
+		redirect_uri: harness.target.ownerCliRedirectUri,
+		response_type: 'code',
+		scope: 'tool-portal:management',
+		resource: harness.target.managementAudience,
+		code_challenge_method: 'S256',
+		code_challenge: 'waiting-cli-sign-in',
+	}).toString();
+	return `/owner-ready?authorize=${encodeURIComponent(authorize.toString())}`;
+}
+
 /** V2 preserves the delivered CLI's PKCE, original state, signature and private-cache assertions. */
 export async function exerciseOrganizationChooser(
 	context: OrganizationBrowserScenario,
@@ -246,7 +264,7 @@ export async function exerciseOrganizationChooser(
 	expect(claims.organization_id).toBe(context.secondOrganizationId);
 	expect(claims.sid).toBe(fresh.id);
 	expect(claims.second_factor_method).toBe('app');
-	await page.navigate(`${harness.issuer}/owner-ready`);
+	await page.navigate(`${harness.issuer}${waitingCliAccountPage(harness)}`);
 	await chooseOrganization(context, context.firstOrganizationId);
 	// Drop the response only after the real native set-active has committed.
 	const switchesBeforeLost = context.requestedPaths.filter(
@@ -318,7 +336,7 @@ export async function exerciseOrganizationChooser(
 	expect(selfContext.choices.map((choice) => choice.organizationId).toSorted()).toEqual(
 		[context.firstOrganizationId, context.secondOrganizationId].toSorted(),
 	);
-	await page.navigate(`${harness.issuer}/owner-ready`);
+	await page.navigate(`${harness.issuer}${waitingCliAccountPage(harness)}`);
 	await organizationDomReady(
 		page,
 		`!!document.querySelector('[data-sign-in-island-mounted] #choose-organization')`,

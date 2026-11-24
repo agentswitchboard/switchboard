@@ -25,9 +25,9 @@ import {
 	controlledSignInClock,
 	controlledSignInIds,
 } from '#sign-in-test-support/test-fixtures/controlled-sign-in-clock';
+import { createIsolatedPageDom } from '#sign-in-test-support/test-fixtures/isolated-page-dom';
 import { startLocalAuthHarness } from '#sign-in-test-support/test-fixtures/local-auth-harness';
 import { assertMachineDeviceReplayResponse } from '#sign-in-test-support/test-fixtures/machine-device-replay-response';
-import { createIsolatedPageDom } from '#sign-in-test-support/test-fixtures/isolated-page-dom';
 import { installOrganizationBrowserCookie } from '#sign-in-test-support/test-fixtures/organization-browser-transport';
 import {
 	launchProofBrowser,

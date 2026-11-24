@@ -1,6 +1,10 @@
-import { createContext, Script } from 'node:vm';
-
-import { organization } from '@agent-collaboration/sign-in-core';
+import {
+	organization,
+	organizationAdminPageStateSchema,
+	organizationSetupRetryMessages,
+	retryOrganizationSetup,
+	type OrganizationSetupRetry,
+} from '@agent-collaboration/sign-in-core';
 import { createLocalJWKSet, decodeProtectedHeader, jwtVerify } from 'jose';
 import { expect, it } from 'vitest';
 import { z } from 'zod';
@@ -40,24 +44,70 @@ async function createPendingOrganization(harness: Harness): Promise<string> {
 	return z.object({ id: z.uuidv7() }).parse(await response.json()).id;
 }
 
-it('people: an unconfirmed organization stays setting up and the owner page offers an explicit Try again', async (): Promise<void> => {
+const organizationAdminIslandSchema = z.object({
+	kind: z.literal('organization-admin'),
+	navigation: z.object({ activeOrganization: z.object({ organizationId: z.string() }) }),
+	admin: organizationAdminPageStateSchema,
+});
+
+/** The served Organization admin shell page, and its Try again as the page's island runs it. */
+async function servedOrganizationAdmin(harness: Harness): Promise<{
+	readonly html: string;
+	readonly state: z.infer<typeof organizationAdminIslandSchema>;
+	readonly setupState: () => string | null;
+	readonly retryButtons: () => number;
+	readonly retry: () => Promise<OrganizationSetupRetry>;
+}> {
+	const address = new URL('/organization-admin', harness.issuer).toString();
+	const response = await harness.auth(address);
+	expect(response.status).toBe(200);
+	const html = await response.text();
+	const { document } = createIsolatedPageDom(html, address).window;
+	const state = organizationAdminIslandSchema.parse(
+		JSON.parse(
+			document.querySelector('[data-sign-in-island]')?.getAttribute('data-island-state') ?? 'null',
+		),
+	);
+	return {
+		html,
+		state,
+		setupState: () => document.getElementById('organization-setup-state')?.textContent ?? null,
+		retryButtons: () =>
+			[...document.querySelectorAll('button')].filter(
+				(button) => button.textContent === 'Try again',
+			).length,
+		retry: () =>
+			retryOrganizationSetup(state.navigation.activeOrganization.organizationId, (path, body) =>
+				harness.auth(path, {
+					method: 'POST',
+					headers: { 'content-type': 'application/json' },
+					body: JSON.stringify(body),
+				}),
+			),
+	};
+}
+
+it('people: an unconfirmed organization stays setting up and the shell Organization admin offers an explicit Try again', async (): Promise<void> => {
 	// Arrange: the B1 central capability answers unknown; no central setup is claimed.
 	const harness = await startLocalAuthHarness();
 	try {
 		const organizationId = await createPendingOrganization(harness);
 
-		// Act: opening or refreshing the owner page only reads setup state.
-		const page = await harness.auth('/owner-ready');
-		const refreshed = await harness.auth('/owner-ready');
+		// Act: the owner lands in the shell; opening or refreshing Organization admin only reads setup state.
+		const landing = await harness.auth('/owner-ready', { redirect: 'manual' });
+		const page = await servedOrganizationAdmin(harness);
+		const refreshed = await servedOrganizationAdmin(harness);
 
 		// Assert: an honest pending state and an explicit action are both delivered.
-		expect(page.status).toBe(200);
-		expect(refreshed.status).toBe(200);
-		const html = await page.text();
-		expect(html).toContain('Switchboard hasn&#x27;t finished setting up your organization yet.');
-		expect(html).toContain('Try again');
-		expect(html).toContain('retry-organization-provisioning');
-		expect(html).toContain(organizationId);
+		expect(landing.status).toBe(303);
+		expect(landing.headers.get('location')).toBe('/me');
+		expect(refreshed.state.admin.fleetSetup).toBe('settingUp');
+		expect(page.state.admin.fleetSetup).toBe('settingUp');
+		expect(page.html).toContain(
+			'Switchboard hasn&#x27;t finished setting up your organization yet.',
+		);
+		expect(page.retryButtons()).toBe(1);
+		expect(page.html).toContain(organizationId);
 		expect(
 			await harness.database
 				.select({ id: organization.id, state: organization.fleetState })
@@ -154,69 +204,19 @@ it('people: a lost provisioning reply stays pending and the delivered Try again 
 		expect(
 			await harness.database.select({ state: organization.fleetState }).from(organization),
 		).toEqual([{ state: 'settingUp' }]);
-		const response = await harness.auth('/owner-ready');
+		const page = await servedOrganizationAdmin(harness);
 		expect(sentOrganizations(harness)).toEqual([organizationId]);
-		const dom = createIsolatedPageDom(
-			await response.text(),
-			new URL('/owner-ready', harness.issuer).toString(),
-		);
-		const { document } = dom.window;
-		const changed = Promise.withResolvers<void>();
-		const observer = new dom.window.MutationObserver((): void => changed.resolve());
-		const state = document.getElementById('organization-setup-state');
-		if (state === null) throw new Error('Served setup state is missing');
-		observer.observe(state, { subtree: true, childList: true, characterData: true });
-		const pending: Promise<Response>[] = [];
-		try {
-			const context = createContext({
-				document,
-				window: {},
-				FormData: dom.window.FormData,
-				HTMLFormElement: dom.window.HTMLFormElement,
-				fetch(path: string, init?: RequestInit): Promise<Response> {
-					const request = harness.auth(path, init);
-					pending.push(request);
-					return request;
-				},
-				location: {
-					assign: (): never => {
-						throw new Error('Retry must not navigate away');
-					},
-					reload: (): never => {
-						throw new Error('Retry must not silently navigate');
-					},
-				},
-				Uint8Array,
-				atob,
-				btoa,
-				Error,
-			});
-			// Classic inline controllers only: the island bootstrap is an inline module
-			// this harness does not run, as it never ran the island bundle.
-			for (const script of document.scripts)
-				if (!script.src && script.type !== 'module')
-					new Script(script.textContent).runInContext(context);
-			const form = document.getElementById('retry-organization-provisioning');
-			if (!(form instanceof dom.window.HTMLFormElement))
-				throw new Error('Served retry form is missing');
-			const button = form.querySelector('button');
-			if (!(button instanceof dom.window.HTMLButtonElement))
-				throw new Error('Served Try again is missing');
-			harness.centralProvisioning.replyWith('provisioned');
-			form.requestSubmit(button);
-			await changed.promise;
-			await Promise.all(pending);
-			expect(state.textContent).toBe('Ready');
-			expect(sentOrganizations(harness)).toEqual([organizationId, organizationId]);
-			expect(
-				await harness.database.select({ state: organization.fleetState }).from(organization),
-			).toEqual([{ state: 'ready' }]);
-			await harness.auth('/owner-ready');
-			expect(harness.centralProvisioning.sends).toHaveLength(2);
-		} finally {
-			observer.disconnect();
-			dom.window.close();
-		}
+		expect(page.state.admin.fleetSetup).toBe('settingUp');
+		harness.centralProvisioning.replyWith('provisioned');
+		// Act: the page's own Try again.
+		const retried = await page.retry();
+		expect(retried).toEqual({ kind: 'ready' });
+		expect(sentOrganizations(harness)).toEqual([organizationId, organizationId]);
+		expect(
+			await harness.database.select({ state: organization.fleetState }).from(organization),
+		).toEqual([{ state: 'ready' }]);
+		expect((await servedOrganizationAdmin(harness)).state.admin.fleetSetup).toBe('ready');
+		expect(harness.centralProvisioning.sends).toHaveLength(2);
 	} finally {
 		await harness.close();
 	}
@@ -312,98 +312,28 @@ it('people: every central refusal or uncertain answer leaves the organization se
 	}
 });
 
-/** Serves the owner page and runs its delivered classic controllers; only
- * the browser's fetch and navigation are controlled. */
-async function deliveredOwnerPage(harness: Harness): Promise<{
-	readonly document: Document;
-	readonly retryAndSettle: () => Promise<void>;
-	/** Waits for every request the page started (its controllers fetch on load), then closes. */
-	readonly close: () => Promise<void>;
-}> {
-	const response = await harness.auth('/owner-ready');
-	expect(response.status).toBe(200);
-	const dom = createIsolatedPageDom(
-		await response.text(),
-		new URL('/owner-ready', harness.issuer).toString(),
-	);
-	const { document } = dom.window;
-	const pending: Promise<Response>[] = [];
-	const context = createContext({
-		document,
-		window: {},
-		FormData: dom.window.FormData,
-		HTMLFormElement: dom.window.HTMLFormElement,
-		fetch(path: string, init?: RequestInit): Promise<Response> {
-			const request = harness.auth(path, init);
-			pending.push(request);
-			return request;
-		},
-		location: {
-			assign: (): never => {
-				throw new Error('Retry must not navigate away');
-			},
-			reload: (): never => {
-				throw new Error('Retry must not silently navigate');
-			},
-		},
-		Uint8Array,
-		atob,
-		btoa,
-		Error,
-	});
-	for (const script of document.scripts)
-		if (!script.src && script.type !== 'module')
-			new Script(script.textContent).runInContext(context);
-	return {
-		document,
-		async retryAndSettle(): Promise<void> {
-			const state = document.getElementById('organization-setup-state');
-			const form = document.getElementById('retry-organization-provisioning');
-			const button = form?.querySelector('button');
-			if (state === null || !(form instanceof dom.window.HTMLFormElement) || !button)
-				throw new Error('Served Fleet setup retry is missing');
-			const changed = Promise.withResolvers<void>();
-			const observer = new dom.window.MutationObserver((): void => changed.resolve());
-			observer.observe(state, { subtree: true, childList: true, characterData: true });
-			try {
-				form.requestSubmit(button);
-				await changed.promise;
-				await Promise.all(pending);
-			} finally {
-				observer.disconnect();
-			}
-		},
-		async close(): Promise<void> {
-			await Promise.allSettled(pending);
-			dom.window.close();
-		},
-	};
-}
-
 it('people: in the sign-in shell, a Try again central cannot confirm says so in one message and keeps Try again', async (): Promise<void> => {
 	// Arrange: an organization whose setup central has not confirmed (the link answers unavailable).
 	const harness = await startLocalAuthHarness();
 	try {
 		await createPendingOrganization(harness);
-		const page = await deliveredOwnerPage(harness);
-		try {
-			// Act: the owner presses the delivered Try again.
-			await page.retryAndSettle();
+		const page = await servedOrganizationAdmin(harness);
 
-			// Assert: one message, what to do and the same one action remain; nothing turned ready.
-			const { document } = page;
-			expect(document.getElementById('organization-setup-state')?.textContent).toBe(
-				"Switchboard still hasn't finished setting up your organization. Try again shortly.",
-			);
-			const button = document.querySelector('#retry-organization-provisioning button');
-			expect(button?.textContent).toBe('Try again');
-			expect(button?.hasAttribute('disabled')).toBe(false);
-			expect(
-				await harness.database.select({ state: organization.fleetState }).from(organization),
-			).toEqual([{ state: 'settingUp' }]);
-		} finally {
-			await page.close();
-		}
+		// Act: the owner presses the delivered Try again.
+		const retried = await page.retry();
+
+		// Assert: one message, what to do, and the page keeps its one action; nothing turned ready.
+		expect(retried).toEqual({
+			kind: 'still-setting-up',
+			message: organizationSetupRetryMessages.stillSettingUp,
+		});
+		expect(organizationSetupRetryMessages.stillSettingUp).toBe(
+			"Switchboard still hasn't finished setting up your organization. Try again shortly.",
+		);
+		expect((await servedOrganizationAdmin(harness)).retryButtons()).toBe(1);
+		expect(
+			await harness.database.select({ state: organization.fleetState }).from(organization),
+		).toEqual([{ state: 'settingUp' }]);
 	} finally {
 		await harness.close();
 	}
@@ -419,16 +349,12 @@ it('people: in the sign-in shell, a set-up organization says Ready and offers no
 			await harness.database.select({ state: organization.fleetState }).from(organization),
 		).toEqual([{ state: 'ready' }]);
 
-		// Act: the owner opens the signed-in page.
-		const page = await deliveredOwnerPage(harness);
-		try {
-			// Assert: the done state is the message alone.
-			const { document } = page;
-			expect(document.getElementById('organization-setup-state')?.textContent).toBe('Ready');
-			expect(document.getElementById('retry-organization-provisioning')).toBeNull();
-		} finally {
-			await page.close();
-		}
+		// Act: the owner opens Organization admin.
+		const page = await servedOrganizationAdmin(harness);
+
+		// Assert: the done state is the message alone.
+		expect(page.setupState()).toBe('Ready');
+		expect(page.retryButtons()).toBe(0);
 	} finally {
 		await harness.close();
 	}

@@ -49,9 +49,22 @@ async function runPageCeremony(props: {
 	readonly authenticator: SoftwarePasskeyAuthenticator;
 	readonly action: 'add-passkey' | 'confirm-passkey';
 }): Promise<void> {
-	const page = await props.harness.auth('/owner-ready');
+	// The classic page controller is served on the account page, which a ready person reaches only
+	// while a CLI sign-in waits to resume.
+	const authorize = new URL('/api/auth/oauth2/authorize', props.harness.target.issuer);
+	authorize.search = new URLSearchParams({
+		client_id: props.harness.target.ownerCliClientId,
+		redirect_uri: props.harness.target.ownerCliRedirectUri,
+		response_type: 'code',
+		scope: 'tool-portal:management',
+		resource: props.harness.target.managementAudience,
+		code_challenge_method: 'S256',
+		code_challenge: 'waiting-cli-sign-in',
+	}).toString();
+	const accountPage = `/owner-ready?authorize=${encodeURIComponent(authorize.toString())}`;
+	const page = await props.harness.auth(accountPage);
 	expect(page.status).toBe(200);
-	const dom = createIsolatedPageDom(await page.text(), props.harness.issuer + '/owner-ready');
+	const dom = createIsolatedPageDom(await page.text(), props.harness.issuer + accountPage);
 	const document = dom.window.document;
 	const controller = [...document.scripts].find((script) =>
 		script.textContent.includes('navigator.credentials.create'),

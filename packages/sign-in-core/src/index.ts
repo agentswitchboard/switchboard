@@ -66,11 +66,17 @@ export {
 	describeChangeRecord,
 	readChangeRecords,
 	submitWorkspaceCreate,
+	retryOrganizationSetup,
+	organizationSetupRetryMessages,
 	type ChangeRecordRow,
+	type OrganizationSetupRetry,
 	type SendForwardedRequest,
 	type WorkspaceCreateResult,
 } from '#sign-in-core/pages/islands/organization-admin-requests';
 export {
+	organizationAdminPageStateSchema,
+	organizationSetupPendingMessage,
 	workspacesPageStateSchema,
+	type OrganizationAdminPageState,
 	type WorkspacesPageState,
 } from '#sign-in-core/contracts/organization-shell-pages';

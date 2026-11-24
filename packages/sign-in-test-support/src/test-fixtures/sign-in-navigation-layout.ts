@@ -391,7 +391,9 @@ export async function observeOrganizationPagesInShell(browser: NavigationBrowser
 	expect(adminPage.response.status).toBe(200);
 	await proof.page.locator('[data-sign-in-island-mounted]').first().waitFor();
 	// Counted, not awaited: a page outside the shell or without the ID fails here at once.
-	expect(await proof.page.locator('[data-sign-in-island-mounted] [data-slot="sidebar-wrapper"]').count()).toBe(1);
+	expect(
+		await proof.page.locator('[data-sign-in-island-mounted] [data-slot="sidebar-wrapper"]').count(),
+	).toBe(1);
 	expect(await proof.page.getByRole('heading', { level: 1 }).allTextContents()).toEqual([
 		'Organization admin',
 	]);
@@ -399,10 +401,11 @@ export async function observeOrganizationPagesInShell(browser: NavigationBrowser
 	expect(await organizationId.count()).toBe(1);
 	expect(await organizationId.inputValue()).toBe(organization.id);
 	await proof.page.getByRole('button', { name: 'Copy organization ID' }).click();
-	await proof.page.getByRole('button', { name: 'Copy organization ID' }).getByText('Copied').waitFor();
-	expect(
-		await proof.evaluate('navigator.clipboard.readText()', z.string()),
-	).toBe(organization.id);
+	await proof.page
+		.getByRole('button', { name: 'Copy organization ID' })
+		.getByText('Copied')
+		.waitFor();
+	expect(await proof.evaluate('navigator.clipboard.readText()', z.string())).toBe(organization.id);
 
 	// Workspaces lists central's directory and creates through the forwarding route.
 	await proof.afterNavigation('/workspaces', () =>

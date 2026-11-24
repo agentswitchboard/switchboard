@@ -28,6 +28,15 @@ const destinationIcons: Readonly<Record<SignedInDestinationPath, LucideIcon>> = 
 	'/workspaces': Folder,
 };
 
+/**
+ * The mockups' 205 px sidebar, set twice with one value. The provider sets the variable inline,
+ * which only the hydrated page applies (the page policy refuses inline style attributes), so the
+ * server render takes the same width from the class.
+ */
+const sidebarWidth: React.CSSProperties & Record<`--${string}`, string> = {
+	'--sidebar-width': '13rem',
+};
+
 export const signedInPageTitles: Readonly<Record<SignedInShellPage, string>> = {
 	'/me': 'Me',
 	'/people': 'People',
@@ -43,7 +52,7 @@ export function SignedInShell(props: {
 }): React.ReactElement {
 	const { page, destinations, activeOrganization } = props.state;
 	return (
-		<SidebarProvider className="flex-col [--sidebar-width:13rem] [--sidebar-width-icon:3rem]">
+		<SidebarProvider className="flex-col [--sidebar-width:13rem]" style={sidebarWidth}>
 			<header className="sticky top-0 z-20 flex h-14 shrink-0 items-center gap-2 border-b bg-background px-4">
 				{/* The phone opens the same Sidebar as a Sheet; the desktop Sidebar is always open. */}
 				<SidebarTrigger aria-label="Toggle navigation" className="md:hidden" />

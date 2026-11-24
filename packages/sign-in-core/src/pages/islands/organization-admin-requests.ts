@@ -218,3 +218,35 @@ export async function submitWorkspaceCreate(props: {
 			return created satisfies never;
 	}
 }
+
+/** What one Try again on Fleet setup led to, as the page says it. */
+export type OrganizationSetupRetry =
+	| { readonly kind: 'ready' }
+	| { readonly kind: 'still-setting-up'; readonly message: string }
+	| { readonly kind: 'unreachable'; readonly message: string };
+
+export const organizationSetupRetryMessages = {
+	stillSettingUp:
+		"Switchboard still hasn't finished setting up your organization. Try again shortly.",
+	unreachable: "Switchboard couldn't be reached. Try again shortly.",
+} as const;
+
+/** Asks sign-in to retry the organization's Fleet setup; only a confirmed answer is ready. */
+export async function retryOrganizationSetup(
+	organizationId: string,
+	send: SendForwardedRequest = sendForwardedRequest,
+): Promise<OrganizationSetupRetry> {
+	try {
+		const response = await send('/api/auth/organization/retry-provisioning', { organizationId });
+		const result: unknown = await response.json().catch(() => null);
+		return response.ok &&
+			typeof result === 'object' &&
+			result !== null &&
+			'kind' in result &&
+			result.kind === 'ready'
+			? { kind: 'ready' }
+			: { kind: 'still-setting-up', message: organizationSetupRetryMessages.stillSettingUp };
+	} catch {
+		return { kind: 'unreachable', message: organizationSetupRetryMessages.unreachable };
+	}
+}

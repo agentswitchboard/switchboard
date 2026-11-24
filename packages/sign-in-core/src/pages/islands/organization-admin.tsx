@@ -19,6 +19,7 @@ import { ConfirmAdminChange } from '#sign-in-core/pages/islands/confirm-admin-ch
 import {
 	describeChangeRecord,
 	readChangeRecords,
+	retryOrganizationSetup,
 	type ChangeRecordRow,
 } from '#sign-in-core/pages/islands/organization-admin-requests';
 import {
@@ -38,31 +39,12 @@ function OrganizationCard(props: {
 	const [retrying, setRetrying] = useState(false);
 	async function retry(): Promise<void> {
 		setRetrying(true);
-		try {
-			const response = await fetch('/api/auth/organization/retry-provisioning', {
-				method: 'POST',
-				headers: { 'content-type': 'application/json' },
-				body: JSON.stringify({ organizationId: props.organization.organizationId }),
-			});
-			const result: unknown = await response.json().catch(() => null);
-			if (
-				response.ok &&
-				typeof result === 'object' &&
-				result !== null &&
-				'kind' in result &&
-				result.kind === 'ready'
-			) {
-				setFleetSetup('ready');
-				setRetryMessage(null);
-			} else
-				setRetryMessage(
-					"Switchboard still hasn't finished setting up your organization. Try again shortly.",
-				);
-		} catch {
-			setRetryMessage("Switchboard couldn't be reached. Try again shortly.");
-		} finally {
-			setRetrying(false);
-		}
+		const outcome = await retryOrganizationSetup(props.organization.organizationId);
+		if (outcome.kind === 'ready') {
+			setFleetSetup('ready');
+			setRetryMessage(null);
+		} else setRetryMessage(outcome.message);
+		setRetrying(false);
 	}
 	return (
 		<OrganizationCardView

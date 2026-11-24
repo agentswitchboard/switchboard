@@ -66,13 +66,15 @@ it('renders Organization admin inside the shell with the organization ID and its
 		organizationId,
 	);
 	expect(
-		page.querySelector('button[aria-label="Copy organization ID"]')?.getAttribute('data-copy-value'),
+		page
+			.querySelector('button[aria-label="Copy organization ID"]')
+			?.getAttribute('data-copy-value'),
 	).toBe(organizationId);
 	expect(page.body.textContent).toContain('<b>Example</b> organization');
 	expect(page.querySelector('b')).toBeNull();
 });
 
-it('renders Workspaces as the current destination with central\'s directory as a table', async () => {
+it("renders Workspaces as the current destination with central's directory as a table", async () => {
 	// Act
 	const page = await served(
 		renderWorkspacesPage({
@@ -103,6 +105,8 @@ it('renders Workspaces as the current destination with central\'s directory as a
 		['Design systems', 'Archived'],
 	]);
 	expect(
-		[...page.querySelectorAll('button')].some((button) => button.textContent === 'Create workspace'),
+		[...page.querySelectorAll('button')].some(
+			(button) => button.textContent === 'Create workspace',
+		),
 	).toBe(true);
 });
