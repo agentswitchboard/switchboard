@@ -166,6 +166,7 @@ export async function startLocalAuthHarness(
 		 * CENTRAL to the hop it names.
 		 */
 		readonly workerdCentral?: (issuer: string) => Promise<WorkerdCentralRuntime>;
+		readonly signInKeysCaller?: WorkerOptions;
 		readonly machineLinkStorageWorker?: WorkerOptions;
 		/** C8 part B: the person-link audience is configured unless a test proves the route's off state. */
 		readonly personLinkAudience?: 'configured' | 'absent';
@@ -700,6 +701,7 @@ export async function startLocalAuthHarness(
 							},
 							dev: { outboundService: { type: 'fetcher', handler: outbound.fetch } },
 						},
+						...(options.signInKeysCaller === undefined ? [] : [options.signInKeysCaller]),
 						...(machineLinkStorageWorker === undefined ? [] : [machineLinkStorageWorker]),
 						...(workerdCentral?.privateWorker === undefined ? [] : [workerdCentral.privateWorker]),
 						...(workerdCentral?.observationWorker === undefined

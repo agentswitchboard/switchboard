@@ -4,6 +4,7 @@ import { createDeferredWorkTracker } from '#sign-in-test-support/test-fixtures/a
 import { handleDatabaseProofControl } from '#sign-in-test-support/test-fixtures/recording-d1-database';
 import { handleWebCryptoDigestFailureControl } from '#sign-in-test-support/test-fixtures/web-crypto-digest-failure';
 
+export { SignInJwks } from '@agent-collaboration/sign-in-host-cloudflare';
 export { AgentClientManagement } from '#sign-in-test-support/test-fixtures/management-observation-holds';
 
 // One isolate serves the proof; its after-response work is tracked so tests wait on events.
