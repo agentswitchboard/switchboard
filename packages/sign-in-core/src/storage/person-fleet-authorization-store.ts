@@ -72,17 +72,11 @@ export function createPersonFleetAuthorizationStore(
 						.innerJoin(user, and(eq(user.id, session.userId), eq(user.emailVerified, true)))
 						.leftJoin(
 							member,
-							and(
-								eq(member.userId, session.userId),
-								eq(member.organizationId, scope),
-							),
+							and(eq(member.userId, session.userId), eq(member.organizationId, scope)),
 						)
 						.leftJoin(
 							personFence,
-							and(
-								eq(personFence.personId, session.userId),
-								eq(personFence.organizationId, scope),
-							),
+							and(eq(personFence.personId, session.userId), eq(personFence.organizationId, scope)),
 						)
 						.leftJoin(organizationFence, eq(organizationFence.id, scope))
 						.where(and(eq(session.id, sessionId), eq(session.userId, personId)))

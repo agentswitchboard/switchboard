@@ -78,7 +78,11 @@ export default {
 			return await createSignInHttpHandler(signInWorkerConfiguration(bindings), {
 				// A committed fence change drains after the response; a lost hint drains on the next Fleet call.
 				deferAfterResponse: (work: Promise<unknown>): void => context.waitUntil(work),
-			})(new Request(request, { headers: workerClientAddressHeaders(request.headers) }));
+			})(new Request(request, { headers: workerClientAddressHeaders(request.headers) }), {
+				// C8: a person's link goes over the same binding as a Mac's; sign-in never reads a frame.
+				forwardPersonLink: (upstream: Request): Promise<Response> =>
+					bindings.CENTRAL_LINK.fetch(upstream),
+			});
 		} catch {
 			return Response.json({ error: 'sign-in-unavailable' }, { status: 503 });
 		}

@@ -8,6 +8,7 @@ import {
 	isMachineLoginRoute,
 	machineDeviceRequestIsValid,
 } from '#sign-in-core/machine-login/machine-device-requests';
+import { personLinkPathPrefix } from '#sign-in-core/person-link/person-link-route';
 import { projectMachineDeviceResponse } from '#sign-in-core/response-release/machine-device-response';
 import {
 	organizationRequestErrorResponse,
@@ -27,6 +28,8 @@ export function isPublicSignInRoute(
 ): boolean {
 	if (machineLoginEnabled && isMachineLoginRoute(pathname, method)) return true;
 	if (pathname === switchboardSignOutPath) return method === 'POST';
+	// C8: a person's link upgrade; the route itself answers 405 to anything but a GET upgrade.
+	if (pathname.startsWith(personLinkPathPrefix)) return true;
 	if (isSignedInNavigationPath(pathname)) return method === 'GET';
 	if (pathname === '/api/auth/link-social') return method === 'POST';
 	// Cookie-bound reads for the sign-in pages' browser components (owner, 12 Nov).

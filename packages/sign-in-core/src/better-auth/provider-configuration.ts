@@ -23,8 +23,8 @@ import {
 } from '#sign-in-core/better-auth/organization-read-session';
 import { createOrganizationStatementPlugin } from '#sign-in-core/better-auth/organization-statement-plugin';
 import { createPasskeyConfirmationPlugin } from '#sign-in-core/better-auth/passkey-confirmation-plugin';
-import { createPersonLinkSigningPlugin } from '#sign-in-core/better-auth/person-link-signing-plugin';
 import { personAccessTokenClaims } from '#sign-in-core/better-auth/person-access-token-claims';
+import { createPersonLinkSigningPlugin } from '#sign-in-core/better-auth/person-link-signing-plugin';
 import type { ProviderRequestState } from '#sign-in-core/better-auth/provider-request-state';
 import { createSecondFactorProviderPlugin } from '#sign-in-core/better-auth/second-factor-provider-plugin';
 import { sessionReadWithoutToken } from '#sign-in-core/better-auth/session-read-without-token';

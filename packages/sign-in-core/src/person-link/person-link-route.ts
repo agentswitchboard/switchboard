@@ -140,7 +140,9 @@ async function authenticate(props: {
 	readonly request: PersonLinkUpgradeRequest;
 	readonly issuer: string;
 	readonly ports: PersonLinkRoutePorts;
-}): Promise<{ readonly kind: 'authenticated'; readonly caller: PersonLinkCaller } | PersonLinkRefusal> {
+}): Promise<
+	{ readonly kind: 'authenticated'; readonly caller: PersonLinkCaller } | PersonLinkRefusal
+> {
 	const { headers } = props.request;
 	const browser = headers.has('cookie');
 	const cli = headers.has('authorization') || headers.has('dpop');
@@ -187,6 +189,9 @@ function refusalForClaims(reason: PersonLinkClaimsRefusal): PersonLinkRefusal {
 	}
 }
 
-function refuse(status: PersonLinkRefusal['status'], reason: PersonLinkRefusalReason): PersonLinkRefusal {
+function refuse(
+	status: PersonLinkRefusal['status'],
+	reason: PersonLinkRefusalReason,
+): PersonLinkRefusal {
 	return { kind: 'refuse', status, reason };
 }

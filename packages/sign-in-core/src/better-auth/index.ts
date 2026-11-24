@@ -20,3 +20,4 @@ export {
 	machineTokenResponseSchema,
 	type MachineLoginConfiguration,
 } from '#sign-in-core/machine-login/machine-login-contracts';
+export type { PersonLinkForwarder } from '#sign-in-core/better-auth/person-link-route-edge';
