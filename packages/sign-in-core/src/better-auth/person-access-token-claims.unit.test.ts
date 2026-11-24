@@ -7,6 +7,7 @@ import type { SignInStore } from '#sign-in-core/storage/models/sign-in-store';
 const configuration = {
 	managementAudience: 'https://portal.example.invalid/management',
 	centralAdminAudience: 'https://central.example.invalid/admin',
+	centralPersonLinkAudience: 'https://central.example.invalid/person-link',
 	accessTokenSeconds: 300,
 };
 const user = { id: '019a3dce-2000-7000-8000-000000000003' };
