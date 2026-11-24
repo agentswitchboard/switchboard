@@ -1,8 +1,11 @@
 /// <reference types="../worker-configuration.gen.d.ts" preserve="true" />
 
 import { runAuthorizationRevisionBackfill } from '@agent-collaboration/sign-in-core';
-import { createSignInHttpHandler } from '@agent-collaboration/sign-in-core/better-auth';
-import { createSignInManagementBinding } from '@agent-collaboration/sign-in-core/better-auth';
+import {
+	createSignInHttpHandler,
+	createSignInManagementBinding,
+	readSignInJwksResponse,
+} from '@agent-collaboration/sign-in-core/better-auth';
 import { WorkerEntrypoint } from 'cloudflare:workers';
 
 import { workerClientAddressHeaders } from '#sign-in-host-cloudflare/worker-client-address';
@@ -63,6 +66,16 @@ export class AgentClientManagement extends WorkerEntrypoint<AuthWorkerEnv> {
 		props: Parameters<ReturnType<typeof createSignInManagementBinding>['disable']>[0],
 	): ReturnType<ReturnType<typeof createSignInManagementBinding>['disable']> {
 		return createSignInManagementBinding(signInWorkerConfiguration(this.env)).disable(props);
+	}
+}
+
+export class SignInJwks extends WorkerEntrypoint<AuthWorkerEnv> {
+	override async fetch(request: Request): Promise<Response> {
+		if (new URL(request.url).pathname !== '/api/auth/jwks')
+			return new Response(null, { status: 404 });
+		if (request.method !== 'GET')
+			return new Response(null, { status: 405, headers: { allow: 'GET' } });
+		return readSignInJwksResponse(signInWorkerConfiguration(this.env));
 	}
 }
 
