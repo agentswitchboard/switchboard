@@ -29,6 +29,9 @@ it.each([
 	['/owner-ready', 'service-page', 100, 10],
 	['/api/auth/owner/bootstrap', 'service-page', 100, 10],
 	['/api/auth/organization/invite-member', 'other', 100, 10],
+	// C8: a person's link is classified as a Mac's link is, in the default class.
+	['/api/fleet/link/019a3dce-2000-7000-8000-000000000001', 'other', 100, 10],
+	['/api/fleet/person-link/019a3dce-2000-7000-8000-000000000001', 'other', 100, 10],
 	['/unoffered', 'other', 100, 10],
 ] as const)(
 	'R52 classifies %s and assigns its independent native rule',
