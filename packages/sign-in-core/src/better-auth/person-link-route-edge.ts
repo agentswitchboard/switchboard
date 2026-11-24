@@ -174,7 +174,8 @@ export async function respondToPersonLink(props: {
  * Verification cleanup deletes rows by millisecond time (`expiresAt < now`), so during that last
  * accepted second a used proof's marker can already be gone and the same proof reserved again.
  *
- * Remove when upstream aligns acceptance and retention.
+ * Remove when upstream aligns acceptance and retention. The defect, its evidence, how to recreate
+ * it and the removal check are in `dpop-replay-window.workaround.md` beside this file.
  */
 function replayStoreCoveringLastAcceptedSecond(store: DpopReplayStore): DpopReplayStore {
 	return {
