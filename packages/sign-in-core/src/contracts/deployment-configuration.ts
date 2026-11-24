@@ -43,6 +43,8 @@ export const signInConfigurationSchema = z
 		centralIdentityAudience: z.url(),
 		/** Central's admin audience for person-fleet tokens (Lead, 8 Nov): never the stamp audience. */
 		centralAdminAudience: z.url(),
+		/** C8 part B: central's audience for the person-link token minted at a person's link upgrade. */
+		centralPersonLinkAudience: z.url(),
 		/** Central's own CENTRAL_PUBLIC_ORIGIN: every admin proof's `htu` is this plus the route. */
 		centralPublicOrigin: z
 			.url()
@@ -96,13 +98,15 @@ export const signInConfigurationSchema = z
 				configuration.managementAudience,
 				configuration.centralIdentityAudience,
 				configuration.centralAdminAudience,
+				configuration.centralPersonLinkAudience,
 				...(machineLogin === undefined ? [] : [machineLogin.machineAudience]),
-			]).size !== (machineLogin === undefined ? 3 : 4)
+			]).size !== (machineLogin === undefined ? 4 : 5)
 		)
 			context.addIssue({
 				code: 'custom',
 				path: ['centralAdminAudience'],
-				message: 'The management, stamp, admin and configured machine audiences must be distinct',
+				message:
+					'The management, stamp, admin, person-link and configured machine audiences must be distinct',
 			});
 		// Each system client has its own profile; one ID cannot hold two.
 		if (

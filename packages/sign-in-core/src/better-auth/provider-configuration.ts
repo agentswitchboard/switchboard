@@ -23,6 +23,7 @@ import {
 } from '#sign-in-core/better-auth/organization-read-session';
 import { createOrganizationStatementPlugin } from '#sign-in-core/better-auth/organization-statement-plugin';
 import { createPasskeyConfirmationPlugin } from '#sign-in-core/better-auth/passkey-confirmation-plugin';
+import { createPersonLinkSigningPlugin } from '#sign-in-core/better-auth/person-link-signing-plugin';
 import { personAccessTokenClaims } from '#sign-in-core/better-auth/person-access-token-claims';
 import type { ProviderRequestState } from '#sign-in-core/better-auth/provider-request-state';
 import { createSecondFactorProviderPlugin } from '#sign-in-core/better-auth/second-factor-provider-plugin';
@@ -100,6 +101,7 @@ type SignInProviderOptions = BetterAuthOptions & {
 		ReturnType<typeof createOrganizationStatementPlugin>,
 		ReturnType<typeof createShellSessionPlugin>,
 		ReturnType<typeof createSignInSignOutPlugin>,
+		ReturnType<typeof createPersonLinkSigningPlugin>,
 		BetterAuthPlugin,
 	];
 };
@@ -554,6 +556,7 @@ export function createSignInProvider(props: SignInProviderProps): SignInProvider
 				issuer: props.configuration.issuer,
 				sessions: props.store.persons,
 			}),
+			createPersonLinkSigningPlugin({ configuration: props.configuration }),
 			machineLogin === undefined
 				? { id: 'machine-login-unconfigured' }
 				: createMachineLoginPlugin({
