@@ -43,6 +43,14 @@ export const signInConfigurationSchema = z
 		centralIdentityAudience: z.url(),
 		/** Central's admin audience for person-fleet tokens (Lead, 8 Nov): never the stamp audience. */
 		centralAdminAudience: z.url(),
+		/**
+		 * C8 part B: central's audience for the person-link token minted at a person's link upgrade.
+		 * Absent, the person-link route is off: it answers 503 `person-link-not-configured` and mints
+		 * nothing, as central treats an absent audience. The off state is temporary. When delivery 5 is
+		 * deployed and watched, both sign-in and central make the audience required and the off state
+		 * is deleted.
+		 */
+		centralPersonLinkAudience: z.url().optional(),
 		/** Central's own CENTRAL_PUBLIC_ORIGIN: every admin proof's `htu` is this plus the route. */
 		centralPublicOrigin: z
 			.url()
@@ -90,19 +98,22 @@ export const signInConfigurationSchema = z
 				path: ['turnstile', 'kind'],
 				message: 'Local Turnstile requires a loopback issuer; deployed Turnstile forbids it',
 			});
-		// A token for one audience must never be accepted by another.
-		if (
-			new Set([
-				configuration.managementAudience,
-				configuration.centralIdentityAudience,
-				configuration.centralAdminAudience,
-				...(machineLogin === undefined ? [] : [machineLogin.machineAudience]),
-			]).size !== (machineLogin === undefined ? 3 : 4)
-		)
+		// A token for one audience must never be accepted by another: every configured audience differs.
+		const audiences = [
+			configuration.managementAudience,
+			configuration.centralIdentityAudience,
+			configuration.centralAdminAudience,
+			...(configuration.centralPersonLinkAudience === undefined
+				? []
+				: [configuration.centralPersonLinkAudience]),
+			...(machineLogin === undefined ? [] : [machineLogin.machineAudience]),
+		];
+		if (new Set(audiences).size !== audiences.length)
 			context.addIssue({
 				code: 'custom',
 				path: ['centralAdminAudience'],
-				message: 'The management, stamp, admin and configured machine audiences must be distinct',
+				message:
+					'The management, stamp, admin, person-link and configured machine audiences must be distinct',
 			});
 		// Each system client has its own profile; one ID cannot hold two.
 		if (

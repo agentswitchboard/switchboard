@@ -31,6 +31,10 @@ import { readNativeOrganizationSessionView } from '#sign-in-core/better-auth/org
 import { bootstrapOwnerClient } from '#sign-in-core/better-auth/owner-client-bootstrap';
 import { completePasskeySignIn } from '#sign-in-core/better-auth/passkey-sign-in-completion';
 import {
+	respondToPersonLink,
+	type PersonLinkForwarder,
+} from '#sign-in-core/better-auth/person-link-route-edge';
+import {
 	createSignInProvider,
 	type SignInProviderProps,
 } from '#sign-in-core/better-auth/provider-configuration';
@@ -62,6 +66,7 @@ import { fleetLoginDiscoveryResponseSchema } from '#sign-in-core/machine-login/m
 import { runAuthorizationRevisionDrain } from '#sign-in-core/organizations/authorization-revision-drainer';
 import type { OrganizationFleetState } from '#sign-in-core/organizations/organization-provisioning';
 import { pageAssetResponse } from '#sign-in-core/pages/page-document';
+import { personLinkPathPrefix } from '#sign-in-core/person-link/person-link-route';
 import {
 	admitSignInRequest,
 	providerLimitedResponse,
@@ -88,10 +93,15 @@ export interface SignInHttpHandlerOptions {
 	readonly deferAfterResponse?: (work: Promise<unknown>) => void;
 }
 
+/** What the host gives one request at its edge: the hop a person's link upgrade takes to central. */
+export interface SignInRequestEdge {
+	readonly forwardPersonLink?: PersonLinkForwarder;
+}
+
 export function createSignInHttpHandler(
 	configurationInput: SignInHttpConfiguration,
 	options: SignInHttpHandlerOptions = {},
-): (request: Request) => Promise<Response> {
+): (request: Request, edge?: SignInRequestEdge) => Promise<Response> {
 	const decisions = configurationInput.machineLoginDecisions;
 	const runFleetCall = createOrganizationFleetCallRunner(configurationInput);
 	const configuration: SignInHttpConfiguration = {
@@ -113,12 +123,12 @@ export function createSignInHttpHandler(
 				})),
 	};
 	const machineLogin = configuration.configuration.machineLogin;
-	return async (incomingRequest: Request): Promise<Response> => {
+	return async (incomingRequest: Request, edge: SignInRequestEdge = {}): Promise<Response> => {
 		const asset = pageAssetResponse(incomingRequest);
 		if (asset !== null) return asset;
 		const state = createProviderRequestState();
 		try {
-			return await respondToSignInRequest(incomingRequest, state);
+			return await respondToSignInRequest(incomingRequest, state, edge);
 		} finally {
 			// r3 section 5: a committed fence change hints a bounded drain once the response is ready;
 			// the periodic drain recovers a lost hint.
@@ -217,6 +227,7 @@ export function createSignInHttpHandler(
 	async function respondToSignInRequest(
 		incomingRequest: Request,
 		state: ProviderRequestState,
+		edge: SignInRequestEdge = {},
 	): Promise<Response> {
 		const persons = personSessionPorts(configuration.store.persons);
 		let passkeyAuditPending = false;
@@ -271,6 +282,19 @@ export function createSignInHttpHandler(
 					route: url.pathname,
 					platform: configuration.platform,
 					runFleetCall: createOrganizationFleetCallRunner(configuration),
+				});
+			if (url.pathname.startsWith(personLinkPathPrefix))
+				return await respondToPersonLink({
+					request,
+					configuration: configuration.configuration,
+					platform: configuration.platform,
+					store: configuration.store,
+					provider: createSignInProvider({
+						...configuration,
+						requestState: state,
+						authority: { kind: 'public' },
+					}),
+					forward: edge.forwardPersonLink,
 				});
 			if (isFleetAdminForwardingRoute(url.pathname) || url.pathname === organizationAdminPagePath)
 				return await respondToOrganizationAdmin(request, url.pathname, state);

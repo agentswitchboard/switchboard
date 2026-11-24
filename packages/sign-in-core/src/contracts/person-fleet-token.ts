@@ -22,8 +22,12 @@ export const personFleetSnapshotWindowMaximumMilliseconds = 300_000;
 const epochMillisecondsClaimSchema = z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER);
 const revisionClaimSchema = z.number().int().min(1).max(Number.MAX_SAFE_INTEGER);
 
-/** The application claims the contributor adds; native `iss`, `aud`, `sub`, `sid`, `iat`, `exp` and `cnf` stay the AS's. */
-const personFleetApplicationClaimsShape = {
+/**
+ * The application claims the contributor adds; native `iss`, `aud`, `sub`, `sid`, `iat`, `exp` and
+ * `cnf` stay the AS's. The person-link token (C8) carries the same authorization facts under its own
+ * profile.
+ */
+export const personFleetApplicationClaimsShape = {
 	token_profile: z.literal('person-fleet'),
 	organization_id: organizationIdSchema,
 	authorization_subject_id: uuid7Schema,
@@ -37,7 +41,7 @@ const personFleetApplicationClaimsShape = {
 } as const;
 
 /** The session's original confirmation, in seconds, exactly as the management profile carries it. */
-const confirmedFactorShape = {
+export const confirmedFactorShape = {
 	second_factor_at: z.number().int().nonnegative(),
 	second_factor_method: secondFactorMethodSchema,
 } as const;
@@ -49,12 +53,21 @@ export const personFleetApplicationClaimsSchema = z
 		z.strictObject(personFleetApplicationClaimsShape),
 	])
 	.refine(
-		(claims) =>
-			claims.authorization_snapshot_valid_until_ms > claims.authorization_snapshot_at_ms &&
-			claims.authorization_snapshot_valid_until_ms - claims.authorization_snapshot_at_ms <=
-				personFleetSnapshotWindowMaximumMilliseconds,
+		authorizationSnapshotWindowHolds,
 		'The snapshot deadline must follow S by at most the person token lifetime',
 	);
+
+/** The snapshot deadline follows S, by at most the person token lifetime (r3 section 4). */
+export function authorizationSnapshotWindowHolds(claims: {
+	readonly authorization_snapshot_at_ms: number;
+	readonly authorization_snapshot_valid_until_ms: number;
+}): boolean {
+	return (
+		claims.authorization_snapshot_valid_until_ms > claims.authorization_snapshot_at_ms &&
+		claims.authorization_snapshot_valid_until_ms - claims.authorization_snapshot_at_ms <=
+			personFleetSnapshotWindowMaximumMilliseconds
+	);
+}
 export type PersonFleetApplicationClaims = z.infer<typeof personFleetApplicationClaimsSchema>;
 /** Claims contributed by Sign-in before the native issuer adds its JWT fields. */
 export type PersonFleetJwtInputClaims = Omit<

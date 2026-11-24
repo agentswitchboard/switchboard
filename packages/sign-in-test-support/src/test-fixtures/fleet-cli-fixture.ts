@@ -9,6 +9,7 @@ import {
 } from '@agent-collaboration/sign-in-owner-cli';
 import { createWebSignInCapabilities } from '@agent-collaboration/sign-in-platform-web';
 import { createLocalJWKSet } from 'jose';
+import type { WorkerOptions } from 'miniflare';
 import { expect } from 'vitest';
 import { z } from 'zod';
 
@@ -79,11 +80,18 @@ export function fleetCliIoFor(props: {
 	};
 }
 
-export async function setupFleetCli(): Promise<FleetFixture> {
+export async function setupFleetCli(
+	options: {
+		/** workerd only: the Worker sign-in's CENTRAL_LINK binding reaches (C8's stand-in central link). */
+		readonly machineLinkStorageWorker?: WorkerOptions;
+		readonly personLinkAudience?: 'configured' | 'absent';
+	} = {},
+): Promise<FleetFixture> {
 	let now = initialTime;
 	const harness = await startLocalAuthHarness({
 		turnstileSecret: 'published-test',
 		authenticatorClock: { now: () => epochMillisecondsSchema.parse(now) },
+		...options,
 	});
 	try {
 		await signInConfirmedPeopleBrowser({ harness, email: ownerEmail });

@@ -1,4 +1,5 @@
 import { machineRouteGroups } from '#sign-in-test-support/fuzz/machine-route-classification';
+import { personLinkRoutePath } from '#sign-in-test-support/fuzz/request-families/person-link';
 import {
 	documentedAnswersFor,
 	supportedSocialProviders,
@@ -357,6 +358,19 @@ const reachableRouteGroups: readonly ReachableRouteGroup[] = [
 		evidence: 'sign-in-http-handler.ts; sign-in-request-handler.integration.test.ts',
 	},
 	...machineRouteGroups,
+	{
+		method: 'GET',
+		paths: [personLinkRoutePath],
+		exposure: ['member', 'owner', 'cli'],
+		requestParts: ['query'],
+		// Labelled like the machine link: central or its binding can return 503 during an outage, which
+		// the fault-free F1 lane rejects. Every other method answers 405 with no effect.
+		documentedAnswers: [101, 401, 403, 405, 429],
+		disclosure:
+			'A member gets a WebSocket to central carrying only a short person-link token. A refusal names no organization fact.',
+		permittedRefusalEffects: ['none', 'expired-session-cleanup'],
+		evidence: 'person-link-route.ts; person-link-route-edge.ts; person-link.host.e2e.test.ts',
+	},
 	{
 		method: 'POST',
 		paths: ['/api/auth/oauth2/token'],

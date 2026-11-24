@@ -383,10 +383,11 @@ export async function startNodeAuthProofHost(props: {
 				...decorated,
 				authorizations: {
 					// The coherent read returns first; only then does the probe act.
-					async readPersonFleetSnapshot(personId, sessionId) {
+					async readPersonFleetSnapshot(personId, sessionId, organizationId) {
 						const snapshot = await decorated.authorizations.readPersonFleetSnapshot(
 							personId,
 							sessionId,
+							organizationId,
 						);
 						if (probe.mode === 'advance') setControlledTime(milliseconds + probe.milliseconds);
 						else await barrier('hold', 'arrive', probe.key, { point: fleetSnapshotHoldPoint });

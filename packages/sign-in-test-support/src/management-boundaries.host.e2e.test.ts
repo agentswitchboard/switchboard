@@ -272,6 +272,7 @@ it('agent: every management boundary refuses real E10 and signed management no-s
 		{ endpointName: 'setPassword', serverOnly: true },
 		{ endpointName: 'signJWT', serverOnly: true },
 		{ endpointName: 'signOrganizationStatement', serverOnly: true },
+		{ endpointName: 'signPersonLinkToken', serverOnly: true },
 		{ endpointName: 'verifyJWT', serverOnly: true },
 		{ endpointName: 'viewBackupCodes', serverOnly: true },
 	]);

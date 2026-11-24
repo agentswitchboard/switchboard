@@ -12,6 +12,7 @@ import {
 	staticServedOuterRoutes,
 } from '#sign-in-test-support/fuzz/outer-handler-routes';
 import { requestFamilies } from '#sign-in-test-support/fuzz/request-families/index';
+import { personLinkFamily } from '#sign-in-test-support/fuzz/request-families/person-link';
 import { workerMachineLinkFamily } from '#sign-in-test-support/fuzz/request-families/worker-machine-link';
 import { routeClassification, routeKey } from '#sign-in-test-support/fuzz/route-classification';
 import { useControlledSignInClock } from '#sign-in-test-support/test-fixtures/controlled-node-test-clock';
@@ -46,6 +47,7 @@ it('classifies exactly the installed provider and outer-handler routes, and give
 		{ endpointName: 'setPassword', serverOnly: true },
 		{ endpointName: 'signJWT', serverOnly: true },
 		{ endpointName: 'signOrganizationStatement', serverOnly: true },
+		{ endpointName: 'signPersonLinkToken', serverOnly: true },
 		{ endpointName: 'verifyJWT', serverOnly: true },
 		{ endpointName: 'viewBackupCodes', serverOnly: true },
 	]);
@@ -129,7 +131,7 @@ it('classifies exactly the installed provider and outer-handler routes, and give
 		.filter((row) => !row.exposure.includes('blocked') && !row.exposure.includes('server-only'))
 		.map(routeKey)
 		.toSorted();
-	const familyKeys = [...requestFamilies, workerMachineLinkFamily].map((family) =>
+	const familyKeys = [...requestFamilies, workerMachineLinkFamily, personLinkFamily].map((family) =>
 		routeKey(family.route),
 	);
 	expect(new Set(familyKeys).size).toBe(familyKeys.length);
