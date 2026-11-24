@@ -22,6 +22,7 @@ export function forwardWorkerMachineLink(
 		return Promise.resolve(new Response(null, { status: 401 }));
 	return bindings.CENTRAL_LINK.fetch(
 		centralLinkUpgradeRequest({
+			principal: 'machine',
 			organizationId: organization.data,
 			authorization,
 			handshake: request.headers,

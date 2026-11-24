@@ -1,7 +1,6 @@
 import { decodeBasicCredentials } from '@better-auth/core/oauth2';
 import { DEVICE_CODE_GRANT_TYPE } from '@better-auth/oauth-provider';
 import { decodeJwt, decodeProtectedHeader } from 'jose';
-import { z } from 'zod';
 
 import { respondToDeviceApprovalPage } from '#sign-in-core/better-auth/device-approval-page';
 import { renderFactorFormResponse } from '#sign-in-core/better-auth/factor-enrollment-page';
@@ -98,8 +97,6 @@ export interface SignInHttpHandlerOptions {
 export interface SignInRequestEdge {
 	readonly forwardPersonLink?: PersonLinkForwarder;
 }
-
-const publishedJwksSchema = z.object({ keys: z.array(z.looseObject({ kty: z.string() })) });
 
 export function createSignInHttpHandler(
 	configurationInput: SignInHttpConfiguration,
@@ -297,16 +294,6 @@ export function createSignInHttpHandler(
 						requestState: state,
 						authority: { kind: 'public' },
 					}),
-					// This deployment's published keys, read through its own release fence.
-					readJwks: async () =>
-						publishedJwksSchema.parse(
-							await (
-								await respondToSignInRequest(
-									new Request(new URL('/api/auth/jwks', configuration.configuration.issuer)),
-									createProviderRequestState(),
-								)
-							).json(),
-						),
 					forward: edge.forwardPersonLink,
 				});
 			if (isFleetAdminForwardingRoute(url.pathname) || url.pathname === organizationAdminPagePath)

@@ -4,7 +4,7 @@ import {
 	verifyDpopProof,
 	verifyJwsAccessToken,
 } from '@better-auth/core/oauth2';
-import type { JSONWebKeySet } from 'jose';
+import { z } from 'zod';
 
 import { fleetPermissionsForRole } from '#sign-in-core/better-auth/fleet-permission-policy';
 import type { SignInProvider } from '#sign-in-core/better-auth/provider-configuration';
@@ -26,6 +26,8 @@ import { personIdSchema, type SignInStore } from '#sign-in-core/storage/models/s
  */
 export type PersonLinkForwarder = (upstream: Request) => Promise<Response>;
 
+const publishedJwksSchema = z.object({ keys: z.array(z.looseObject({ kty: z.string() })) });
+
 /**
  * The host edge of C8 part B: wires the decision's ports to Better Auth and the store, turns a
  * refusal into a Response, and forwards an accepted upgrade with only the person-link token.
@@ -36,7 +38,6 @@ export async function respondToPersonLink(props: {
 	readonly platform: Pick<SignInPlatform, 'clock' | 'ids'>;
 	readonly store: Pick<SignInStore, 'persons' | 'authorizations'>;
 	readonly provider: SignInProvider;
-	readonly readJwks: () => Promise<JSONWebKeySet>;
 	readonly forward: PersonLinkForwarder | undefined;
 }): Promise<Response> {
 	const { request, configuration, platform } = props;
@@ -79,7 +80,8 @@ export async function respondToPersonLink(props: {
 				try {
 					claims = personFleetTokenClaimsSchema.safeParse(
 						await verifyJwsAccessToken(accessToken, {
-							jwksFetch: props.readJwks,
+							// This deployment's published keys, read from the provider's own JWKS endpoint.
+							jwksFetch: async () => publishedJwksSchema.parse(await props.provider.api.getJwks()),
 							verifyOptions: {
 								issuer: configuration.issuer,
 								audience: configuration.centralAdminAudience,
@@ -145,6 +147,7 @@ export async function respondToPersonLink(props: {
 	try {
 		return await props.forward(
 			centralLinkUpgradeRequest({
+				principal: 'person',
 				organizationId: outcome.organizationId,
 				authorization: `Bearer ${outcome.token}`,
 				handshake: request.headers,
