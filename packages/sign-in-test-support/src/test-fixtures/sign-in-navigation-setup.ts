@@ -180,6 +180,10 @@ export async function observeNavigationReadiness(browser: NavigationBrowser): Pr
 	await proof.navigate(`${harness.issuer}/owner-ready`);
 	await proof.page.getByRole('heading', { name: 'Confirm your changes' }).waitFor();
 	expect(new URL(proof.page.url()).pathname).toBe('/owner-ready');
+	// No CLI sign-in waits, so the account page offers no CLI continuation.
+	expect(await proof.page.getByRole('button', { name: 'Continue to management CLI' }).count()).toBe(
+		0,
+	);
 	await harness.totpAuthenticator.ensureConfirmed(navigationOwnerEmail, harness.auth);
 	await installOrganizationBrowserCookie({
 		page: proof,

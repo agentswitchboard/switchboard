@@ -6,8 +6,9 @@ import type { NativeAwaitObserver } from '#sign-in-test-support/test-fixtures/na
 import type { PlaywrightBrowserPage } from '#sign-in-test-support/test-fixtures/playwright-browser';
 import type { BrowserNetworkResponse } from '#sign-in-test-support/test-fixtures/playwright-network';
 
+// The passkey list is managed on Me (its shell island) or on the account page while a CLI sign-in waits.
 export const nativePasskeyRegistrationReady =
-	"!!document.querySelector('#security-heading') && [...document.querySelectorAll('[data-sign-in-island][data-sign-in-island-mounted]')].some(root=>{try{return JSON.parse(root.dataset.islandState||'null')?.kind==='passkey-management'&&[...root.querySelectorAll('button')].some(button=>button.textContent.trim()==='Add passkey'&&!button.disabled);}catch{return false;}})";
+	"!!document.querySelector('#security-heading') && [...document.querySelectorAll('[data-sign-in-island][data-sign-in-island-mounted]')].some(root=>{try{return ['passkey-management','signed-in-navigation'].includes(JSON.parse(root.dataset.islandState||'null')?.kind)&&[...root.querySelectorAll('button')].some(button=>button.textContent.trim()==='Add passkey'&&!button.disabled);}catch{return false;}})";
 
 export const nativePasskeyRegistrationButton =
 	'[data-sign-in-island][data-sign-in-island-mounted] button';
@@ -67,7 +68,7 @@ if(typeof binding!=='function')throw new Error('Registration observation binding
 const credentials=navigator.credentials;
 if(!credentials||typeof credentials.create!=='function')throw new Error('Native credential creation missing');
 function emit(event){try{binding(JSON.stringify(event));}catch{/* Diagnostics must not change the native producer. */}}
-function managementRoot(){return [...document.querySelectorAll('[data-sign-in-island]')].find(root=>{try{return JSON.parse(root.dataset.islandState||'null')?.kind==='passkey-management';}catch{return false;}});}
+function managementRoot(){return [...document.querySelectorAll('[data-sign-in-island]')].find(root=>{try{return ['passkey-management','signed-in-navigation'].includes(JSON.parse(root.dataset.islandState||'null')?.kind);}catch{return false;}});}
 function state(){const root=managementRoot();return {mounted:!!root?.hasAttribute('data-sign-in-island-mounted'),ready:(${nativePasskeyRegistrationReady}),legacyStatus:!!document.getElementById('status')?.textContent?.trim(),islandAlert:!!root?.querySelector('[role="alert"]')?.textContent?.trim()};}
 let lastState='';
 function changed(){const current=state();const serialized=JSON.stringify(current);if(serialized!==lastState){lastState=serialized;emit({kind:'state',...current});}}
@@ -184,7 +185,7 @@ export function createNativePasskeyRegistrationObservation(props: {
 }
 
 const committedPasskeyList =
-	"[...document.querySelectorAll('[data-sign-in-island][data-sign-in-island-mounted]')].some(root=>{try{const state=JSON.parse(root.dataset.islandState||'null');return state?.kind==='passkey-management'&&(root.querySelector('[data-slot=item]')!==null||[...root.querySelectorAll('[data-slot=empty-description]')].some(paragraph=>paragraph.textContent?.trim()==='No passkeys yet.'));}catch{return false;}})";
+	"[...document.querySelectorAll('[data-sign-in-island][data-sign-in-island-mounted]')].some(root=>{try{const state=JSON.parse(root.dataset.islandState||'null');return ['passkey-management','signed-in-navigation'].includes(state?.kind)&&(root.querySelector('[data-slot=item]')!==null||[...root.querySelectorAll('[data-slot=empty-description]')].some(paragraph=>paragraph.textContent?.trim()==='No passkeys yet.'));}catch{return false;}})";
 
 /** Wait for the delivered list render before measuring the control that follows it. */
 export async function registerNativePasskey(props: {
@@ -213,7 +214,7 @@ export async function registerNativePasskey(props: {
 		page.readyWhen(nativePasskeyRegistrationReady, 'registration: mounted Add passkey control'),
 	);
 	const registrationError = page.evaluate(
-		`new Promise((resolve,reject)=>{const root=[...document.querySelectorAll('[data-sign-in-island]')].find(node=>JSON.parse(node.dataset.islandState).kind==='passkey-management');if(!root)throw new Error('Passkey management root missing');const inspect=()=>{const error=root.querySelector('[role="alert"]');if(error?.textContent?.trim())resolve(error.textContent.trim());};const observer=new MutationObserver(inspect);observer.observe(root,{childList:true,subtree:true,characterData:true});window.cancelPasskeyRegistrationObservation=()=>{observer.disconnect();reject(new Error('Registration observation cancelled'));};inspect();})`,
+		`new Promise((resolve,reject)=>{const root=[...document.querySelectorAll('[data-sign-in-island]')].find(node=>['passkey-management','signed-in-navigation'].includes(JSON.parse(node.dataset.islandState).kind));if(!root)throw new Error('Passkey management root missing');const inspect=()=>{const error=root.querySelector('[role="alert"]');if(error?.textContent?.trim())resolve(error.textContent.trim());};const observer=new MutationObserver(inspect);observer.observe(root,{childList:true,subtree:true,characterData:true});window.cancelPasskeyRegistrationObservation=()=>{observer.disconnect();reject(new Error('Registration observation cancelled'));};inspect();})`,
 		z.string(),
 	);
 	void registrationError.catch(() => undefined);

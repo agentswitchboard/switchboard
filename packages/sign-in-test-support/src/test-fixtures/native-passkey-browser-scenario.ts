@@ -335,11 +335,10 @@ export async function observeNativePasskeyBrowser(
 		const initialListResponse = page.armGetResponse(
 			`${target.issuer}/api/auth/passkey/list-user-passkeys`,
 		);
+		// Nothing is pending once the organization exists, so the account page lands on Me.
 		const organization = await observeAwait('organization: creation response and navigation', () =>
 			page.responseTo('/api/auth/organization/create', () =>
-				page.afterNavigation('/owner-ready', () =>
-					page.click('#create-organization button[type="submit"]'),
-				),
+				page.afterNavigation('/me', () => page.click('#create-organization button[type="submit"]')),
 			),
 		);
 		if (organization.response.status !== 200)
@@ -436,7 +435,7 @@ export async function observeNativePasskeyBrowser(
 			case 'journey': {
 				await signInPage(target.issuer + '/sign-in');
 				const verified = await page.responseTo('/api/auth/passkey/verify-authentication', () =>
-					page.afterNavigation('/owner-ready', () =>
+					page.afterNavigation('/me', () =>
 						challengeAccepted(() =>
 							page.click('[data-sign-in-island] button', 'Continue with Passkey'),
 						),
