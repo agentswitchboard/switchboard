@@ -145,6 +145,7 @@ function OrganizationPeopleContent(props: {
 	readonly organizationId: OrganizationId;
 	readonly organizationName: string;
 	readonly transport: OrganizationPeopleTransport;
+	readonly cardTitle: 'shown' | 'page-heading';
 }): React.ReactElement {
 	const [list, renderList] = React.useState<ListState>(() => {
 		const result = listLifecycle.transition(
@@ -295,10 +296,12 @@ function OrganizationPeopleContent(props: {
 			: null);
 	return (
 		<Card className="min-w-0">
-			<CardHeader>
-				<CardTitle>People</CardTitle>
-				<CardDescription className="break-words">{props.organizationName}</CardDescription>
-			</CardHeader>
+			{props.cardTitle === 'shown' && (
+				<CardHeader>
+					<CardTitle>People</CardTitle>
+					<CardDescription className="break-words">{props.organizationName}</CardDescription>
+				</CardHeader>
+			)}
 			<CardContent className="flex min-w-0 flex-col gap-6">
 				<section aria-labelledby="members-heading" className="min-w-0">
 					<h2 id="members-heading" className="mb-3 text-sm font-medium">
@@ -498,6 +501,14 @@ export function OrganizationPeople(props: {
 	readonly organizationId: OrganizationId;
 	readonly organizationName: string;
 	readonly transport: OrganizationPeopleTransport;
+	/** The shell's page heading already names People and the organization. */
+	readonly cardTitle?: 'shown' | 'page-heading';
 }): React.ReactElement {
-	return <OrganizationPeopleContent key={props.organizationId} {...props} />;
+	return (
+		<OrganizationPeopleContent
+			key={props.organizationId}
+			{...props}
+			cardTitle={props.cardTitle ?? 'shown'}
+		/>
+	);
 }

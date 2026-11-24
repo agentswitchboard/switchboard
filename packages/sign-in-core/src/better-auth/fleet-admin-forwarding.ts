@@ -15,7 +15,11 @@ import {
 	type ListWorkspacesResult,
 } from '#sign-in-core/central-link/list-workspaces';
 import type { SignInConfiguration } from '#sign-in-core/contracts/deployment-configuration';
-import { listWorkspacesPageLimit } from '#sign-in-core/contracts/fleet-admin-wire';
+import {
+	fleetAdminForwardingRoutes,
+	listWorkspacesPageLimit,
+	type FleetAdminForwardingRoute,
+} from '#sign-in-core/contracts/fleet-admin-wire';
 import { personFleetTokenClaimsSchema } from '#sign-in-core/contracts/person-fleet-token';
 import { trustedSignInClientAddressHeader } from '#sign-in-core/contracts/sign-in-client-address';
 import type { SignInPlatform } from '#sign-in-core/contracts/sign-in-platform';
@@ -33,14 +37,6 @@ import {
 import type { RunOrganizationFleetCall } from '#sign-in-core/organizations/organization-fleet-call';
 import { disableMachineEnrollmentClient } from '#sign-in-core/storage/machine-client-store';
 import type { SignInDatabaseFactory } from '#sign-in-core/storage/models/sign-in-database';
-
-/** The owner page's cookie-only forwarding routes, one per central admin route. */
-export const fleetAdminForwardingRoutes = {
-	'/api/auth/organization-admin/create-workspace': 'CreateWorkspace',
-	'/api/auth/organization-admin/workspace-lookup': 'WorkspaceLookup',
-	'/api/auth/organization-admin/change-records': 'ReadChangeRecords',
-} as const satisfies Record<string, FleetAdminRequest['operation']>;
-export type FleetAdminForwardingRoute = keyof typeof fleetAdminForwardingRoutes;
 
 export function isFleetAdminForwardingRoute(
 	pathname: string,

@@ -58,7 +58,7 @@ export async function observeNavigationPermissions(browser: NavigationBrowser): 
 	const { harness, proof, organization } = browser;
 	await bootstrapNavigationAdmin(browser);
 	await visitNavigation(browser, '/me');
-	await expectDestinations(browser, ['Me', 'People']);
+	await expectDestinations(browser, ['Me', 'People', 'Workspaces']);
 	const switcher = proof.page.locator('[data-slot="dropdown-menu-trigger"]');
 	await switcher.click();
 	await proof.page.getByRole('menuitem', { name: 'Organization admin' }).waitFor();
@@ -79,6 +79,8 @@ export async function observeNavigationPermissions(browser: NavigationBrowser): 
 	await runNavigationSteps(
 		[
 			'/people',
+			'/workspaces',
+			'/organization-admin',
 			`/api/auth/organization/people?organizationId=${organization.id}`,
 			`${peopleListPath}?organizationId=${organization.id}&offset=0`,
 		],
@@ -446,8 +448,8 @@ export async function observeNavigationSwitch(browser: NavigationBrowser): Promi
 				await choice.waitFor();
 				expect(await choice.isEnabled()).toBe(true);
 				expect(await proof.page.locator('#choose-organization button').count()).toBe(1);
-				await proof.afterNavigation('/owner-ready', () => choice.click());
-				await proof.page.getByRole('link', { name: 'Go to Me' }).click();
+				// Choosing finishes the step, so the account page lands in the shell at Me.
+				await proof.afterNavigation('/me', () => choice.click());
 				await proof.page.getByRole('button', { name: organization.name, exact: true }).waitFor();
 				expect(await readActiveOrganization(browser)).toBe(organization.id);
 				await harness.database.insert(member).values(secondMembership);

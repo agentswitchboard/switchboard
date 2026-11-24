@@ -1,11 +1,9 @@
 /** @jsxImportSource react */
 import { Button } from '@agent-collaboration/tool-access-ui/ui/button';
-import { Separator } from '@agent-collaboration/tool-access-ui/ui/separator';
 import {
 	Sidebar,
 	SidebarContent,
 	SidebarGroup,
-	SidebarGroupLabel,
 	SidebarInset,
 	SidebarMenu,
 	SidebarMenuButton,
@@ -13,26 +11,43 @@ import {
 	SidebarProvider,
 	SidebarTrigger,
 } from '@agent-collaboration/tool-access-ui/ui/sidebar';
-import { ChevronDown, Laptop, UserRound, UsersRound } from 'lucide-react';
+import { ChevronDown, Folder, Laptop, UserRound, UsersRound, type LucideIcon } from 'lucide-react';
 import type * as React from 'react';
 
 import {
-	signedInNavigationRoutes,
+	signedInDestinations,
+	type SignedInDestinationPath,
 	type SignedInNavigationState,
+	type SignedInShellPage,
 } from '#sign-in-core/contracts/sign-in-navigation';
+
+const destinationIcons: Readonly<Record<SignedInDestinationPath, LucideIcon>> = {
+	'/me': UserRound,
+	'/people': UsersRound,
+	'/device': Laptop,
+	'/workspaces': Folder,
+};
+
+export const signedInPageTitles: Readonly<Record<SignedInShellPage, string>> = {
+	'/me': 'Me',
+	'/people': 'People',
+	'/device': 'Machines',
+	'/workspaces': 'Workspaces',
+	'/organization-admin': 'Organization admin',
+};
 
 export function SignedInShell(props: {
 	readonly state: SignedInNavigationState;
 	readonly switcher: React.ReactNode;
 	readonly children: React.ReactNode;
 }): React.ReactElement {
-	const { page, destinations } = props.state;
+	const { page, destinations, activeOrganization } = props.state;
 	return (
-		<SidebarProvider className="flex-col [--sidebar-width:16rem] [--sidebar-width-icon:3rem]">
-			<header className="sticky top-0 z-20 flex h-14 shrink-0 items-center gap-3 border-b bg-background px-4">
-				<SidebarTrigger aria-label="Toggle navigation" />
-				<Separator orientation="vertical" className="max-h-4" />
-				<span className="text-sm font-semibold">Switchboard</span>
+		<SidebarProvider className="flex-col [--sidebar-width:13rem] [--sidebar-width-icon:3rem]">
+			<header className="sticky top-0 z-20 flex h-14 shrink-0 items-center gap-2 border-b bg-background px-4">
+				{/* The phone opens the same Sidebar as a Sheet; the desktop Sidebar is always open. */}
+				<SidebarTrigger aria-label="Toggle navigation" className="md:hidden" />
+				<span className="text-base font-semibold">Switchboard</span>
 				<div className="ml-auto min-w-0">{props.switcher}</div>
 			</header>
 			<div className="flex min-w-0 flex-1">
@@ -41,51 +56,40 @@ export function SignedInShell(props: {
 						<SidebarGroup>
 							<nav aria-label="Signed-in navigation">
 								<SidebarMenu>
-									{signedInNavigationRoutes
-										.filter((route) => destinations.includes(route.path))
-										.map((route) => (
-											<SidebarMenuItem key={route.path}>
-												<SidebarMenuButton
-													render={<a href={route.path} />}
-													aria-current={page === route.path ? 'page' : undefined}
-													isActive={page === route.path}
-												>
-													{route.path === '/me' ? (
-														<UserRound aria-hidden="true" />
-													) : (
-														<UsersRound aria-hidden="true" />
-													)}
-													<span>{route.label}</span>
-												</SidebarMenuButton>
-											</SidebarMenuItem>
-										))}
+									{signedInDestinations
+										.filter((destination) => destinations.includes(destination.path))
+										.map((destination) => {
+											const Icon = destinationIcons[destination.path];
+											return (
+												<SidebarMenuItem key={destination.path}>
+													<SidebarMenuButton
+														render={<a href={destination.path} />}
+														aria-current={page === destination.path ? 'page' : undefined}
+														isActive={page === destination.path}
+														// The approved mockups mark the current destination in the primary colour.
+														className="text-sm data-active:bg-primary data-active:text-primary-foreground hover:data-active:bg-primary hover:data-active:text-primary-foreground"
+													>
+														<Icon aria-hidden="true" />
+														<span>{destination.label}</span>
+													</SidebarMenuButton>
+												</SidebarMenuItem>
+											);
+										})}
 								</SidebarMenu>
 							</nav>
 						</SidebarGroup>
-						{props.state.showMachines === true && (
-							<SidebarGroup>
-								<SidebarGroupLabel>Machines</SidebarGroupLabel>
-								<SidebarMenu>
-									<SidebarMenuItem>
-										<SidebarMenuButton
-											render={<a href="/device" />}
-											aria-current={page === '/device' ? 'page' : undefined}
-											isActive={page === '/device'}
-										>
-											<Laptop aria-hidden="true" />
-											<span>Approve a login</span>
-										</SidebarMenuButton>
-									</SidebarMenuItem>
-								</SidebarMenu>
-							</SidebarGroup>
-						)}
 					</SidebarContent>
 				</Sidebar>
 				<SidebarInset className="min-w-0">
-					<div className="mx-auto flex w-full max-w-5xl flex-col gap-4 px-4 py-6 sm:px-6">
-						<h1 className="text-xl font-semibold">
-							{page === '/device' ? 'Approve a machine login' : page === '/me' ? 'Me' : 'People'}
-						</h1>
+					<div className="flex w-full max-w-5xl flex-col gap-4 px-4 py-6 sm:px-8">
+						<div className="flex flex-col gap-0.5">
+							<h1 className="text-2xl font-semibold">{signedInPageTitles[page]}</h1>
+							{page !== '/me' && (
+								<p className="text-sm text-muted-foreground">
+									{activeOrganization.organizationName}
+								</p>
+							)}
+						</div>
 						{props.children}
 					</div>
 				</SidebarInset>

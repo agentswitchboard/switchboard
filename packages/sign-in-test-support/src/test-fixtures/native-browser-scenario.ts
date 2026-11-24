@@ -344,13 +344,14 @@ export async function observeNativeFactorBrowser(
 		const created = await activeBrowser.responseTo(
 			'/api/auth/organization/create',
 			async (): Promise<void> =>
-				activeBrowser.afterNavigation('/owner-ready', async (): Promise<void> =>
+				// Nothing is pending once the organization exists: the account page lands on Me.
+				activeBrowser.afterNavigation('/me', async (): Promise<void> =>
 					activeBrowser.click('#create-organization button[type="submit"]'),
 				),
 		);
 		if (created.response.status !== 200) throw new Error('Native organization creation refused');
 		await activeBrowser.readyWhen(
-			`!!document.querySelector('#security-heading') && document.querySelector('h1')?.textContent==='Your account' && !document.querySelector('#create-organization')`,
+			`location.pathname==='/me' && !!document.querySelector('#security-heading') && document.querySelector('h1')?.textContent==='Me' && !document.querySelector('#create-organization')`,
 		);
 		await passed(activeStep, { nativeStatus: 200, accountSecurityVisible: true }, true);
 		activeStep = 'replacement-codes';
@@ -376,13 +377,13 @@ export async function observeNativeFactorBrowser(
 			reusedOriginalCodes: false,
 		});
 		activeStep = 'replacement-finish';
-		await activeBrowser.afterNavigation('/owner-ready', async (): Promise<void> =>
+		await activeBrowser.afterNavigation('/me', async (): Promise<void> =>
 			activeBrowser.click('[data-sign-in-island] button', "I've saved my recovery codes"),
 		);
 		await activeBrowser.readyWhen(
-			`location.pathname==='/owner-ready' && document.querySelector('h1')?.textContent==='Your account'`,
+			`location.pathname==='/me' && document.querySelector('h1')?.textContent==='Me'`,
 		);
-		await passed(activeStep, { nextPage: 'account' }, true);
+		await passed(activeStep, { nextPage: 'me' }, true);
 		activeStep = 'session-read-no-token';
 		const sessionRead = await activeBrowser.evaluate(
 			`fetch('/api/auth/get-session',{credentials:'include'}).then(async response=>{const data=await response.json();const containsToken=value=>!!value&&typeof value==='object'&&Object.entries(value).some(([key,item])=>key==='token'||containsToken(item));return {status:response.status,hasSession:typeof data?.session?.id==='string',containsToken:containsToken(data)};})`,

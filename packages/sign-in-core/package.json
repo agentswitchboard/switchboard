@@ -16,6 +16,7 @@
 	"type": "module",
 	"imports": {
 		"#sign-in-core/pages/islands/request-lifecycle-transitions": "./src/pages/islands/request-lifecycle-transitions.ts",
+		"#sign-in-core/pages/islands/organization-admin-requests": "./src/pages/islands/organization-admin-requests.ts",
 		"#sign-in-page-assets": "./__generated__/sign-in-page-assets.js",
 		"#sign-in-core/pages/*": "./src/pages/*.tsx",
 		"#sign-in-core/*": "./src/*.ts",

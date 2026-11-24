@@ -27,6 +27,7 @@ import {
 } from '#sign-in-test-support/test-fixtures/controlled-sign-in-clock';
 import { startLocalAuthHarness } from '#sign-in-test-support/test-fixtures/local-auth-harness';
 import { assertMachineDeviceReplayResponse } from '#sign-in-test-support/test-fixtures/machine-device-replay-response';
+import { createIsolatedPageDom } from '#sign-in-test-support/test-fixtures/isolated-page-dom';
 import { installOrganizationBrowserCookie } from '#sign-in-test-support/test-fixtures/organization-browser-transport';
 import {
 	launchProofBrowser,
@@ -256,7 +257,14 @@ it('matches device-login replay fixtures while approving one machine ID and rele
 		const page = await harness.auth(pathname);
 		expect(page.status).toBe(200);
 		const html = await page.text();
-		expect(html).toContain('Machines');
+		// /device is the shell's Machines destination: its sidebar link is the current page.
+		const served = createIsolatedPageDom(html, new URL(pathname, harness.issuer).toString());
+		const machines = served.window.document.querySelector(
+			'nav[aria-label="Signed-in navigation"] a[href="/device"]',
+		);
+		expect(machines?.textContent).toBe('Machines');
+		expect(machines?.getAttribute('aria-current')).toBe('page');
+		expect(served.window.document.querySelector('h1')?.textContent).toBe('Machines');
 		expect(html).toContain('data-device-page-state="review"');
 		expect(html).toContain(`id="workspace-${workspaceId}"`);
 		expect(html).toContain('Active workspace');

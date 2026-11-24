@@ -17,7 +17,7 @@ widgetId=window.turnstile.render(container,{sitekey:container.dataset.sitekey,ac
 callback:(token)=>{captchaState=typeof token==='string'&&token.length>0?{kind:'ready',token}:{kind:'empty'};},
 'expired-callback':()=>{captchaState={kind:'empty'};},
 'error-callback':()=>{captchaState={kind:'empty'};statusElement.textContent='Sign-in verification is unavailable.';}});};}
-form.addEventListener('submit',async(event)=>{event.preventDefault();
+form?.addEventListener('submit',async(event)=>{event.preventDefault();
 if(!ready&&(captchaState.kind!=='ready'||widgetId===null)){statusElement.textContent='Complete sign-in verification first.';return;}
 const headers={'content-type':'application/json'};
 if(!ready){headers['x-captcha-response']=captchaState.token;captchaState={kind:'in-flight'};}
@@ -26,7 +26,7 @@ const body=ready?{}:{provider:event.submitter.value,callbackURL:${scriptValue(pr
 const response=await fetch(ready?'/api/auth/owner/bootstrap':'/api/auth/sign-in/social',{method:'POST',headers,body:JSON.stringify(body)});
 const result=await response.json();if(!response.ok)throw new Error(ready?'Continuing to the management CLI was refused. Try again; if it keeps failing, start the sign-in again from the CLI.':'Sign-in was refused. Complete the verification, then try again.');
 if(!ready){if(typeof result.url!=='string')throw new Error('Provider sign-in unavailable');location.assign(result.url);}
-else if(result.kind==='complete'){const resume=${scriptValue(props.resume)};if(resume)location.assign(resume);else{statusElement.dataset.tone='info';statusElement.textContent='Owner CLI initialized.';}}
+else if(result.kind==='complete'){const resume=${scriptValue(props.resume)};if(resume)location.assign(resume);else throw new Error('No CLI sign-in is waiting to continue.');}
 else throw new Error('Owner bootstrap is incomplete');
 }catch(error){delete statusElement.dataset.tone;statusElement.textContent=error instanceof Error?error.message:'Owner sign-in unavailable';}
 finally{if(!ready&&widgetId!==null){captchaState={kind:'empty'};window.turnstile.reset(widgetId);}}});

@@ -20,10 +20,6 @@ import {
 	ownerAuthorizationResume,
 } from '#sign-in-core/better-auth/minimal-owner-pages';
 import {
-	organizationAdminPage,
-	organizationAdminPagePath,
-} from '#sign-in-core/better-auth/organization-admin-page';
-import {
 	createOrganizationFleetCallGuard,
 	createOrganizationFleetCallRunner,
 } from '#sign-in-core/better-auth/organization-fleet-call-guard';
@@ -40,9 +36,10 @@ import {
 } from '#sign-in-core/better-auth/provider-request-state';
 import { readProviderRouterBody } from '#sign-in-core/better-auth/provider-router-body';
 import {
+	accountPageLandsInShell,
+	enterSignedInShell,
 	readSignedInNavigationAccount,
 	respondToSignedInNavigation,
-	signedInNavigationMembership,
 } from '#sign-in-core/better-auth/sign-in-navigation';
 import {
 	agentRegistrationPorts,
@@ -51,7 +48,10 @@ import {
 	requireStoredValue,
 } from '#sign-in-core/better-auth/store-result-adapters';
 import type { PersonTokenHeader_Deserialize } from '#sign-in-core/central-link/generated/central-sign-in.gen';
-import { isSignedInNavigationPath } from '#sign-in-core/contracts/sign-in-navigation';
+import {
+	isSignedInNavigationPath,
+	organizationAdminPath,
+} from '#sign-in-core/contracts/sign-in-navigation';
 import { parseDeviceUserCode } from '#sign-in-core/machine-login/device-user-code';
 import { guardMachineLoginDecisions } from '#sign-in-core/machine-login/fleet-guarded-machine-decisions';
 import {
@@ -61,6 +61,7 @@ import {
 import { fleetLoginDiscoveryResponseSchema } from '#sign-in-core/machine-login/machine-login-contracts';
 import { runAuthorizationRevisionDrain } from '#sign-in-core/organizations/authorization-revision-drainer';
 import type { OrganizationFleetState } from '#sign-in-core/organizations/organization-provisioning';
+import { renderOrganizationAdminPage } from '#sign-in-core/pages/organization-admin-page';
 import { pageAssetResponse } from '#sign-in-core/pages/page-document';
 import {
 	admitSignInRequest,
@@ -178,40 +179,26 @@ export function createSignInHttpHandler(
 				runFleetCall: createOrganizationFleetCallRunner(configuration),
 			});
 		if (request.method !== 'GET') return Response.json({ error: 'not-found' }, { status: 404 });
-		const current = await liveSession();
-		// Built, not `Response.redirect`: hosts add headers to every response.
-		const seeOther = (pathname: string): Response =>
-			new Response(null, {
-				status: 303,
-				headers: {
-					location: new URL(pathname, configuration.configuration.issuer).toString(),
-					'cache-control': 'no-store',
-				},
-			});
-		if (current === null) return seeOther('/sign-in');
-		const membership = requireStoredValue(
-			await configuration.store.organizations.membershipsForPerson(current.personId),
-		).find((candidate) => candidate.organizationId === current.activeOrganizationId);
-		if (membership === undefined) return seeOther('/owner-ready');
-		let showPeopleLink = false;
-		try {
-			showPeopleLink = (
-				await provider.api.hasPermission({
-					headers: request.headers,
-					body: {
-						organizationId: membership.organizationId,
-						permissions: { organization: ['view'] },
-					},
-				})
-			).success;
-		} catch {
-			// A failed read hides only the link; the People page keeps its own guard.
-		}
-		return organizationAdminPage({
-			organizationId: membership.organizationId,
-			organizationName: membership.organizationName,
-			operationId: configuration.platform.ids.nextId(),
-			showPeopleLink,
+		const entry = await enterSignedInShell({
+			page: organizationAdminPath,
+			url: new URL(request.url),
+			headers: request.headers,
+			provider,
+			store: configuration.store,
+			platform: configuration.platform,
+			machineLoginEnabled: machineLogin !== undefined,
+		});
+		if (entry.kind === 'answered') return entry.response;
+		return renderOrganizationAdminPage({
+			crypto: configuration.platform.crypto,
+			navigation: entry.state,
+			admin: {
+				fleetSetup: requireStoredValue(
+					await configuration.store.organizations.readFleetState(
+						entry.state.activeOrganization.organizationId,
+					),
+				),
+			},
 		});
 	}
 	async function respondToSignInRequest(
@@ -272,13 +259,13 @@ export function createSignInHttpHandler(
 					platform: configuration.platform,
 					runFleetCall: createOrganizationFleetCallRunner(configuration),
 				});
-			if (isFleetAdminForwardingRoute(url.pathname) || url.pathname === organizationAdminPagePath)
+			if (isFleetAdminForwardingRoute(url.pathname) || url.pathname === organizationAdminPath)
 				return await respondToOrganizationAdmin(request, url.pathname, state);
 			if (isSignedInNavigationPath(url.pathname))
 				return await respondToSignedInNavigation({
 					page: url.pathname,
+					request,
 					url,
-					headers: request.headers,
 					provider: createSignInProvider({
 						...configuration,
 						requestState: state,
@@ -287,6 +274,7 @@ export function createSignInHttpHandler(
 					store: configuration.store,
 					platform: configuration.platform,
 					machineLoginEnabled: machineLogin !== undefined,
+					listWorkspaces: configuration.listWorkspaces,
 				});
 			const factorRoute = url.pathname.startsWith('/api/auth/two-factor/');
 			const ownerPage =
@@ -360,6 +348,12 @@ export function createSignInHttpHandler(
 								clock: configuration.platform.clock,
 							})
 						: null;
+				// The account page is a landing only mid-flow (owner, 24 Nov): a ready person goes to Me.
+				if (accountPageLandsInShell(account, url))
+					return new Response(null, {
+						status: 303,
+						headers: { location: '/me', 'cache-control': 'no-store' },
+					});
 				const memberships = account?.choices ?? [];
 				const activeOrganizationId = account?.activeOrganization?.organizationId ?? null;
 				if (deviceUserCode !== null && activeOrganizationId !== null)
@@ -388,7 +382,6 @@ export function createSignInHttpHandler(
 					selectionRequired,
 					...(organizationSetup === undefined ? {} : { organizationSetup }),
 					factorPage: account?.factorPage ?? 'hidden',
-					showNavigationLink: signedInNavigationMembership(account, url) !== null,
 					noOrganization: account !== null && memberships.length === 0 && !createOrganization,
 					createOrganization,
 					ready: url.pathname === '/owner-ready',

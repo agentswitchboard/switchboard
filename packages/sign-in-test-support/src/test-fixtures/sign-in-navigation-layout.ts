@@ -373,10 +373,15 @@ export async function observeNavigationComposition(browser: NavigationBrowser): 
 	expect(await sheet.getAttribute('data-mobile')).toBe('true');
 }
 
-export async function observeLegacyOrganizationAdmin(browser: NavigationBrowser): Promise<void> {
+export async function observeOrganizationPagesInShell(browser: NavigationBrowser): Promise<void> {
 	const { proof, harness, organization } = browser;
 	await bootstrapNavigationAdmin(browser);
+	await proof.context.grantPermissions(['clipboard-read', 'clipboard-write'], {
+		origin: harness.issuer,
+	});
 	await visitNavigation(browser, '/me');
+
+	// Organization admin opens from the switcher and renders inside the shell.
 	await proof.page.locator('[data-slot="dropdown-menu-trigger"]').click();
 	const adminPage = await proof.responseTo('/organization-admin', () =>
 		proof.afterNavigation('/organization-admin', () =>
@@ -384,23 +389,55 @@ export async function observeLegacyOrganizationAdmin(browser: NavigationBrowser)
 		),
 	);
 	expect(adminPage.response.status).toBe(200);
-	await proof.page.getByRole('heading', { name: 'Create a workspace' }).waitFor();
-	const name = 'Workspace created from Phase 1';
-	await proof.page.getByRole('textbox', { name: 'Name', exact: true }).fill(name);
+	await proof.page.locator('[data-sign-in-island-mounted]').first().waitFor();
+	// Counted, not awaited: a page outside the shell or without the ID fails here at once.
+	expect(await proof.page.locator('[data-sign-in-island-mounted] [data-slot="sidebar-wrapper"]').count()).toBe(1);
+	expect(await proof.page.getByRole('heading', { level: 1 }).allTextContents()).toEqual([
+		'Organization admin',
+	]);
+	const organizationId = proof.page.getByRole('textbox', { name: 'Organization ID' });
+	expect(await organizationId.count()).toBe(1);
+	expect(await organizationId.inputValue()).toBe(organization.id);
+	await proof.page.getByRole('button', { name: 'Copy organization ID' }).click();
+	await proof.page.getByRole('button', { name: 'Copy organization ID' }).getByText('Copied').waitFor();
+	expect(
+		await proof.evaluate('navigator.clipboard.readText()', z.string()),
+	).toBe(organization.id);
+
+	// Workspaces lists central's directory and creates through the forwarding route.
+	await proof.afterNavigation('/workspaces', () =>
+		proof.page
+			.getByRole('navigation', { name: 'Signed-in navigation' })
+			.getByRole('link', { name: 'Workspaces' })
+			.click(),
+	);
+	await proof.page.getByText('No workspaces yet.', { exact: true }).waitFor();
+	const name = 'Workspace created in the shell';
+	await proof.page
+		.locator('[data-sign-in-island-mounted]')
+		.getByRole('button', { name: 'Create workspace', exact: true })
+		.click();
+	const dialog = proof.page.getByRole('dialog', { name: 'Create workspace' });
+	await dialog.getByRole('textbox', { name: 'Name', exact: true }).fill(name);
 	const created = await proof.responseTo('/api/auth/organization-admin/create-workspace', () =>
-		proof.page.getByRole('button', { name: 'Create workspace', exact: true }).click(),
+		proof.afterNavigation('/workspaces', () =>
+			dialog.getByRole('button', { name: 'Create workspace', exact: true }).click(),
+		),
 	);
 	expect(created.response.status).toBe(200);
-	await proof.page.locator('#workspaces').getByText(name, { exact: false }).waitFor();
+	await proof.page.getByRole('table', { name: 'Workspaces' }).getByText(name).waitFor();
+
+	// The creation is in the organization's change records.
+	await proof.navigate(`${harness.issuer}/organization-admin`);
 	await proof.page
-		.locator('#change-records')
-		.getByText('workspaceCreated', { exact: false })
+		.getByRole('table', { name: 'Change records' })
+		.getByText('workspaceCreated', { exact: true })
 		.waitFor();
 	const answered = harness.centralAdmin.arrivals.filter(
 		(arrival) => arrival.organizationId === organization.id && arrival.outcome.kind === 'answered',
 	);
 	expect(new Set(answered.map((arrival) => arrival.route))).toEqual(
-		new Set(['CreateWorkspace', 'WorkspaceLookup', 'ReadChangeRecords']),
+		new Set(['ListWorkspaces', 'CreateWorkspace', 'ReadChangeRecords']),
 	);
 	expect(
 		harness.centralAdmin.workspaces.filter((workspace) => workspace.name === name),

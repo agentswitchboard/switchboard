@@ -8,7 +8,7 @@ import {
 	type NavigationBrowser,
 } from '#sign-in-test-support/test-fixtures/sign-in-navigation-browser';
 import {
-	observeLegacyOrganizationAdmin,
+	observeOrganizationPagesInShell,
 	observeNavigationComposition,
 	observePasskeyLayout,
 } from '#sign-in-test-support/test-fixtures/sign-in-navigation-layout';
@@ -65,7 +65,10 @@ const cases = [
 	['N7 exact continuation query and the same CLI callback', observeNavigationCliContinuation],
 	['N8 stable Add and following controls during real list delivery', observePasskeyLayout],
 	['N9 rendered Sidebar, mobile Sheet and passkey Item', observeNavigationComposition],
-	['N10 legacy admin creates, looks up and audits a workspace', observeLegacyOrganizationAdmin],
+	[
+		'N10 Organization admin and Workspaces in the shell: copy the ID, create, list and audit',
+		observeOrganizationPagesInShell,
+	],
 ] as const satisfies readonly (readonly [string, (browser: NavigationBrowser) => Promise<void>])[];
 
 it.each(hosts.flatMap((host) => cases.map(([name, exercise]) => [name, host, exercise] as const)))(

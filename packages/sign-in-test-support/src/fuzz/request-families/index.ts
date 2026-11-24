@@ -44,6 +44,7 @@ import { requestFamily as relayCreateWorkspaceFamily } from './relay-create-work
 import { requestFamily as relayWorkspaceLookupFamily } from './relay-workspace-lookup';
 import { requestFamily as shellMeFamily } from './shell-me';
 import { requestFamily as shellPeopleFamily } from './shell-people';
+import { requestFamily as shellWorkspacesFamily } from './shell-workspaces';
 import { requestFamily as signInFamily } from './sign-in';
 import { requestFamily as signInSocialFamily } from './sign-in-social';
 import { requestFamily as switchboardSignOutFamily } from './switchboard-sign-out';
@@ -65,6 +66,7 @@ export const requestFamilies = [
 	ownerReadyFamily,
 	shellMeFamily,
 	shellPeopleFamily,
+	shellWorkspacesFamily,
 	organizationAdminPageFamily,
 	getSessionFamily,
 	listAccountsFamily,

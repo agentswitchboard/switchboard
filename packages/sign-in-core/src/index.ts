@@ -61,3 +61,16 @@ export {
 	personFleetTokenBindingSchema,
 	type PersonFleetTokenClaims,
 } from '#sign-in-core/contracts/person-fleet-token';
+/** The admin pages' browser-side decisions, so host proofs drive the code the pages run. */
+export {
+	describeChangeRecord,
+	readChangeRecords,
+	submitWorkspaceCreate,
+	type ChangeRecordRow,
+	type SendForwardedRequest,
+	type WorkspaceCreateResult,
+} from '#sign-in-core/pages/islands/organization-admin-requests';
+export {
+	workspacesPageStateSchema,
+	type WorkspacesPageState,
+} from '#sign-in-core/contracts/organization-shell-pages';

@@ -20,8 +20,10 @@ import * as React from 'react';
 import type { FactorPageState } from '#sign-in-core/better-auth/factor-enrollment-page';
 import type { SignInConfiguration } from '#sign-in-core/contracts/deployment-configuration';
 import type { OrganizationChoice } from '#sign-in-core/contracts/organization-membership';
+import { organizationSetupPendingMessage } from '#sign-in-core/contracts/organization-shell-pages';
 import type { OrganizationFleetState } from '#sign-in-core/organizations/organization-provisioning';
 import { FactorControls } from '#sign-in-core/pages/factor-page';
+import { OrganizationIdField } from '#sign-in-core/pages/organization-id-field';
 import {
 	IslandRoot,
 	PageStatus,
@@ -39,7 +41,6 @@ export interface OwnerPageProps {
 	readonly resume: string | null;
 	readonly createOrganization?: boolean;
 	readonly noOrganization?: boolean;
-	readonly showNavigationLink?: boolean;
 	/** The selected organization's Fleet setup, shown to its owner (B2). */
 	readonly organizationSetup?: {
 		readonly organizationId: string;
@@ -267,9 +268,6 @@ function continueIsThePageTask(props: OwnerPageProps): boolean {
  * controller retries and rewrites the same message (Ready removes the form).
  * Ready: the message alone. The ids are the controller's and the tests'
  * contract. */
-export const organizationSetupPendingMessage =
-	"Switchboard hasn't finished setting up your organization yet. If this doesn't change, try again.";
-
 function OrganizationSetupCard({
 	setup,
 }: {
@@ -284,6 +282,9 @@ function OrganizationSetupCard({
 					{ready ? 'Ready' : organizationSetupPendingMessage}
 				</CardDescription>
 			</CardHeader>
+			<CardContent>
+				<OrganizationIdField organizationId={setup.organizationId} />
+			</CardContent>
 			{!ready && (
 				<CardFooter>
 					<form
@@ -324,9 +325,11 @@ export function OwnerPage(props: OwnerPageProps): React.ReactElement {
 								: "You're signed in."}
 						</CardDescription>
 					</CardHeader>
-					<CardFooter>
-						<ContinueToCli prominence="primary" disabled={false} />
-					</CardFooter>
+					{props.resume !== null && (
+						<CardFooter>
+							<ContinueToCli prominence="primary" disabled={false} />
+						</CardFooter>
+					)}
 				</Card>
 				<PageStatus />
 				<MembershipChoices {...props} />
@@ -386,12 +389,7 @@ export function OwnerPage(props: OwnerPageProps): React.ReactElement {
 
 /** Secondary actions under the page's one task. */
 export function OwnerPageFooter(props: OwnerPageProps): React.ReactElement | undefined {
-	if (props.showNavigationLink === true)
-		return (
-			<a className="font-medium text-foreground underline-offset-4 hover:underline" href="/me">
-				Go to Me
-			</a>
-		);
-	if (!props.ready || continueIsThePageTask(props)) return undefined;
+	// The CLI continuation is offered only while a CLI sign-in waits to resume.
+	if (!props.ready || props.resume === null || continueIsThePageTask(props)) return undefined;
 	return <ContinueToCli prominence="link" disabled={props.selectionRequired} />;
 }

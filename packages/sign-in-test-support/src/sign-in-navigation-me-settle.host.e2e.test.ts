@@ -6,7 +6,7 @@ import { holdMePasskeyListDuring } from '#sign-in-test-support/test-fixtures/me-
 import { runProofBrowserScenario } from '#sign-in-test-support/test-fixtures/playwright-browser';
 import { withNavigationBrowser } from '#sign-in-test-support/test-fixtures/sign-in-navigation-browser';
 import {
-	followReadyLinkToMe,
+	landOnMeAfter,
 	observeNavigationReadiness,
 } from '#sign-in-test-support/test-fixtures/sign-in-navigation-setup';
 
@@ -82,8 +82,9 @@ it.each(hosts)(
 					holdMePasskeyListDuring(browser, {
 						afterReadyPageVisits: 1,
 						journey: async (events): Promise<void> => {
-							await browser.proof.navigate(`${browser.harness.issuer}/owner-ready`);
-							const outcomes = await followReadyLinkToMe(browser);
+							const outcomes = await landOnMeAfter(browser, () =>
+								browser.proof.navigate(`${browser.harness.issuer}/owner-ready`),
+							);
 							events.push(`flow-returned:${outcomes.get('/api/auth/passkey/list-user-passkeys')}`);
 						},
 						exercise: async (held): Promise<void> => {

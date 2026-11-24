@@ -1,8 +1,13 @@
 // @vitest-environment jsdom
+import { createContext, Script } from 'node:vm';
+
 import { expect, it } from 'vitest';
 
 import { renderFactorFormResponse } from '#sign-in-core/better-auth/factor-enrollment-page';
-import { minimalOwnerPage } from '#sign-in-core/better-auth/minimal-owner-pages';
+import {
+	minimalOwnerPage,
+	ownerAuthorizationResume,
+} from '#sign-in-core/better-auth/minimal-owner-pages';
 import { signInConfigurationSchema } from '#sign-in-core/contracts/deployment-configuration';
 import type { SignInCrypto } from '#sign-in-core/contracts/sign-in-platform';
 import { organizationIdSchema } from '#sign-in-core/storage/models/sign-in-store';
@@ -35,6 +40,23 @@ const configuration = signInConfigurationSchema.parse({
 	ownerCliRedirectUri: 'http://127.0.0.1/callback',
 	turnstile: { kind: 'local', siteKey: '1x00000000000000000000AA' },
 });
+
+/** A validated management CLI sign-in waiting to resume: the only time the page offers the CLI. */
+const waitingCliResume = ((): string => {
+	const authorization = new URL('/api/auth/oauth2/authorize', configuration.issuer);
+	authorization.search = new URLSearchParams({
+		client_id: configuration.ownerCliClientId,
+		redirect_uri: configuration.ownerCliRedirectUri,
+		response_type: 'code',
+		scope: 'tool-portal:management',
+		resource: configuration.managementAudience,
+		code_challenge_method: 'S256',
+		code_challenge: 'waiting-cli',
+	}).toString();
+	const continuation = ownerAuthorizationResume(authorization.toString(), configuration);
+	if (continuation.kind !== 'resume') throw new Error('Missing validated continuation');
+	return continuation.authorization;
+})();
 
 it.each([
 	{ ready: false, factorPage: 'hidden', chooseOrganization: false, expected: 'Sign-in' },
@@ -386,7 +408,7 @@ it('keeps membership choices disabled before mount while enabling the selected C
 				crypto: fixedBytesCrypto,
 				ready: true,
 				configuration,
-				resume: null,
+				resume: waitingCliResume,
 				factorPage: 'hidden',
 				memberships,
 				activeOrganizationId,
@@ -433,7 +455,7 @@ it('disables the CLI only while a choice is required and keeps a sole membership
 				crypto: fixedBytesCrypto,
 				ready: true,
 				configuration,
-				resume: null,
+				resume: waitingCliResume,
 				factorPage: 'hidden',
 				memberships: selectionRequired
 					? [membership, { ...membership, organizationId: secondOrganizationId }]
@@ -463,7 +485,7 @@ it.each(['enroll-app', 'confirm'] as const)(
 			crypto: fixedBytesCrypto,
 			ready: true,
 			configuration,
-			resume: null,
+			resume: waitingCliResume,
 			factorPage,
 			selectionRequired: true,
 			activeOrganizationId: null,
@@ -486,3 +508,47 @@ it.each(['enroll-app', 'confirm'] as const)(
 		expect(page.body.textContent).not.toContain('then choose your organization');
 	},
 );
+
+it("shows the organization card's ID as text and copies it from the served page", async () => {
+	// Arrange
+	const response = minimalOwnerPage({
+		crypto: fixedBytesCrypto,
+		ready: true,
+		configuration,
+		resume: waitingCliResume,
+		factorPage: 'hidden',
+		selectionRequired: false,
+		organizationSetup: { organizationId: firstOrganizationId, state: 'ready' },
+	});
+	const page = await expectPanelDocument(response);
+	const field = page.querySelector<HTMLInputElement>('input[readonly]');
+	const button = page.querySelector<HTMLButtonElement>('button[aria-label="Copy organization ID"]');
+	const copyScript = [...page.querySelectorAll('script')].find((script) =>
+		script.textContent?.includes('data-copy-value'),
+	)?.textContent;
+	if (button === null || copyScript === undefined) throw new Error('Copy control missing');
+	document.body.replaceChildren(document.importNode(button, true));
+	const copied: string[] = [];
+	const context = createContext({
+		document,
+		navigator: {
+			clipboard: {
+				writeText: (text: string): Promise<void> => {
+					copied.push(text);
+					return Promise.resolve();
+				},
+			},
+		},
+	});
+	new Script(copyScript.replace(/^<script[^>]*>|<\/script>$/gu, '')).runInContext(context);
+
+	// Act
+	document.querySelector('button')?.click();
+	await Promise.resolve();
+
+	// Assert
+	expect(field?.value ?? field?.getAttribute('value')).toBe(firstOrganizationId);
+	expect(copied).toEqual([firstOrganizationId]);
+	expect(document.querySelector('button')?.textContent).toBe('Copied');
+	document.body.replaceChildren();
+});

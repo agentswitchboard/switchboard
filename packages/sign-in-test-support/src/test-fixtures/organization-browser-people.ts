@@ -234,16 +234,10 @@ export async function exerciseOrganizationPeople(
 		.orderBy(asc(member.createdAt), asc(member.id));
 	expect(expected).toHaveLength(101);
 	const beforeReads = await readPeopleTables(context);
-	await page.navigate(`${harness.issuer}/organization-admin`);
+	// The pre-shell People page; the shell's /people is proven by the navigation journeys.
 	const peoplePath = `/api/auth/organization/people?organizationId=${context.firstOrganizationId}`;
-	expect(
-		await page.evaluate(
-			`document.querySelector('a[href=${JSON.stringify(peoplePath)}]')?.textContent`,
-			z.string(),
-		),
-	).toBe('People');
 	await page.afterNavigation('/api/auth/organization/people', async (): Promise<void> =>
-		page.click(`a[href="${peoplePath}"]`),
+		page.navigate(`${harness.issuer}${peoplePath}`),
 	);
 	await organizationDomReady(
 		page,
@@ -484,7 +478,7 @@ export async function exerciseOrganizationPeople(
 		),
 	).toEqual([404, 404, 404, 404]);
 	expect(await readPeopleTables(context)).toEqual(beforeReads);
-	// A genuine member session can reach admin, whose People link requires its own permission gate.
+	// A genuine member session: the pre-shell People page keeps its own permission gate.
 	expect(await signInPeopleBrowser({ harness, email: nativeMemberEmail })).toBe(nativeMemberId);
 	expect(
 		await harness.database
@@ -511,13 +505,16 @@ export async function exerciseOrganizationPeople(
 		issuer: harness.issuer,
 		cookie: harness.cookie(),
 	});
-	await page.navigate(`${harness.issuer}/organization-admin`);
-	expect(
-		await page.evaluate(
-			`document.querySelectorAll('a[href*="/organization/people?"]').length`,
-			z.number(),
-		),
-	).toBe(0);
+	// Organization admin is a shell page: a member whose second factor is unconfirmed in this
+	// session is sent to finish signing in, and is never offered People there.
+	const memberAdmin = await harness.auth('/organization-admin', {
+		headers: { cookie: harness.cookie() },
+		redirect: 'manual',
+	});
+	expect(memberAdmin.status).toBe(303);
+	expect(new URL(memberAdmin.headers.get('location') ?? 'invalid:', harness.issuer).pathname).toBe(
+		'/owner-ready',
+	);
 	const denied = await page.responseTo('/api/auth/organization/people', () =>
 		page.navigate(`${harness.issuer}${peoplePath}`),
 	);

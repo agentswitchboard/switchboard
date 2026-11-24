@@ -58,7 +58,8 @@ export async function observeFreshOwnerEnrollment(browser: FreshNavigationBrowse
 		.locator('[data-sign-in-island-mounted]')
 		.getByRole('button', { name: 'Set up authenticator app' });
 	await start.waitFor();
-	expect(await proof.page.getByRole('link', { name: 'Go to Me' }).count()).toBe(0);
+	// Mid-flow, the account page stays the landing.
+	expect(new URL(proof.page.url()).pathname).toBe('/owner-ready');
 	const enrollment = await proof.responseTo('/api/auth/two-factor/enable', () => start.click());
 	expect(enrollment.response.status).toBe(200);
 	harness.totpAuthenticator.observeEnrollment(
@@ -79,12 +80,12 @@ export async function observeFreshOwnerEnrollment(browser: FreshNavigationBrowse
 	);
 	const enrolledCookie = await organizationBrowserCookie(proof, harness.issuer);
 	await expectSetupRedirects(enrolledCookie);
-	expect(await proof.page.getByRole('link', { name: 'Go to Me' }).count()).toBe(0);
+	expect(new URL(proof.page.url()).pathname).toBe('/owner-ready');
 	await proof.page.locator('#organization-name').fill('First shell organization');
-	await proof.afterNavigation('/owner-ready', () =>
+	// Once nothing is pending, the account page's reload lands in the shell at Me.
+	await proof.afterNavigation('/me', () =>
 		proof.page.getByRole('button', { name: 'Create organization' }).click(),
 	);
-	await proof.page.getByRole('link', { name: 'Go to Me' }).click();
 	await proof.page.getByRole('heading', { name: 'Me', exact: true }).waitFor();
 	const readyCookie = await organizationBrowserCookie(proof, harness.issuer);
 	const ready = await readCurrentBrowserSession({
@@ -178,15 +179,14 @@ export async function observeNavigationReadiness(browser: NavigationBrowser): Pr
 	});
 	await proof.navigate(`${harness.issuer}/owner-ready`);
 	await proof.page.getByRole('heading', { name: 'Confirm your changes' }).waitFor();
-	expect(await proof.page.getByRole('link', { name: 'Go to Me' }).count()).toBe(0);
+	expect(new URL(proof.page.url()).pathname).toBe('/owner-ready');
 	await harness.totpAuthenticator.ensureConfirmed(navigationOwnerEmail, harness.auth);
 	await installOrganizationBrowserCookie({
 		page: proof,
 		issuer: harness.issuer,
 		cookie: harness.cookie(),
 	});
-	await proof.navigate(`${harness.issuer}/owner-ready`);
-	await followReadyLinkToMe(browser);
+	await landOnMeAfter(browser, () => proof.navigate(`${harness.issuer}/owner-ready`));
 }
 
 /** The requests the Me page's island must see end before the page is at rest. */
@@ -279,12 +279,17 @@ export async function awaitPasskeySectionTerminalState(page: Page): Promise<void
 		.waitFor({ state: 'detached', timeout: 0 });
 }
 
-export function followReadyLinkToMe(
+/**
+ * Runs `action`, which reaches the account page, and expects it to land on Me: a ready person is
+ * redirected there. Ends on the Me island's own requests.
+ */
+export function landOnMeAfter(
 	browser: NavigationBrowser,
+	action: () => Promise<void>,
 ): Promise<ReadonlyMap<string, MePageRequestOutcome>> {
 	const { proof } = browser;
 	return awaitMePageRequestsAfter(browser, async (): Promise<void> => {
-		await proof.page.getByRole('link', { name: 'Go to Me' }).click();
+		await proof.afterNavigation('/me', action);
 		await proof.page.getByRole('heading', { name: 'Me', exact: true }).waitFor();
 	});
 }
@@ -314,8 +319,8 @@ export async function observeNavigationCliContinuation(browser: NavigationBrowse
 				expect(response.headers.get('location') === `/owner-ready${exactQuery}`).toBe(true);
 			});
 			await proof.navigate(`${harness.issuer}/people${authorize.search}`);
+			// A waiting CLI keeps the account page as the landing, with its continuation.
 			expect(new URL(proof.page.url()).pathname).toBe('/owner-ready');
-			expect(await proof.page.getByRole('link', { name: 'Go to Me' }).count()).toBe(0);
 			const callback = proof.page.waitForRequest((request): boolean => {
 				const url = new URL(request.url());
 				return (
@@ -349,10 +354,9 @@ export async function observeNavigationFactors(browser: NavigationBrowser): Prom
 	expect(recovery.response.status).toBe(200);
 	await proof.page.getByRole('heading', { name: 'New recovery codes' }).waitFor();
 	expect((await rows())[0]?.backupCodes !== original.backupCodes).toBe(true);
-	await proof.afterNavigation('/owner-ready', () =>
+	await landOnMeAfter(browser, () =>
 		proof.page.getByRole('button', { name: "I've saved my recovery codes" }).click(),
 	);
-	await followReadyLinkToMe(browser);
 
 	await proof.addVirtualAuthenticator();
 	const registration = await proof.responseTo('/api/auth/passkey/verify-registration', () =>
@@ -365,11 +369,10 @@ export async function observeNavigationFactors(browser: NavigationBrowser): Prom
 			.from(passkey)
 			.where(eq(passkey.userId, ownerId)),
 	).toHaveLength(1);
-	await proof.afterNavigation('/owner-ready', () =>
+	await landOnMeAfter(browser, () =>
 		proof.page.getByRole('button', { name: 'Remove app before replacing it' }).click(),
 	);
 	expect(await rows()).toEqual([]);
-	await followReadyLinkToMe(browser);
 	const enrollment = await proof.responseTo('/api/auth/two-factor/enable', () =>
 		proof.page.getByRole('button', { name: 'Set up replacement app' }).click(),
 	);
@@ -384,9 +387,8 @@ export async function observeNavigationFactors(browser: NavigationBrowser): Prom
 	await proof.page
 		.getByRole('textbox', { name: 'App code' })
 		.fill(await harness.totpAuthenticator.currentCode(navigationOwnerEmail));
-	await proof.afterNavigation('/owner-ready', () =>
+	await landOnMeAfter(browser, () =>
 		proof.page.getByRole('button', { name: 'Confirm app', exact: true }).click(),
 	);
 	expect((await rows())[0]?.verified).toBe(true);
-	await followReadyLinkToMe(browser);
 }

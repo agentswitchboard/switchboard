@@ -22,9 +22,10 @@ interface HoldableResponse {
 	readonly url: () => string;
 	readonly finished: () => Promise<unknown>;
 }
-interface HoldableFrame {
+interface HoldableNavigationRequest {
 	readonly url: () => string;
-	readonly parentFrame: () => unknown;
+	readonly isNavigationRequest: () => boolean;
+	readonly frame: () => { readonly parentFrame: () => unknown };
 }
 /** The part of the browser page this fixture drives, so its exits can be exercised without a browser. */
 export interface HoldablePage {
@@ -33,8 +34,14 @@ export interface HoldablePage {
 		handler: (route: HoldableRoute) => Promise<void>,
 	) => Promise<unknown>;
 	readonly unroute: (matches: (url: URL) => boolean) => Promise<void>;
-	readonly on: (event: 'framenavigated', listener: (frame: HoldableFrame) => void) => unknown;
-	readonly off: (event: 'framenavigated', listener: (frame: HoldableFrame) => void) => unknown;
+	readonly on: (
+		event: 'request',
+		listener: (request: HoldableNavigationRequest) => void,
+	) => unknown;
+	readonly off: (
+		event: 'request',
+		listener: (request: HoldableNavigationRequest) => void,
+	) => unknown;
 	readonly waitForResponse: (
 		matches: (response: HoldableResponse) => boolean,
 		options: { readonly timeout: number },
@@ -63,7 +70,7 @@ export interface HeldMePasskeyList {
 
 /**
  * Runs a journey and holds, inside the proof server, the passkey-list response requested by the
- * Me page the journey reaches after its `afterReadyPageVisits`-th ready-page arrival (0: the
+ * Me page the journey reaches after its `afterReadyPageVisits`-th account-page arrival (0: the
  * first Me page). The ready page requests the same list and the pages set no-referrer, so the
  * browser marks only list requests issued from a Me document after that arrival with a hold
  * token, and the server holds only a marked response. Calls `exercise` once the hold is entered.
@@ -111,8 +118,15 @@ export async function holdMePasskeyListDuring(
 			})
 			.then(sessionSettled.resolve, sessionSettled.reject);
 	}
-	function countReadyPageArrival(frame: HoldableFrame): void {
-		if (frame.parentFrame() !== null || new URL(frame.url()).pathname !== '/owner-ready') return;
+	// The account page answers a ready person with a redirect to Me, so an arrival is the main
+	// frame's navigation request for it, not a committed document.
+	function countReadyPageArrival(request: HoldableNavigationRequest): void {
+		if (
+			!request.isNavigationRequest() ||
+			request.frame().parentFrame() !== null ||
+			new URL(request.url()).pathname !== '/owner-ready'
+		)
+			return;
 		readyPageVisits += 1;
 		if (readyPageVisits === props.afterReadyPageVisits) armSessionWait();
 	}
@@ -121,7 +135,7 @@ export async function holdMePasskeyListDuring(
 		async (): Promise<void> => {
 			browser.signal.addEventListener('abort', scenarioEnded, { once: true });
 			if (props.afterReadyPageVisits === 0) armSessionWait();
-			proof.page.on('framenavigated', countReadyPageArrival);
+			proof.page.on('request', countReadyPageArrival);
 			await proof.page.route(passkeyListRequests, async (route): Promise<void> => {
 				const fromMe = new URL(route.request().frame().url()).pathname === '/me';
 				const marked = fromMe && readyPageVisits >= props.afterReadyPageVisits;
@@ -149,7 +163,7 @@ export async function holdMePasskeyListDuring(
 		async (): Promise<void> => {
 			cleanup.abort(new Error('Me passkey-list witness ended'));
 			browser.signal.removeEventListener('abort', scenarioEnded);
-			proof.page.off('framenavigated', countReadyPageArrival);
+			proof.page.off('request', countReadyPageArrival);
 			if (!proof.page.isClosed()) await proof.page.unroute(passkeyListRequests);
 		},
 	);

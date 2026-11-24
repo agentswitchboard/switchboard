@@ -19,7 +19,7 @@ export function renderDeviceApprovalPage(props: {
 }): Response {
 	const { nonce, navigation, device } = props;
 	const document = pageDocument({
-		title: 'Approve a machine login',
+		title: 'Machines',
 		nonce,
 		layout: 'shell',
 		challenge: 'none',

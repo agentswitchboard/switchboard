@@ -67,3 +67,20 @@ export function listWorkspacesIntent(request: ListWorkspacesInput): ListWorkspac
 		params: { after: request.after ?? null, limit: request.limit ?? listWorkspacesPageLimit },
 	} satisfies ListWorkspacesIntent;
 }
+
+/** The admin pages' cookie-only forwarding routes and the operation each sends. Keys stay
+ * literal: the route inventory reads this table statically. */
+export const fleetAdminForwardingRoutes = {
+	'/api/auth/organization-admin/create-workspace': 'CreateWorkspace',
+	'/api/auth/organization-admin/workspace-lookup': 'WorkspaceLookup',
+	'/api/auth/organization-admin/change-records': 'ReadChangeRecords',
+} as const;
+export type FleetAdminForwardingRoute = keyof typeof fleetAdminForwardingRoutes;
+export type FleetAdminForwardedOperation =
+	(typeof fleetAdminForwardingRoutes)[FleetAdminForwardingRoute];
+/** The same table by operation, for the pages that send them. */
+export const fleetAdminForwardingPaths = {
+	CreateWorkspace: '/api/auth/organization-admin/create-workspace',
+	WorkspaceLookup: '/api/auth/organization-admin/workspace-lookup',
+	ReadChangeRecords: '/api/auth/organization-admin/change-records',
+} as const satisfies Record<FleetAdminForwardedOperation, FleetAdminForwardingRoute>;

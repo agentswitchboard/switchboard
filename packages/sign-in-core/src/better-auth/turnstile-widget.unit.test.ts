@@ -234,32 +234,58 @@ test.each(['http-refusal', 'network-failure'])(
 	},
 );
 
-test('owner-ready bootstrap loads no widget and sends no captcha header', async () => {
+function validatedCliResume(): string {
+	const authorization = new URL('/api/auth/oauth2/authorize', configuration.issuer);
+	authorization.search = new URLSearchParams({
+		client_id: configuration.ownerCliClientId,
+		redirect_uri: configuration.ownerCliRedirectUri,
+		response_type: 'code',
+		scope: 'tool-portal:management',
+		resource: configuration.managementAudience,
+		code_challenge_method: 'S256',
+		code_challenge: 'waiting-cli',
+	}).toString();
+	const continuation = ownerAuthorizationResume(authorization.toString(), configuration);
+	if (continuation.kind !== 'resume') throw new Error('Missing validated continuation');
+	return continuation.authorization;
+}
+
+test('owner-ready bootstrap for a waiting CLI loads no widget and sends no captcha header', async () => {
 	const entered = Promise.withResolvers<void>();
 	const reply = Promise.withResolvers<Response>();
 	const fetch = vi.fn((_pathname: string, _init: RequestInit): Promise<Response> => {
 		entered.resolve();
 		return reply.promise;
 	});
-	const page = await mountOwnerPage({ ready: true, fetch });
-	const completed = Promise.withResolvers<void>();
-	const observer = new MutationObserver((): void => completed.resolve());
-	observer.observe(page.status, { childList: true });
-	try {
-		expect(document.getElementById('sign-in-captcha')).toBeNull();
-		expect(document.querySelector('script[src]')).toBeNull();
-		page.form.requestSubmit(page.submitter);
-		await entered.promise;
-		const call = fetch.mock.calls[0];
-		if (call === undefined) throw new Error('Bootstrap request was not sent');
-		expect(call[0]).toBe('/api/auth/owner/bootstrap');
-		expect(new Headers(call[1].headers).has('x-captcha-response')).toBe(false);
-		reply.resolve(Response.json({ kind: 'complete' }));
-		await completed.promise;
-		expect(page.status.textContent).toBe('Owner CLI initialized.');
-		expect(page.render).not.toHaveBeenCalled();
-		expect(page.reset).not.toHaveBeenCalled();
-	} finally {
-		observer.disconnect();
-	}
+	const resume = validatedCliResume();
+	const page = await mountOwnerPage({ ready: true, resume, fetch });
+	expect(document.getElementById('sign-in-captcha')).toBeNull();
+	expect(document.querySelector('script[src]')).toBeNull();
+	page.form.requestSubmit(page.submitter);
+	await entered.promise;
+	const call = fetch.mock.calls[0];
+	if (call === undefined) throw new Error('Bootstrap request was not sent');
+	expect(call[0]).toBe('/api/auth/owner/bootstrap');
+	expect(new Headers(call[1].headers).has('x-captcha-response')).toBe(false);
+	reply.resolve(Response.json({ kind: 'complete' }));
+	expect(await page.navigated).toBe(resume);
+	expect(page.render).not.toHaveBeenCalled();
+	expect(page.reset).not.toHaveBeenCalled();
+});
+
+test('owner-ready with no CLI waiting offers no CLI continuation', async () => {
+	// Arrange
+	const page = minimalOwnerPage({
+		crypto: fixedBytesCrypto,
+		ready: true,
+		configuration,
+		resume: null,
+	});
+
+	// Act
+	const served = new DOMParser().parseFromString(await page.text(), 'text/html');
+
+	// Assert
+	expect(served.getElementById('owner-sign-in')).toBeNull();
+	expect(served.body.textContent).not.toContain('Continue to management CLI');
 });

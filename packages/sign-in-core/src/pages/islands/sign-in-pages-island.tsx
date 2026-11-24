@@ -31,6 +31,7 @@ import type {
 	OrganizationPersonLookupRequest,
 } from '#sign-in-core/contracts/organization-membership';
 import { DeviceApproval } from '#sign-in-core/pages/islands/device-approval';
+import { OrganizationAdmin } from '#sign-in-core/pages/islands/organization-admin';
 import {
 	OrganizationPeople,
 	type OrganizationPeopleTransport,
@@ -46,6 +47,7 @@ import {
 	OrganizationSwitcher,
 	SignedInNavigation,
 } from '#sign-in-core/pages/islands/signed-in-navigation';
+import { Workspaces } from '#sign-in-core/pages/islands/workspaces';
 import { SignedInShell } from '#sign-in-core/pages/signed-in-shell';
 
 const authClient = createAuthClient({
@@ -185,6 +187,7 @@ function SignInPageContent({ state }: { readonly state: SignInIslandState }): Re
 							organizationId={active.organizationId}
 							organizationName={active.organizationName}
 							transport={organizationPeopleTransport}
+							cardTitle="page-heading"
 						/>
 					}
 				/>
@@ -200,6 +203,30 @@ function SignInPageContent({ state }: { readonly state: SignInIslandState }): Re
 						state={state.device}
 						interactive
 						onSessionEnded={(path) => location.assign(path)}
+					/>
+				</SignedInShell>
+			);
+		case 'workspaces':
+			return (
+				<SignedInShell
+					state={state.navigation}
+					switcher={<OrganizationSwitcher navigation={state.navigation} />}
+				>
+					<Workspaces
+						organizationId={state.navigation.activeOrganization.organizationId}
+						state={state.workspaces}
+					/>
+				</SignedInShell>
+			);
+		case 'organization-admin':
+			return (
+				<SignedInShell
+					state={state.navigation}
+					switcher={<OrganizationSwitcher navigation={state.navigation} />}
+				>
+					<OrganizationAdmin
+						organization={state.navigation.activeOrganization}
+						state={state.admin}
 					/>
 				</SignedInShell>
 			);
@@ -271,6 +298,14 @@ let pageTree: {
 
 const mountedIslandAttribute = 'data-sign-in-island-mounted';
 
+/** Shell pages keep their server render painted until the interactive shell has committed. */
+const shellIslandKinds: ReadonlySet<SignInIslandState['kind']> = new Set([
+	'signed-in-navigation',
+	'device-approval',
+	'workspaces',
+	'organization-admin',
+]);
+
 /** Mounts the page's island roots. Each page calls it from its inline module
  * bootstrap, including a page a factor form writes: the bundle is evaluated
  * once per window, so mounting cannot be an import side effect. Idempotent: a
@@ -293,10 +328,7 @@ export function mountSignInIslands(page: Document): void {
 			JSON.parse(root.dataset['islandState'] ?? 'null'),
 		);
 		if (!parsedState.success) continue;
-		if (
-			parsedState.data.kind === 'signed-in-navigation' ||
-			parsedState.data.kind === 'device-approval'
-		) {
+		if (shellIslandKinds.has(parsedState.data.kind)) {
 			const portal = page.createElement('div');
 			portal.hidden = true;
 			root.append(portal);

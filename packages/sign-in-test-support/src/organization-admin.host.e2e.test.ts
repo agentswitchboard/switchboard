@@ -322,9 +322,9 @@ it('organization admin page: renders targeted and allowance records with three d
 		const page = await openOrganizationAdminPage({ harness, cookie });
 		const timestamp = new Date(createdAtMillis).toISOString();
 		expect(page.changeRecordLines()).toEqual([
-			`${timestamp} organizationProvisioned ${organizationId} by sign-in`,
-			`${timestamp} machineAllowanceChanged ${machineId} ${workspaceId} (active) by ${ownerId} (machine:enroll)`,
-			`${timestamp} machineAllowanceChanged ${machineId} ${workspaceId} (withdrawn) automatically in Central`,
+			`${timestamp} organizationProvisioned ${organizationId} by Sign-in`,
+			`${timestamp} machineAllowanceChanged ${machineId} in ${workspaceId} (active) by ${ownerId} (machine:enroll)`,
+			`${timestamp} machineAllowanceChanged ${machineId} in ${workspaceId} (withdrawn) by Central, automatically`,
 		]);
 	} finally {
 		await harness.close();
@@ -343,7 +343,7 @@ it('organization admin page: the served page reports a create; a duplicate name 
 			harness: fixture.harness,
 			cookie: fixture.cookie,
 		});
-		// Act: the real page script, its forms and its forwarding routes.
+		// Act: the Workspaces page's own create decisions over its forwarding routes.
 		const created = await first.submitCreate({ name: 'research' });
 		const duplicate = await second.submitCreate({ name: 'Research' });
 		const retried = await second.submitCreate({ name: 'development' });
@@ -477,9 +477,9 @@ it('organization admin: valid bodies without the cookie-only guards, or for anot
 				wrongMethod: 403,
 			});
 		expect(pageWithoutSession.status).toBe(303);
-		expect(new URL(pageWithoutSession.headers.get('location') ?? 'invalid:').pathname).toBe(
-			'/sign-in',
-		);
+		expect(
+			new URL(pageWithoutSession.headers.get('location') ?? 'invalid:', harness.issuer).pathname,
+		).toBe('/sign-in');
 		expect(harness.centralAdmin.arrivals).toEqual([]);
 		expect(harness.centralAdmin.workspaces).toEqual([]);
 	} finally {

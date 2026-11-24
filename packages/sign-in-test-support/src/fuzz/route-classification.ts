@@ -29,13 +29,29 @@ export {
 const reachableRouteGroups: readonly ReachableRouteGroup[] = [
 	{
 		method: 'GET',
-		paths: ['/sign-in', '/owner-ready', '/organization-admin'],
+		paths: ['/sign-in', '/owner-ready'],
 		exposure: ['signed-out', 'member', 'owner'],
 		requestParts: ['query'],
+		// A ready person on /owner-ready is sent to /me (303); the page renders only mid-flow.
 		documentedAnswers: [200, 303, 429],
 		disclosure: 'Page content is limited to the current session and organization.',
 		permittedRefusalEffects: ['none', 'expired-session-cleanup', 'cookie-delete'],
-		evidence: 'sign-in-http-handler.ts; organization-admin.host.e2e.test.ts:153,379',
+		evidence: 'sign-in-http-handler.ts; sign-in-navigation.host.e2e.test.ts',
+	},
+	{
+		method: 'GET',
+		paths: ['/organization-admin', '/workspaces'],
+		exposure: ['signed-out', 'member', 'owner'],
+		requestParts: ['query'],
+		// Organization shell pages (sign-in-navigation.ts enterSignedInShell): the page for an owner
+		// of the active organization (200), a step back to /sign-in or /owner-ready (303), a refusal
+		// for a role without the page or a request carrying an authorization header (403).
+		documentedAnswers: [200, 303, 403, 429],
+		// A plain member holds no organization permission: both pages are refused.
+		documentedAnswersByCaller: { member: [303, 403, 429] },
+		disclosure: "Only the active organization's own identity, workspaces and change records.",
+		permittedRefusalEffects: ['none', 'expired-session-cleanup', 'cookie-delete'],
+		evidence: 'sign-in-navigation.ts enterSignedInShell; sign-in-navigation.host.e2e.test.ts',
 	},
 	{
 		method: 'GET',

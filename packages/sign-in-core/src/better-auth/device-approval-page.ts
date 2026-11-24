@@ -1,10 +1,13 @@
 import { organizationChoiceAllows } from '#sign-in-core/better-auth/organization-permission-check';
 import type { SignInProvider } from '#sign-in-core/better-auth/provider-configuration';
 import type { SignInHttpConfiguration } from '#sign-in-core/better-auth/sign-in-http-handler';
-import { readSignedInNavigationAccount } from '#sign-in-core/better-auth/sign-in-navigation';
+import {
+	readSignedInNavigationAccount,
+	signedInNavigationState,
+} from '#sign-in-core/better-auth/sign-in-navigation';
 import type { DeviceApprovalPageState } from '#sign-in-core/contracts/device-approval-state';
 import { mintPageNonce } from '#sign-in-core/contracts/page-nonce';
-import { signedInNavigationRoutes } from '#sign-in-core/contracts/sign-in-navigation';
+import { machinesPath } from '#sign-in-core/contracts/sign-in-navigation';
 import { uuid7Schema } from '#sign-in-core/contracts/sign-in-platform';
 import { deviceApprovalClaimSchema } from '#sign-in-core/machine-login/device-approval-claim';
 import { parseDeviceUserCode } from '#sign-in-core/machine-login/device-user-code';
@@ -55,20 +58,12 @@ export async function respondToDeviceApprovalPage(props: {
 		if (account === null || active === null) throw new Error('Missing approval navigation');
 		return renderDeviceApprovalPage({
 			nonce,
-			navigation: {
-				page: '/device',
+			navigation: signedInNavigationState({
+				page: machinesPath,
+				account,
 				activeOrganization: active,
-				choices: account.choices,
-				destinations: signedInNavigationRoutes
-					.filter(
-						(route) =>
-							route.permission === 'person' ||
-							organizationChoiceAllows(active.role, route.permission),
-					)
-					.map((route) => route.path),
-				showOrganizationAdmin: active.role === 'owner',
-				showMachines: permitted,
-			},
+				machineLoginEnabled: true,
+			}),
 			device,
 		});
 	}

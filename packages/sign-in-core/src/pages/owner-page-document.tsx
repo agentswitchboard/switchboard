@@ -4,6 +4,7 @@ import { factorFormScript } from '#sign-in-core/better-auth/factor-form-script';
 import { ownerPageScript } from '#sign-in-core/better-auth/owner-page-script';
 import { passkeyPageScript } from '#sign-in-core/better-auth/passkey-page-script';
 import type { PageNonce } from '#sign-in-core/contracts/page-nonce';
+import { organizationIdCopyScript } from '#sign-in-core/pages/organization-id-field';
 import {
 	OwnerPage,
 	OwnerPageFooter,
@@ -29,6 +30,7 @@ export function renderOwnerPage(props: OwnerPageProps & { readonly nonce: PageNo
 		challenge: props.ready ? 'none' : 'turnstile',
 		scripts:
 			ownerPageScript({ ready: props.ready, callback: callback.toString(), resume: props.resume }) +
+			(props.organizationSetup === undefined ? '' : organizationIdCopyScript()) +
 			(props.factorPage !== undefined && props.factorPage !== 'hidden'
 				? passkeyPageScript() + factorFormScript()
 				: '') +
