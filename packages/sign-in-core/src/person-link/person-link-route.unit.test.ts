@@ -52,6 +52,7 @@ async function decide(props: {
 	readonly cli?: PersonLinkAuthentication;
 	readonly snapshot?: SignInStoreResult<PersonFleetAuthorizationSnapshot | null>;
 	readonly signing?: PersonLinkSigning;
+	readonly audience?: 'configured' | 'absent';
 }): Promise<{ readonly outcome: PersonLinkRouteOutcome; readonly observed: Observed }> {
 	const observed: Observed = { signed: [], reads: [], cliCredentials: [] };
 	const ports: PersonLinkRoutePorts = {
@@ -80,8 +81,10 @@ async function decide(props: {
 		},
 		configuration: {
 			issuer,
-			centralPersonLinkAudience: 'https://central.example.invalid/person-link',
 			accessTokenSeconds: 300,
+			...(props.audience === 'absent'
+				? {}
+				: { centralPersonLinkAudience: 'https://central.example.invalid/person-link' }),
 		},
 		ports,
 	});
@@ -210,6 +213,18 @@ it.each<{
 	const { outcome } = await decide(input);
 	expect(outcome).toEqual({ kind: 'refuse', status, reason });
 });
+
+it.each([
+	['a browser', browser],
+	['a CLI', cli],
+])(
+	'is off without the person-link audience: %s gets 503 and nothing is verified, read or minted',
+	async (_caller, headers): Promise<void> => {
+		const { outcome, observed } = await decide({ headers, audience: 'absent' });
+		expect(outcome).toEqual({ kind: 'refuse', status: 503, reason: 'person-link-not-configured' });
+		expect([observed.cliCredentials, observed.reads, observed.signed]).toEqual([[], [], []]);
+	},
+);
 
 it('reads and mints nothing for a request refused before authentication', async (): Promise<void> => {
 	const { observed } = await decide({ headers: { ...upgrade, cookie: 'c' } });

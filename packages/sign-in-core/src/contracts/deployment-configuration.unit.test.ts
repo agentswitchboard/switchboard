@@ -26,10 +26,21 @@ const machineLogin = {
 	linkUrlTemplate: 'https://sign-in.example.invalid/api/fleet/link/{organization_id}',
 };
 
-it('requires the person-link audience', (): void => {
+it('accepts a configuration without the person-link audience: the route is off', (): void => {
 	expect(signInConfigurationSchema.safeParse(configuration).success).toBe(true);
-	const { centralPersonLinkAudience: _required, ...without } = configuration;
-	expect(signInConfigurationSchema.safeParse(without).success).toBe(false);
+	const { centralPersonLinkAudience: _offUntilConfigured, ...without } = configuration;
+	const parsed = signInConfigurationSchema.safeParse(without);
+	expect(parsed.success).toBe(true);
+	expect(parsed.data?.centralPersonLinkAudience).toBeUndefined();
+});
+
+it('refuses a person-link audience that is not a URL', (): void => {
+	expect(
+		signInConfigurationSchema.safeParse({
+			...configuration,
+			centralPersonLinkAudience: 'person-link',
+		}).success,
+	).toBe(false);
 });
 
 it.each(['managementAudience', 'centralIdentityAudience', 'centralAdminAudience'] as const)(

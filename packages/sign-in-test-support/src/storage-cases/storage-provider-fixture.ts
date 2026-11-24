@@ -27,7 +27,6 @@ export function storageProviderProperties(
 			managementAudience: 'https://storage-portal.invalid/management',
 			centralIdentityAudience: 'https://central.example.invalid/identity',
 			centralAdminAudience: 'https://central.example.invalid/admin',
-			centralPersonLinkAudience: 'https://central.example.invalid/person-link',
 			centralPublicOrigin: 'https://central.example.invalid',
 			adminPageClientId: 'admin-page-local',
 			ownerFleetCliClientId: 'owner-fleet-cli-local',

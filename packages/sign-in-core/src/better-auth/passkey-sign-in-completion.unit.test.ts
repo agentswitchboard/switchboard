@@ -21,7 +21,6 @@ it('preserves the release fence refusal after deleting an inactive issued sessio
 		requestedResource: null,
 		managementAudience: 'https://portal.example.invalid/management',
 		centralAdminAudience: 'https://central.example.invalid/admin',
-		centralPersonLinkAudience: 'https://central.example.invalid/person-link',
 		ownerFleetCliClientId: 'owner-fleet-test',
 		accessTokenSeconds: 300,
 		now: () => 0,

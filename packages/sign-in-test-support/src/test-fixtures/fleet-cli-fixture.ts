@@ -84,6 +84,7 @@ export async function setupFleetCli(
 	options: {
 		/** workerd only: the Worker sign-in's CENTRAL_LINK binding reaches (C8's stand-in central link). */
 		readonly machineLinkStorageWorker?: WorkerOptions;
+		readonly personLinkAudience?: 'configured' | 'absent';
 	} = {},
 ): Promise<FleetFixture> {
 	let now = initialTime;

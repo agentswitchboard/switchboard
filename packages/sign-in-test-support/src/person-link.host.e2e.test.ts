@@ -338,3 +338,24 @@ it.skipIf(!onWorkerd)(
 		}
 	},
 );
+
+it('is off without the person-link audience: 503 person-link-not-configured, and nothing reaches central', async (): Promise<void> => {
+	const fixture = await setupFleetCli({
+		personLinkAudience: 'absent',
+		...(onWorkerd ? { machineLinkStorageWorker: personLinkCentralStandIn() } : {}),
+	});
+	try {
+		expect(
+			await openPersonLink(fixture, {
+				headers: {
+					...upgrade,
+					cookie: fixture.cookie,
+					origin: new URL(fixture.target.issuer).origin,
+				},
+			}),
+		).toEqual({ kind: 'refused', status: 503, error: 'person-link-not-configured' });
+		if (onWorkerd) expect(await personLinkArrivals(fixture.harness.miniflare)).toEqual([]);
+	} finally {
+		await fixture.harness.close();
+	}
+});

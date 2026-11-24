@@ -167,6 +167,8 @@ export async function startLocalAuthHarness(
 		 */
 		readonly workerdCentral?: (issuer: string) => Promise<WorkerdCentralRuntime>;
 		readonly machineLinkStorageWorker?: WorkerOptions;
+		/** C8 part B: the person-link audience is configured unless a test proves the route's off state. */
+		readonly personLinkAudience?: 'configured' | 'absent';
 		readonly machineLogin?: Omit<MachineLoginConfiguration, 'linkUrlTemplate'>;
 		readonly machineDecisions?: (request: Request) => Promise<Response>;
 		/**
@@ -487,7 +489,9 @@ export async function startLocalAuthHarness(
 		managementAudience,
 		centralIdentityAudience: 'https://central.example.invalid/identity',
 		centralAdminAudience: 'https://central.example.invalid/admin',
-		centralPersonLinkAudience: 'https://central.example.invalid/person-link',
+		...(options.personLinkAudience === 'absent'
+			? {}
+			: { centralPersonLinkAudience: 'https://central.example.invalid/person-link' }),
 		centralPublicOrigin,
 		adminPageClientId: 'admin-page-local',
 		ownerFleetCliClientId: 'owner-fleet-cli-local',
