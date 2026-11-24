@@ -1,9 +1,11 @@
+import { verification } from '@agent-collaboration/sign-in-core';
 import { createSignInHttpHandler } from '@agent-collaboration/sign-in-core/better-auth';
 import {
 	createMemoryProofKeyStore,
 	signInFleetCli,
 	type FleetCliSession,
 } from '@agent-collaboration/sign-in-owner-cli';
+import { lt } from 'drizzle-orm';
 import type { WebSocket as WorkerWebSocket } from 'miniflare';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { z } from 'zod';
@@ -355,6 +357,60 @@ it('is off without the person-link audience: 503 person-link-not-configured, and
 			}),
 		).toEqual({ kind: 'refused', status: 503, error: 'person-link-not-configured' });
 		if (onWorkerd) expect(await personLinkArrivals(fixture.harness.miniflare)).toEqual([]);
+	} finally {
+		await fixture.harness.close();
+	}
+});
+
+it('refuses a used CLI proof replayed in its last accepted second, after the store cleans expired markers', async (): Promise<void> => {
+	const fixture = await setupFleetCli(
+		onWorkerd ? { machineLinkStorageWorker: personLinkCentralStandIn() } : {},
+	);
+	try {
+		const session = await signInFleetCli({
+			target: fixture.target,
+			store: createMemoryProofKeyStore(webSignInCrypto),
+			io: fixture.io,
+		});
+		// Signed 10 s before now, so its last accepted second still falls inside the token's lifetime.
+		const proofIssuedAt = Math.floor(fixture.io.now() / 1000) - 10;
+		const headers = {
+			...upgrade,
+			authorization: `DPoP ${session.accessToken}`,
+			dpop: await signPersonLinkUpgradeProof({
+				key: session.key,
+				htu: new URL(
+					`/api/fleet/person-link/${fixture.target.organizationId}`,
+					fixture.target.issuer,
+				).toString(),
+				jti: fixture.io.nextId(),
+				issuedAtSeconds: proofIssuedAt,
+				accessToken: session.accessToken,
+			}),
+		};
+		expect(await openPersonLink(fixture, { headers })).toEqual(
+			onWorkerd
+				? { kind: 'opened', frame: personLinkOpenedFrame }
+				: { kind: 'refused', status: 503, error: 'central-link-unavailable' },
+		);
+		const arrivalsAfterFirst = onWorkerd
+			? (await personLinkArrivals(fixture.harness.miniflare)).length
+			: 0;
+		// Better Auth's default maximum proof age is 300 s; it accepts through the whole second
+		// iat + 300. Move a few hundred milliseconds into that last accepted second.
+		const lastAcceptedInstant = (proofIssuedAt + 300) * 1000 + 300;
+		await fixture.setTime(lastAcceptedInstant);
+		// The store's own verification cleanup: every row whose expiresAt is before now, by millisecond.
+		await fixture.harness.database
+			.delete(verification)
+			.where(lt(verification.expiresAt, new Date(lastAcceptedInstant)));
+		expect(await openPersonLink(fixture, { headers })).toEqual({
+			kind: 'refused',
+			status: 401,
+			error: 'proof-refused',
+		});
+		if (onWorkerd)
+			expect(await personLinkArrivals(fixture.harness.miniflare)).toHaveLength(arrivalsAfterFirst);
 	} finally {
 		await fixture.harness.close();
 	}

@@ -3,6 +3,7 @@ import {
 	isDpopProofError,
 	verifyDpopProof,
 	verifyJwsAccessToken,
+	type DpopReplayStore,
 } from '@better-auth/core/oauth2';
 import { z } from 'zod';
 
@@ -106,7 +107,9 @@ export async function respondToPersonLink(props: {
 						expectedJkt: claims.data.cnf.jkt,
 						requireAth: true,
 						nowSeconds: Math.floor(platform.clock.now() / 1000),
-						replayStore: createDpopReplayStore(context.internalAdapter),
+						replayStore: replayStoreCoveringLastAcceptedSecond(
+							createDpopReplayStore(context.internalAdapter),
+						),
 					});
 				} catch (error) {
 					return isDpopProofError(error) ? { kind: 'refused' } : { kind: 'unavailable' };
@@ -160,6 +163,27 @@ export async function respondToPersonLink(props: {
 			reason: 'central-link-unavailable',
 		});
 	}
+}
+
+/**
+ * Keeps every DPoP replay marker one full second past the last instant its proof is accepted.
+ *
+ * Better Auth 1.7.11 accepts a proof through the whole second `iat + maxAge`: it refuses only when
+ * `nowSeconds - iat > proofMaxAgeSeconds` (`@better-auth/core/dist/oauth2/dpop.mjs:171`). But it
+ * reserves the replay marker until `(iat + maxAge) * 1000` ms, the start of that second (`:185`).
+ * Verification cleanup deletes rows by millisecond time (`expiresAt < now`), so during that last
+ * accepted second a used proof's marker can already be gone and the same proof reserved again.
+ *
+ * Remove when upstream aligns acceptance and retention.
+ */
+function replayStoreCoveringLastAcceptedSecond(store: DpopReplayStore): DpopReplayStore {
+	return {
+		reserve: (reservation) =>
+			store.reserve({
+				...reservation,
+				expiresAt: new Date(reservation.expiresAt.getTime() + 1000),
+			}),
+	};
 }
 
 function personLinkRefusalResponse(refusal: PersonLinkRefusal): Response {
