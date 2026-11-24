@@ -61,7 +61,10 @@ const cases = [
 		observeNavigationSignOut,
 	],
 	['N6 owner reaches a working checked People island from the shell', observePeopleInShell],
-	['N7 signed-out and setup-pending entry and ready link', observeNavigationReadiness],
+	[
+		'N7 signed-out and setup-pending entry, no CLI offer, and landing on Me',
+		observeNavigationReadiness,
+	],
 	['N7 exact continuation query and the same CLI callback', observeNavigationCliContinuation],
 	['N8 stable Add and following controls during real list delivery', observePasskeyLayout],
 	['N9 rendered Sidebar, mobile Sheet and passkey Item', observeNavigationComposition],
