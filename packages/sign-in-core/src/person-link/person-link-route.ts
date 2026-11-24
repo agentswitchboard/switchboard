@@ -29,7 +29,8 @@ export type PersonLinkRefusalReason =
 	| 'organization-refused'
 	| 'authorization-unavailable'
 	| 'signing-unavailable'
-	| 'central-link-unavailable';
+	| 'central-link-unavailable'
+	| 'person-link-not-configured';
 
 export interface PersonLinkRefusal {
 	readonly kind: 'refuse';
@@ -105,6 +106,9 @@ export async function decidePersonLinkRoute(props: {
 	if (request.method !== 'GET') return refuse(405, 'method-not-allowed');
 	if (request.headers.get('upgrade')?.toLowerCase() !== 'websocket')
 		return refuse(405, 'websocket-upgrade-required');
+	// Off until the audience is configured, as central treats it: nothing is read, verified or minted.
+	const audience = configuration.centralPersonLinkAudience;
+	if (audience === undefined) return refuse(503, 'person-link-not-configured');
 	const authentication = await authenticate({ request, issuer: configuration.issuer, ports });
 	if (authentication.kind !== 'authenticated') return authentication;
 	const organization = organizationIdSchema.safeParse(
@@ -125,7 +129,7 @@ export async function decidePersonLinkRoute(props: {
 			permissionsForRole: ports.permissionsForRole,
 		},
 		issuer: configuration.issuer,
-		audience: configuration.centralPersonLinkAudience,
+		audience,
 		subject: authentication.caller.personId,
 		issuedAtSeconds: Math.floor(ports.clock.now() / 1000),
 		tokenId: ports.ids.nextId(),
