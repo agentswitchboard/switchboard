@@ -5,6 +5,7 @@ import {
 import { createSignInHttpHandler } from '@agent-collaboration/sign-in-core/better-auth';
 import {
 	createMemoryProofKeyStore,
+	refreshFleetCli,
 	signInFleetCli,
 	type FleetCliSession,
 } from '@agent-collaboration/sign-in-owner-cli';
@@ -33,7 +34,7 @@ import {
 } from '#sign-in-test-support/test-fixtures/fleet-cli-fixture';
 import {
 	peoplePost,
-	signInPeopleBrowser,
+	signInConfirmedPeopleBrowser,
 } from '#sign-in-test-support/test-fixtures/people-browser-login';
 import { webSignInCrypto } from '#sign-in-test-support/test-fixtures/recording-sign-in-capabilities';
 
@@ -345,7 +346,10 @@ describe('C8 part B: the person-link route', () => {
 			);
 			expect(invitation.status).toBe(200);
 			const invitationId = z.object({ id: z.uuidv7() }).parse(await invitation.json()).id;
-			await signInPeopleBrowser({ harness: fixture.harness, email: 'member@example.invalid' });
+			await signInConfirmedPeopleBrowser({
+				harness: fixture.harness,
+				email: 'member@example.invalid',
+			});
 			expect(
 				(await peoplePost(fixture.harness, 'accept-invitation', { invitationId })).status,
 			).toBe(200);
@@ -362,11 +366,14 @@ describe('C8 part B: the person-link route', () => {
 	);
 });
 
-it('refuses a person-link upgrade before forwarding when the organization still has the previous policy digest', async (): Promise<void> => {
+it('refuses refresh and both person-link credentials when the organization still has the previous policy digest', async (): Promise<void> => {
 	const fixture = await setupFleetCli(
 		onWorkerd ? { machineLinkStorageWorker: personLinkCentralStandIn() } : {},
 	);
 	try {
+		const store = createMemoryProofKeyStore(webSignInCrypto);
+		const cli = await signInFleetCli({ target: fixture.target, store, io: fixture.io });
+		expect(await store.load()).not.toBeNull();
 		await fixture.harness.database
 			.update(organizationAuthorizationRevisions)
 			.set({
@@ -374,15 +381,54 @@ it('refuses a person-link upgrade before forwarding when the organization still 
 				permissionPolicyDigest: '2d31b5d72716e64e255d8858c231f593155289fb03ed354c4b762890667a3c22',
 			})
 			.where(eq(organizationAuthorizationRevisions.id, fixture.target.organizationId));
-		const answer = await openPersonLink(fixture, {
+		const browserAnswer = await openPersonLink(fixture, {
 			headers: {
 				...upgrade,
 				cookie: fixture.cookie,
 				origin: new URL(fixture.target.issuer).origin,
 			},
 		});
-		expect(answer).toEqual({ kind: 'refused', status: 503, error: 'authorization-unavailable' });
+		const htu = new URL(
+			`/api/fleet/person-link/${fixture.target.organizationId}`,
+			fixture.target.issuer,
+		).toString();
+		const cliAnswer = await openPersonLink(fixture, {
+			headers: {
+				...upgrade,
+				authorization: `DPoP ${cli.accessToken}`,
+				dpop: await signPersonLinkUpgradeProof({
+					key: cli.key,
+					htu,
+					jti: fixture.io.nextId(),
+					issuedAtSeconds: Math.floor(fixture.io.now() / 1000),
+					accessToken: cli.accessToken,
+				}),
+			},
+		});
+		const refusal = { kind: 'refused', status: 503, error: 'authorization-unavailable' };
+		expect([browserAnswer, cliAnswer]).toEqual([refusal, refusal]);
 		if (onWorkerd) expect(await personLinkArrivals(fixture.harness.miniflare)).toEqual([]);
+
+		const refreshReplies: Response[] = [];
+		const refreshed = await refreshFleetCli({
+			target: fixture.target,
+			store,
+			io: {
+				...fixture.io,
+				async fetch(input, init): Promise<Response> {
+					const response = await fixture.io.fetch(input, init);
+					refreshReplies.push(response.clone());
+					return response;
+				},
+			},
+		});
+		expect(refreshed).toBeNull();
+		expect(await store.load()).toBeNull();
+		expect(refreshReplies).toHaveLength(1);
+		const response = refreshReplies[0];
+		if (response === undefined) throw new Error('Refresh did not reach Sign-in');
+		expect(response.status).toBe(400);
+		expect(await response.json()).toEqual({ error: 'invalid_grant', message: 'policy-mismatch' });
 	} finally {
 		await fixture.harness.close();
 	}

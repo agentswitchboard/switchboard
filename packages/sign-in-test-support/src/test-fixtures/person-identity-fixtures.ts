@@ -20,6 +20,15 @@ const personClaims = {
 
 /** Structural values, not minted tokens or observed introspection output. */
 export function personIdentityFixtureArtifacts(): Readonly<Record<string, unknown>> {
+	const activeConfirmation = {
+		active: true,
+		sub: personClaims.sub,
+		sid: personClaims.sid,
+		aud: personClaims.aud,
+		exp: personClaims.exp,
+		organization_id: personClaims.organization_id,
+		checkedAt: 2_208_988_800_000,
+	};
 	return {
 		'K5.schema.json': z.toJSONSchema(personSessionConfirmationSchema, { target: 'draft-2020-12' }),
 		'K6.schema.json': z.toJSONSchema(organizationPersonTokenClaimsSchema, {
@@ -30,14 +39,12 @@ export function personIdentityFixtureArtifacts(): Readonly<Record<string, unknow
 			examples: {
 				inactive: personSessionConfirmationSchema.parse({ active: false }),
 				active: personSessionConfirmationSchema.parse({
-					active: true,
-					sub: personClaims.sub,
-					sid: personClaims.sid,
-					aud: personClaims.aud,
-					exp: personClaims.exp,
-					organization_id: personClaims.organization_id,
+					...activeConfirmation,
 					permission: 'organization:view',
-					checkedAt: 2_208_988_800_000,
+				}),
+				approvalDecision: personSessionConfirmationSchema.parse({
+					...activeConfirmation,
+					permission: 'approval:decide',
 				}),
 			},
 		},
