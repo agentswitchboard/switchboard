@@ -1,11 +1,14 @@
-import { verification } from '@agent-collaboration/sign-in-core';
+import {
+	organizationAuthorizationRevisions,
+	verification,
+} from '@agent-collaboration/sign-in-core';
 import { createSignInHttpHandler } from '@agent-collaboration/sign-in-core/better-auth';
 import {
 	createMemoryProofKeyStore,
 	signInFleetCli,
 	type FleetCliSession,
 } from '@agent-collaboration/sign-in-owner-cli';
-import { lt } from 'drizzle-orm';
+import { eq, lt } from 'drizzle-orm';
 import type { WebSocket as WorkerWebSocket } from 'miniflare';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { z } from 'zod';
@@ -28,6 +31,10 @@ import {
 	setupFleetCli,
 	type FleetFixture,
 } from '#sign-in-test-support/test-fixtures/fleet-cli-fixture';
+import {
+	peoplePost,
+	signInPeopleBrowser,
+} from '#sign-in-test-support/test-fixtures/people-browser-login';
 import { webSignInCrypto } from '#sign-in-test-support/test-fixtures/recording-sign-in-capabilities';
 
 useControlledSignInClock();
@@ -198,6 +205,9 @@ describe('C8 part B: the person-link route', () => {
 			token_profile: 'person-link',
 			organization_id: fixture.target.organizationId,
 		});
+		expect(checked.claims.permissions).toContain('approval:decide');
+		expect(checked.claims.permissions).toHaveLength(10);
+		expect(checked.claims.permissions).toEqual([...new Set(checked.claims.permissions)].toSorted());
 		expect(Object.keys(checked.claims).toSorted()).toEqual(
 			[
 				'aud',
@@ -319,6 +329,63 @@ describe('C8 part B: the person-link route', () => {
 		}
 		expect(await arrivals()).toHaveLength(before);
 	});
+
+	it.skipIf(!onWorkerd)(
+		'signs an empty permission list for an organization member',
+		async (): Promise<void> => {
+			const invitation = await peoplePost(
+				fixture.harness,
+				'invite-member',
+				{
+					organizationId: fixture.target.organizationId,
+					email: 'member@example.invalid',
+					role: 'member',
+				},
+				fixture.cookie,
+			);
+			expect(invitation.status).toBe(200);
+			const invitationId = z.object({ id: z.uuidv7() }).parse(await invitation.json()).id;
+			await signInPeopleBrowser({ harness: fixture.harness, email: 'member@example.invalid' });
+			expect(
+				(await peoplePost(fixture.harness, 'accept-invitation', { invitationId })).status,
+			).toBe(200);
+
+			const answer = await openPersonLink(fixture, {
+				headers: { ...browser(), cookie: fixture.harness.cookie() },
+			});
+
+			expect(answer).toEqual({ kind: 'opened', frame: personLinkOpenedFrame });
+			const checked = await check((await arrivals()).at(-1));
+			if (checked.kind !== 'accepted') throw new Error(`Stand-in refused: ${checked.reason}`);
+			expect(checked.claims.permissions).toEqual([]);
+		},
+	);
+});
+
+it('refuses a person-link upgrade before forwarding when the organization still has the previous policy digest', async (): Promise<void> => {
+	const fixture = await setupFleetCli(
+		onWorkerd ? { machineLinkStorageWorker: personLinkCentralStandIn() } : {},
+	);
+	try {
+		await fixture.harness.database
+			.update(organizationAuthorizationRevisions)
+			.set({
+				// The digest on active organization fences created by 79d4b4a.
+				permissionPolicyDigest: '2d31b5d72716e64e255d8858c231f593155289fb03ed354c4b762890667a3c22',
+			})
+			.where(eq(organizationAuthorizationRevisions.id, fixture.target.organizationId));
+		const answer = await openPersonLink(fixture, {
+			headers: {
+				...upgrade,
+				cookie: fixture.cookie,
+				origin: new URL(fixture.target.issuer).origin,
+			},
+		});
+		expect(answer).toEqual({ kind: 'refused', status: 503, error: 'authorization-unavailable' });
+		if (onWorkerd) expect(await personLinkArrivals(fixture.harness.miniflare)).toEqual([]);
+	} finally {
+		await fixture.harness.close();
+	}
 });
 
 it.skipIf(!onWorkerd)(

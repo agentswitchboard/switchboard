@@ -56,7 +56,8 @@
 						"machine:revoke",
 						"machine:setTokenLifetime",
 						"organization:view",
-						"organization:readAudit"
+						"organization:readAudit",
+						"approval:decide"
 					],
 					"description": "The permission checked live for this request"
 				},

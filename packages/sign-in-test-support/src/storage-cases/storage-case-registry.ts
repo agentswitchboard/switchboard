@@ -75,7 +75,7 @@ export const storageCaseDefinitions: readonly StorageCaseDefinition[] = [
 	{
 		name: 'people: live native permissions bind K5 to exactly one request organization and permission',
 		expected: {
-			permissionCount: 9,
+			permissionCount: 10,
 			exactOwnerAnswers: true,
 			allMemberAnswersInactive: true,
 			wrongOrganization: { active: false },

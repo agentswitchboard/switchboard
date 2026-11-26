@@ -26,17 +26,21 @@ describe('Fleet route permissions from the adopted PD table', () => {
 		// Act / Assert
 		expect(permissionForFleetAdminOperation(parsed)).toBe(permission);
 	});
-	it.each(['owner', 'member', 'workspace:delete', 'machine:Enroll', 'unknown:action'])(
-		'refuses the non-permission %j',
-		(permission) => {
-			// Arrange / Act / Assert
-			expect(fleetPermissionSchema.safeParse(permission).success).toBe(false);
-		},
-	);
+	it.each([
+		'owner',
+		'member',
+		'workspace:delete',
+		'machine:Enroll',
+		'unknown:action',
+		'organization:repairWork',
+	])('refuses the non-permission %j', (permission) => {
+		// Arrange / Act / Assert
+		expect(fleetPermissionSchema.safeParse(permission).success).toBe(false);
+	});
 	it('keeps internal decisions off the forwarded admin operation set', () => {
 		// Arrange / Act / Assert: device-code approval is a verified service action, never a forwarded body.
 		for (const operation of ['DecideDeviceLogin', 'DecideMachineToken', 'ProvisionOrganization'])
 			expect(fleetAdminOperationSchema.safeParse(operation).success).toBe(false);
-		expect(fleetPermissionSchema.options).toHaveLength(9);
+		expect(fleetPermissionSchema.options).toHaveLength(10);
 	});
 });

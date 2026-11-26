@@ -42,8 +42,9 @@ import {
 useControlledSignInClock();
 type Harness = Awaited<ReturnType<typeof startLocalAuthHarness>>;
 const adminAudience = 'https://central.example.invalid/admin';
-// PD 2530c3a3's nine route permissions, sorted; an owner holds them all.
+// PD 2530c3a3's route permissions and Sign-in D8's approval grant, sorted.
 const ownerPermissions = [
+	'approval:decide',
 	'machine:enroll',
 	'machine:revoke',
 	'machine:setTokenLifetime',
@@ -303,7 +304,11 @@ it.each(['no-proof', 'old-policy', 'removed-pair', 'stopped-organization'] as co
 			if (mode === 'old-policy')
 				await harness.database
 					.update(organizationFence)
-					.set({ permissionPolicyDigest: 'e'.repeat(64) })
+					.set({
+						// The digest on active organization fences created by 79d4b4a.
+						permissionPolicyDigest:
+							'2d31b5d72716e64e255d8858c231f593155289fb03ed354c4b762890667a3c22',
+					})
 					.where(eq(organizationFence.id, organizationId));
 			if (mode === 'removed-pair')
 				await harness.database

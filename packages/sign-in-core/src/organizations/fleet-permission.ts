@@ -1,6 +1,6 @@
 import { z } from 'zod';
 
-// PD 2530c3a3: exactly the nine route permissions. Rust fixtures land from F1c before real-output proof.
+// The Fleet route permissions from PD 2530c3a3 and the owner approval grant from Sign-in D8.
 export const fleetPermissionSchema = z.enum([
 	'workspace:create',
 	'workspaceAdmin:allowMachine',
@@ -11,6 +11,7 @@ export const fleetPermissionSchema = z.enum([
 	'machine:setTokenLifetime',
 	'organization:view',
 	'organization:readAudit',
+	'approval:decide',
 ]);
 export type FleetPermission = z.infer<typeof fleetPermissionSchema>;
 
