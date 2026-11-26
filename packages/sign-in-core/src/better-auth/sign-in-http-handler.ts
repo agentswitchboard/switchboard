@@ -337,6 +337,8 @@ export function createSignInHttpHandler(
 			if (factorContinuation?.kind === 'refused') return invalidRequestResponse();
 			const factorResume =
 				factorContinuation?.kind === 'resume' ? factorContinuation.authorization : null;
+			const factorResumeProfile =
+				factorContinuation?.kind === 'resume' ? factorContinuation.profile : undefined;
 			if (url.pathname === '/api/auth/link-social') {
 				// The provider refuses a body at parse time, before its session check; so must this
 				// wrapper, before its own live-session check can answer first.
@@ -517,6 +519,7 @@ export function createSignInHttpHandler(
 					request,
 					crypto: configuration.platform.crypto,
 					resume: factorResume,
+					resumeProfile: factorResumeProfile,
 					deviceUserCode: factorRoute ? (deviceUserCode ?? undefined) : undefined,
 					response: providerLimitedResponse({
 						response,
@@ -575,8 +578,7 @@ export function createSignInHttpHandler(
 				response,
 				crypto: configuration.platform.crypto,
 				resume: factorResume,
-				resumeProfile:
-					factorContinuation?.kind === 'resume' ? factorContinuation.profile : undefined,
+				resumeProfile: factorResumeProfile,
 				deviceUserCode: factorRoute ? (deviceUserCode ?? undefined) : undefined,
 			});
 		} catch {

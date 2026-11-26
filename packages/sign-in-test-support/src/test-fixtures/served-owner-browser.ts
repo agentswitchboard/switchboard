@@ -28,6 +28,7 @@ export function createServedOwnerBrowser(props: {
 	readonly selection?: { readonly organizationId: string; readonly foreignOrganizationId: string };
 	readonly initialSession?: 'confirmed';
 	readonly observePage?: (url: URL, document: Document) => void;
+	readonly observeBeforeSubmit?: (button: HTMLButtonElement) => void;
 	readonly observeRequest?: (pathname: string, status: number) => void;
 	readonly observeCallback?: (url: URL) => void;
 	readonly observe: (observation: ServedOwnerObservation) => void;
@@ -92,6 +93,8 @@ export function createServedOwnerBrowser(props: {
 			throw new Error('Served organization chooser is missing');
 		}
 		let completion = Promise.withResolvers<PageEvent>();
+		let navigationAttempts = 0;
+		let authorizationAttempts = 0;
 		const requests: Promise<unknown>[] = [];
 		const statuses: { readonly path: string; readonly status: number }[] = [];
 		const observer = new dom.window.MutationObserver(() => {
@@ -100,6 +103,11 @@ export function createServedOwnerBrowser(props: {
 		const status = document.getElementById('status');
 		if (status !== null)
 			observer.observe(status, { childList: true, subtree: true, characterData: true });
+
+		function requestFromPage(url: URL, init?: RequestInit): Promise<Response> {
+			if (url.pathname === '/api/auth/oauth2/authorize') authorizationAttempts += 1;
+			return harness.auth(url.toString(), init);
+		}
 
 		async function browserFetch(
 			path: string,
@@ -116,7 +124,7 @@ export function createServedOwnerBrowser(props: {
 							database: harness.database,
 						})
 					: null;
-			let response = await harness.auth(url.toString(), init);
+			let response = await requestFromPage(url, init);
 			statuses.push({ path: pathname, status: response.status });
 			props.observeRequest?.(pathname, response.status);
 			if (pathname === '/api/auth/sign-in/social' && response.ok) factorConfirmed = false;
@@ -143,7 +151,7 @@ export function createServedOwnerBrowser(props: {
 				if (hops <= 0) throw new Error('Browser fetch exceeded its redirect bound');
 				redirected = true;
 				url = new URL(location, url);
-				response = await harness.auth(url.toString());
+				response = await requestFromPage(url);
 				return follow(hops - 1);
 			}
 			await follow(10);
@@ -159,6 +167,12 @@ export function createServedOwnerBrowser(props: {
 		}
 
 		async function submit(form: HTMLFormElement, button: HTMLButtonElement): Promise<PageEvent> {
+			await Promise.all(requests);
+			if (navigationAttempts !== 0)
+				throw new Error('Served owner page attempted navigation before form submission');
+			if (authorizationAttempts !== 0)
+				throw new Error('Served owner page attempted authorization before form submission');
+			props.observeBeforeSubmit?.(button);
 			completion = Promise.withResolvers<PageEvent>();
 			form.requestSubmit(button);
 			const event = await completion.promise;
@@ -177,6 +191,21 @@ export function createServedOwnerBrowser(props: {
 				throw new Error('Served owner form is missing');
 			return form;
 		}
+		function requestNavigation(url: string): void {
+			navigationAttempts += 1;
+			completion.resolve({ kind: 'navigate', url });
+		}
+		const scriptLocation = {
+			assign: requestNavigation,
+			replace: requestNavigation,
+			reload: (): void => requestNavigation(address),
+			get href(): string {
+				return address;
+			},
+			set href(url: string) {
+				requestNavigation(url);
+			},
+		};
 		try {
 			props.observePage?.(currentUrl, document);
 			const context = createContext({
@@ -192,6 +221,7 @@ export function createServedOwnerBrowser(props: {
 					close: (): void => undefined,
 				},
 				window: {
+					location: scriptLocation,
 					addEventListener: dom.window.addEventListener.bind(dom.window),
 					dispatchEvent: dom.window.dispatchEvent.bind(dom.window),
 					turnstile: {
@@ -219,10 +249,7 @@ export function createServedOwnerBrowser(props: {
 				FormData: dom.window.FormData,
 				HTMLFormElement: dom.window.HTMLFormElement,
 				Event: dom.window.Event,
-				location: {
-					assign: (url: string): void => completion.resolve({ kind: 'navigate', url }),
-					reload: (): void => completion.resolve({ kind: 'navigate', url: address }),
-				},
+				location: scriptLocation,
 				Uint8Array,
 				atob,
 				btoa,

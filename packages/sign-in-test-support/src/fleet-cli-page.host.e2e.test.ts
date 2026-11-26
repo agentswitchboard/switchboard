@@ -92,6 +92,7 @@ it.each(['signed-out', 'signed-in', 'owner-ready'] as const)(
 		const events: ServedOwnerObservation[] = [];
 		const pages: string[] = [];
 		const actions: { readonly pathname: string; readonly status: number }[] = [];
+		let continueSubmissions = 0;
 		let callbackCount = 0;
 		try {
 			const before = await systemRegistrations(harness);
@@ -156,7 +157,17 @@ it.each(['signed-out', 'signed-in', 'owner-ready'] as const)(
 							observeRequest(pathname, status): void {
 								actions.push({ pathname, status });
 							},
+							observeBeforeSubmit(button): void {
+								if (button.textContent !== 'Continue to codex-router CLI') return;
+								expect(button.disabled).toBe(false);
+								expect(callbackCount).toBe(0);
+								expect(
+									actions.some(({ pathname }) => pathname === '/api/auth/owner/bootstrap'),
+								).toBe(false);
+								continueSubmissions += 1;
+							},
 							observeCallback(callback): void {
+								expect(continueSubmissions).toBe(1);
 								expect(callback.origin).toBe(redirect.origin);
 								expect(callback.pathname).toBe(redirect.pathname);
 								expect(callback.searchParams.getAll('state')).toEqual([state]);
@@ -225,6 +236,71 @@ it.each(['signed-out', 'signed-in', 'owner-ready'] as const)(
 		}
 	},
 );
+
+it('Fleet CLI proof rejects a ready-page script that navigates before Continue', async (): Promise<void> => {
+	const fixture = await setupFleetCli();
+	const { harness, target } = fixture;
+	const store = createMemoryProofKeyStore(webSignInCrypto);
+	let callbackCount = 0;
+	try {
+		const browser = createServedOwnerBrowser({
+			harness: {
+				...harness,
+				async auth(path, init): Promise<Response> {
+					const response = await harness.auth(path, init);
+					const url = new URL(path, harness.issuer);
+					if (url.pathname !== '/owner-ready') return response;
+					const authorization = z.string().min(1).parse(url.searchParams.get('authorize'));
+					const html = await response.text();
+					const controllerStart = /<script nonce="[^"]+">/u;
+					expect(html).toMatch(controllerStart);
+					// Put the wrong behavior inside the nonce-bearing controller the page already serves.
+					const mutated = html.replace(
+						controllerStart,
+						(start) => `${start}location.assign(${JSON.stringify(authorization)});\n`,
+					);
+					return new Response(mutated, {
+						status: response.status,
+						headers: response.headers,
+					});
+				},
+			},
+			email: ownerEmail,
+			initialSession: 'confirmed',
+			observe: () => undefined,
+			observeCallback(): void {
+				callbackCount += 1;
+			},
+		});
+		const outcome = await signInFleetCli({
+			target,
+			store,
+			io: {
+				...fixture.io,
+				async browser(printedUrl): Promise<void> {
+					const ready = new URL(printedUrl);
+					ready.pathname = '/owner-ready';
+					await browser(ready.toString());
+				},
+			},
+		}).then(
+			() => ({ kind: 'completed' }),
+			(error: unknown) => ({
+				kind: 'refused',
+				reason: error instanceof Error ? error.message : '',
+			}),
+		);
+		expect(outcome).toEqual({
+			kind: 'refused',
+			reason: 'Served owner page attempted navigation before form submission',
+		});
+		expect(callbackCount).toBe(0);
+		expect(fixture.sent).toEqual([]);
+		expect(await store.load()).toBeNull();
+	} finally {
+		await harness.close();
+	}
+});
 
 it('Fleet CLI shows the signed-in member the owner-only refusal and issues no code', async (): Promise<void> => {
 	const fixture = await setupFleetCli();

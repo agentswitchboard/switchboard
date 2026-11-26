@@ -16,6 +16,22 @@ const fleetAuthorizationFields = [
 	'code_challenge_method',
 	'state',
 ] as const;
+// Additional parameters that can change the native authorization request.
+const otherAuthorizationFields = [
+	'prompt',
+	'response_mode',
+	'request',
+	'request_uri',
+	'display',
+	'ui_locales',
+	'max_age',
+	'acr_values',
+	'login_hint',
+	'id_token_hint',
+	'nonce',
+	'claims',
+	'dpop_jkt',
+] as const;
 const fleetAuthorizationScope = 'fleet:admin offline_access';
 
 /** A requested owner CLI continuation is absent, one of the fixed profiles, or refused. */
@@ -47,24 +63,30 @@ export function ownerAuthorizationContinuation(
 ): OwnerAuthorizationResume {
 	const params = requestUrl.searchParams;
 	const nested = params.getAll('authorize');
-	const hasFlat = params.has('client_id');
+	const hasFlatClient = params.has('client_id');
 	const hasFleet =
-		(hasFlat && hasFleetAuthorizationFields(params, configuration)) ||
+		hasFleetAuthorizationFields(params, configuration) ||
 		nested.some((value) => {
 			const candidate = URL.parse(value);
 			return (
 				candidate !== null && hasFleetAuthorizationFields(candidate.searchParams, configuration)
 			);
 		});
-	if (
-		hasFleet &&
-		(params.has('device') ||
+	if (hasFleet) {
+		const hasOuterAuthorizationFields = [
+			...fleetAuthorizationFields,
+			...otherAuthorizationFields,
+		].some((field) => params.has(field));
+		if (
+			params.has('device') ||
 			nested.length > 1 ||
-			(hasFlat && (nested.length > 0 || carrier === 'factor')))
-	)
-		return { kind: 'refused' };
+			(nested.length > 0 && hasOuterAuthorizationFields)
+		)
+			return { kind: 'refused' };
+		if (nested.length === 0 && (!hasFlatClient || carrier === 'factor')) return { kind: 'refused' };
+	}
 	if (nested[0] !== undefined) return ownerAuthorizationResume(nested[0], configuration);
-	if (!hasFlat || carrier === 'factor') return { kind: 'absent' };
+	if (!hasFlatClient || carrier === 'factor') return { kind: 'absent' };
 	const authorization = new URL('/api/auth/oauth2/authorize', configuration.issuer);
 	authorization.search = requestUrl.search;
 	return ownerAuthorizationResume(authorization.toString(), configuration);
