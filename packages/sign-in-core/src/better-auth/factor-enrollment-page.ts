@@ -1,5 +1,6 @@
 import { z } from 'zod';
 
+import type { OwnerAuthorizationProfile } from '#sign-in-core/better-auth/minimal-owner-pages';
 import { mintPageNonce } from '#sign-in-core/contracts/page-nonce';
 import type { SignInCrypto } from '#sign-in-core/contracts/sign-in-platform';
 import { ownerReadyLocation, type FactorPageContent } from '#sign-in-core/pages/factor-page';
@@ -20,6 +21,7 @@ export async function renderFactorFormResponse(props: {
 	readonly crypto: SignInCrypto;
 	/** The handler validates this before native effects. */
 	readonly resume?: string | null;
+	readonly resumeProfile?: OwnerAuthorizationProfile | undefined;
 	readonly deviceUserCode?: string | undefined;
 }): Promise<Response> {
 	if (props.request.method !== 'POST') return props.response;
@@ -65,6 +67,7 @@ export async function renderFactorFormResponse(props: {
 	return renderFactorPage({
 		content,
 		resume,
+		resumeProfile: props.resumeProfile,
 		deviceUserCode: props.deviceUserCode,
 		headers,
 		status: props.response.status,

@@ -1,9 +1,11 @@
+/** @jsxImportSource react */
 import * as React from 'react';
 
 import { factorFormScript } from '#sign-in-core/better-auth/factor-form-script';
 import { ownerPageScript } from '#sign-in-core/better-auth/owner-page-script';
 import { passkeyPageScript } from '#sign-in-core/better-auth/passkey-page-script';
 import type { PageNonce } from '#sign-in-core/contracts/page-nonce';
+import { FleetCliContinuationNotice } from '#sign-in-core/pages/fleet-cli-continuation';
 import {
 	OwnerPage,
 	OwnerPageFooter,
@@ -19,16 +21,23 @@ export function renderOwnerPage(props: OwnerPageProps & { readonly nonce: PageNo
 	if (props.deviceUserCode !== undefined) callback.searchParams.set('device', props.deviceUserCode);
 	const document = pageDocument({
 		title: ownerPageTitle(pageProps),
-		children: React.createElement(OwnerPage, {
-			...pageProps,
-			continueLocation: callback.pathname + callback.search,
-		}),
+		children: (
+			<React.Fragment>
+				{props.resumeProfile === 'fleet' && <FleetCliContinuationNotice />}
+				<OwnerPage {...pageProps} continueLocation={callback.pathname + callback.search} />
+			</React.Fragment>
+		),
 		footer: OwnerPageFooter(pageProps),
 		nonce,
 		// Turnstile gates only the sign-in page; signed-in pages load no third party.
 		challenge: props.ready ? 'none' : 'turnstile',
 		scripts:
-			ownerPageScript({ ready: props.ready, callback: callback.toString(), resume: props.resume }) +
+			ownerPageScript({
+				ready: props.ready,
+				callback: callback.toString(),
+				resume: props.resume,
+				profile: props.resumeProfile,
+			}) +
 			(props.factorPage !== undefined && props.factorPage !== 'hidden'
 				? passkeyPageScript() + factorFormScript()
 				: '') +

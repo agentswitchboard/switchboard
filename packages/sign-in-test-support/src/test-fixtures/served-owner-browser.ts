@@ -26,10 +26,15 @@ export function createServedOwnerBrowser(props: {
 	readonly email: string;
 	readonly organization?: { readonly name: string; readonly slug: string };
 	readonly selection?: { readonly organizationId: string; readonly foreignOrganizationId: string };
+	readonly initialSession?: 'confirmed';
+	readonly observePage?: (url: URL, document: Document) => void;
+	readonly observeBeforeSubmit?: (button: HTMLButtonElement) => void;
+	readonly observeRequest?: (pathname: string, status: number) => void;
+	readonly observeCallback?: (url: URL) => void;
 	readonly observe: (observation: ServedOwnerObservation) => void;
 }): (initialUrl: string) => Promise<readonly string[]> {
 	const { harness } = props;
-	let factorConfirmed = false;
+	let factorConfirmed = props.initialSession === 'confirmed';
 	let foreignAttempted = false;
 	let organizationSelected = false;
 	const sensitiveValues: string[] = [];
@@ -41,6 +46,7 @@ export function createServedOwnerBrowser(props: {
 			if (['127.0.0.1', 'localhost'].includes(url.hostname) && url.searchParams.has('code')) {
 				const completed = await navigateLocalBrowser(url);
 				if (!completed.ok) throw new Error('Original CLI loopback refused the page callback');
+				props.observeCallback?.(url);
 				sensitiveValues.push(url.searchParams.get('code') ?? '', harness.cookie());
 				return sensitiveValues;
 			}
@@ -56,7 +62,7 @@ export function createServedOwnerBrowser(props: {
 		if (location !== null && response.status >= 300 && response.status < 400)
 			return navigate(new URL(location, url).toString(), remaining - 1);
 		if (!response.ok || !response.headers.get('content-type')?.includes('text/html'))
-			throw new Error('Served owner navigation did not return a page');
+			throw new Error(`Served owner navigation did not return a page (${response.status})`);
 		return page(url.toString(), await response.text(), remaining - 1);
 	}
 
@@ -87,6 +93,8 @@ export function createServedOwnerBrowser(props: {
 			throw new Error('Served organization chooser is missing');
 		}
 		let completion = Promise.withResolvers<PageEvent>();
+		let navigationAttempts = 0;
+		let authorizationAttempts = 0;
 		const requests: Promise<unknown>[] = [];
 		const statuses: { readonly path: string; readonly status: number }[] = [];
 		const observer = new dom.window.MutationObserver(() => {
@@ -95,6 +103,11 @@ export function createServedOwnerBrowser(props: {
 		const status = document.getElementById('status');
 		if (status !== null)
 			observer.observe(status, { childList: true, subtree: true, characterData: true });
+
+		function requestFromPage(url: URL, init?: RequestInit): Promise<Response> {
+			if (url.pathname === '/api/auth/oauth2/authorize') authorizationAttempts += 1;
+			return harness.auth(url.toString(), init);
+		}
 
 		async function browserFetch(
 			path: string,
@@ -111,8 +124,10 @@ export function createServedOwnerBrowser(props: {
 							database: harness.database,
 						})
 					: null;
-			let response = await harness.auth(url.toString(), init);
+			let response = await requestFromPage(url, init);
 			statuses.push({ path: pathname, status: response.status });
+			props.observeRequest?.(pathname, response.status);
+			if (pathname === '/api/auth/sign-in/social' && response.ok) factorConfirmed = false;
 			if (pathname === '/api/auth/organization/set-active' && response.status === 200)
 				organizationSelected = true;
 			if (before !== null && response.status === 303) {
@@ -136,7 +151,7 @@ export function createServedOwnerBrowser(props: {
 				if (hops <= 0) throw new Error('Browser fetch exceeded its redirect bound');
 				redirected = true;
 				url = new URL(location, url);
-				response = await harness.auth(url.toString());
+				response = await requestFromPage(url);
 				return follow(hops - 1);
 			}
 			await follow(10);
@@ -152,6 +167,12 @@ export function createServedOwnerBrowser(props: {
 		}
 
 		async function submit(form: HTMLFormElement, button: HTMLButtonElement): Promise<PageEvent> {
+			await Promise.all(requests);
+			if (navigationAttempts !== 0)
+				throw new Error('Served owner page attempted navigation before form submission');
+			if (authorizationAttempts !== 0)
+				throw new Error('Served owner page attempted authorization before form submission');
+			props.observeBeforeSubmit?.(button);
 			completion = Promise.withResolvers<PageEvent>();
 			form.requestSubmit(button);
 			const event = await completion.promise;
@@ -170,7 +191,23 @@ export function createServedOwnerBrowser(props: {
 				throw new Error('Served owner form is missing');
 			return form;
 		}
+		function requestNavigation(url: string): void {
+			navigationAttempts += 1;
+			completion.resolve({ kind: 'navigate', url });
+		}
+		const scriptLocation = {
+			assign: requestNavigation,
+			replace: requestNavigation,
+			reload: (): void => requestNavigation(address),
+			get href(): string {
+				return address;
+			},
+			set href(url: string) {
+				requestNavigation(url);
+			},
+		};
 		try {
+			props.observePage?.(currentUrl, document);
 			const context = createContext({
 				document: {
 					addEventListener: document.addEventListener.bind(document),
@@ -184,6 +221,16 @@ export function createServedOwnerBrowser(props: {
 					close: (): void => undefined,
 				},
 				window: {
+					get location(): typeof scriptLocation {
+						return scriptLocation;
+					},
+					set location(url: string) {
+						requestNavigation(url);
+					},
+					open(url = 'about:blank'): null {
+						requestNavigation(url);
+						return null;
+					},
 					addEventListener: dom.window.addEventListener.bind(dom.window),
 					dispatchEvent: dom.window.dispatchEvent.bind(dom.window),
 					turnstile: {
@@ -211,9 +258,11 @@ export function createServedOwnerBrowser(props: {
 				FormData: dom.window.FormData,
 				HTMLFormElement: dom.window.HTMLFormElement,
 				Event: dom.window.Event,
-				location: {
-					assign: (url: string): void => completion.resolve({ kind: 'navigate', url }),
-					reload: (): void => completion.resolve({ kind: 'navigate', url: address }),
+				get location(): typeof scriptLocation {
+					return scriptLocation;
+				},
+				set location(url: string) {
+					requestNavigation(url);
 				},
 				Uint8Array,
 				atob,
@@ -318,7 +367,8 @@ export function createServedOwnerBrowser(props: {
 				button = formButton(form);
 			}
 			const event = await submit(form, button);
-			if (event.kind === 'refused') throw new Error('Served owner form refused the flow');
+			if (event.kind === 'refused')
+				throw new Error(status?.textContent ?? 'Served owner form refused the flow');
 			if (event.kind === 'document') return page(address, event.html, remaining - 1);
 			return navigate(event.url, remaining - 1);
 		} finally {
@@ -328,7 +378,7 @@ export function createServedOwnerBrowser(props: {
 	}
 	return (initialUrl): Promise<readonly string[]> => {
 		harness.useBrowser(props.email);
-		harness.clearBrowserSession();
+		if (props.initialSession === undefined) harness.clearBrowserSession();
 		return navigate(initialUrl, 20);
 	};
 }

@@ -23,8 +23,9 @@ describe('K5 names the permission checked for this request', () => {
 		'machine:setTokenLifetime',
 		'organization:view',
 		'organization:readAudit',
+		'approval:decide',
 	])('carries the checked permission %s', (permission) => {
-		// Arrange / Act: the literal set is the Program Design's nine route permissions.
+		// Arrange / Act
 		const confirmation = personSessionConfirmationSchema.parse({ ...activeSession, permission });
 		// Assert
 		expect(confirmation).toMatchObject({ ...activeSession, permission });

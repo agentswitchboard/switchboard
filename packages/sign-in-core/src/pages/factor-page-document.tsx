@@ -4,6 +4,7 @@ import { renderToStaticMarkup } from 'react-dom/server.browser';
 
 import type { FactorPageState } from '#sign-in-core/better-auth/factor-enrollment-page';
 import { factorFormScript } from '#sign-in-core/better-auth/factor-form-script';
+import type { OwnerAuthorizationProfile } from '#sign-in-core/better-auth/minimal-owner-pages';
 import type { PageNonce } from '#sign-in-core/contracts/page-nonce';
 import {
 	FactorControls,
@@ -12,6 +13,7 @@ import {
 	ownerReadyLocation,
 	type FactorPageContent,
 } from '#sign-in-core/pages/factor-page';
+import { FleetCliContinuationNotice } from '#sign-in-core/pages/fleet-cli-continuation';
 import {
 	pageDocument,
 	PageBackLink,
@@ -26,6 +28,7 @@ export function renderFactorControls(state: FactorPageState, resume: string | nu
 export function renderFactorPage(props: {
 	readonly content: FactorPageContent;
 	readonly resume: string | null;
+	readonly resumeProfile?: OwnerAuthorizationProfile | undefined;
 	readonly deviceUserCode?: string | undefined;
 	readonly headers: Headers;
 	readonly status: number;
@@ -36,6 +39,7 @@ export function renderFactorPage(props: {
 		title: factorResponseTitle(props.content),
 		children: (
 			<React.Fragment>
+				{props.resumeProfile === 'fleet' && <FleetCliContinuationNotice />}
 				<FactorResponseContent
 					content={props.content}
 					resume={props.resume}

@@ -1,11 +1,15 @@
-import { verification } from '@agent-collaboration/sign-in-core';
+import {
+	organizationAuthorizationRevisions,
+	verification,
+} from '@agent-collaboration/sign-in-core';
 import { createSignInHttpHandler } from '@agent-collaboration/sign-in-core/better-auth';
 import {
 	createMemoryProofKeyStore,
+	refreshFleetCli,
 	signInFleetCli,
 	type FleetCliSession,
 } from '@agent-collaboration/sign-in-owner-cli';
-import { lt } from 'drizzle-orm';
+import { eq, lt } from 'drizzle-orm';
 import type { WebSocket as WorkerWebSocket } from 'miniflare';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { z } from 'zod';
@@ -28,6 +32,10 @@ import {
 	setupFleetCli,
 	type FleetFixture,
 } from '#sign-in-test-support/test-fixtures/fleet-cli-fixture';
+import {
+	peoplePost,
+	signInConfirmedPeopleBrowser,
+} from '#sign-in-test-support/test-fixtures/people-browser-login';
 import { webSignInCrypto } from '#sign-in-test-support/test-fixtures/recording-sign-in-capabilities';
 
 useControlledSignInClock();
@@ -198,6 +206,10 @@ describe('C8 part B: the person-link route', () => {
 			token_profile: 'person-link',
 			organization_id: fixture.target.organizationId,
 		});
+		const permissions = z.array(z.string()).parse(checked.claims.permissions);
+		expect(permissions).toContain('approval:decide');
+		expect(permissions).toHaveLength(10);
+		expect(permissions).toEqual([...new Set(permissions)].toSorted());
 		expect(Object.keys(checked.claims).toSorted()).toEqual(
 			[
 				'aud',
@@ -319,6 +331,108 @@ describe('C8 part B: the person-link route', () => {
 		}
 		expect(await arrivals()).toHaveLength(before);
 	});
+
+	it.skipIf(!onWorkerd)(
+		'signs an empty permission list for an organization member',
+		async (): Promise<void> => {
+			const invitation = await peoplePost(
+				fixture.harness,
+				'invite-member',
+				{
+					organizationId: fixture.target.organizationId,
+					email: 'member@example.invalid',
+					role: 'member',
+				},
+				fixture.cookie,
+			);
+			expect(invitation.status).toBe(200);
+			const invitationId = z.object({ id: z.uuidv7() }).parse(await invitation.json()).id;
+			await signInConfirmedPeopleBrowser({
+				harness: fixture.harness,
+				email: 'member@example.invalid',
+			});
+			expect(
+				(await peoplePost(fixture.harness, 'accept-invitation', { invitationId })).status,
+			).toBe(200);
+
+			const answer = await openPersonLink(fixture, {
+				headers: { ...browser(), cookie: fixture.harness.cookie() },
+			});
+
+			expect(answer).toEqual({ kind: 'opened', frame: personLinkOpenedFrame });
+			const checked = await check((await arrivals()).at(-1));
+			if (checked.kind !== 'accepted') throw new Error(`Stand-in refused: ${checked.reason}`);
+			expect(checked.claims.permissions).toEqual([]);
+		},
+	);
+});
+
+it('refuses refresh and both person-link credentials when the organization still has the previous policy digest', async (): Promise<void> => {
+	const fixture = await setupFleetCli(
+		onWorkerd ? { machineLinkStorageWorker: personLinkCentralStandIn() } : {},
+	);
+	try {
+		const store = createMemoryProofKeyStore(webSignInCrypto);
+		const cli = await signInFleetCli({ target: fixture.target, store, io: fixture.io });
+		expect(await store.load()).not.toBeNull();
+		await fixture.harness.database
+			.update(organizationAuthorizationRevisions)
+			.set({
+				// The digest on active organization fences created by 79d4b4a.
+				permissionPolicyDigest: '2d31b5d72716e64e255d8858c231f593155289fb03ed354c4b762890667a3c22',
+			})
+			.where(eq(organizationAuthorizationRevisions.id, fixture.target.organizationId));
+		const browserAnswer = await openPersonLink(fixture, {
+			headers: {
+				...upgrade,
+				cookie: fixture.cookie,
+				origin: new URL(fixture.target.issuer).origin,
+			},
+		});
+		const htu = new URL(
+			`/api/fleet/person-link/${fixture.target.organizationId}`,
+			fixture.target.issuer,
+		).toString();
+		const cliAnswer = await openPersonLink(fixture, {
+			headers: {
+				...upgrade,
+				authorization: `DPoP ${cli.accessToken}`,
+				dpop: await signPersonLinkUpgradeProof({
+					key: cli.key,
+					htu,
+					jti: fixture.io.nextId(),
+					issuedAtSeconds: Math.floor(fixture.io.now() / 1000),
+					accessToken: cli.accessToken,
+				}),
+			},
+		});
+		const refusal = { kind: 'refused', status: 503, error: 'authorization-unavailable' };
+		expect([browserAnswer, cliAnswer]).toEqual([refusal, refusal]);
+		if (onWorkerd) expect(await personLinkArrivals(fixture.harness.miniflare)).toEqual([]);
+
+		const refreshReplies: Response[] = [];
+		const refreshed = await refreshFleetCli({
+			target: fixture.target,
+			store,
+			io: {
+				...fixture.io,
+				async fetch(input, init): Promise<Response> {
+					const response = await fixture.io.fetch(input, init);
+					refreshReplies.push(response.clone());
+					return response;
+				},
+			},
+		});
+		expect(refreshed).toBeNull();
+		expect(await store.load()).toBeNull();
+		expect(refreshReplies).toHaveLength(1);
+		const response = refreshReplies[0];
+		if (response === undefined) throw new Error('Refresh did not reach Sign-in');
+		expect(response.status).toBe(400);
+		expect(await response.json()).toEqual({ error: 'invalid_grant', message: 'policy-mismatch' });
+	} finally {
+		await fixture.harness.close();
+	}
 });
 
 it.skipIf(!onWorkerd)(

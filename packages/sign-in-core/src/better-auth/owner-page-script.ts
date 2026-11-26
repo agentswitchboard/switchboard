@@ -1,3 +1,5 @@
+import type { OwnerAuthorizationProfile } from '#sign-in-core/better-auth/minimal-owner-pages';
+
 function scriptValue(value: string | null): string {
 	return JSON.stringify(value).replaceAll('<', '\\u003c');
 }
@@ -6,7 +8,16 @@ export function ownerPageScript(props: {
 	readonly ready: boolean;
 	readonly callback: string;
 	readonly resume: string | null;
+	readonly profile?: OwnerAuthorizationProfile | undefined;
 }): string {
+	const continuationRefusal =
+		props.profile === 'fleet'
+			? 'Continuing to the codex-router CLI was refused. Try again from the CLI.'
+			: 'Continuing to the management CLI was refused. Try again; if it keeps failing, start the sign-in again from the CLI.';
+	const ownerRequired =
+		props.profile === 'fleet'
+			? `if(ready&&response.status===403)throw new Error('Only the organization owner can continue to the codex-router CLI.');`
+			: '';
 	return `<script>
 const form=document.getElementById('owner-sign-in');const statusElement=document.getElementById('status');
 const ready=${JSON.stringify(props.ready)};let captchaState={kind:'empty'};let widgetId=null;
@@ -24,7 +35,7 @@ if(!ready){headers['x-captcha-response']=captchaState.token;captchaState={kind:'
 try{
 const body=ready?{}:{provider:event.submitter.value,callbackURL:${scriptValue(props.callback)}};
 const response=await fetch(ready?'/api/auth/owner/bootstrap':'/api/auth/sign-in/social',{method:'POST',headers,body:JSON.stringify(body)});
-const result=await response.json();if(!response.ok)throw new Error(ready?'Continuing to the management CLI was refused. Try again; if it keeps failing, start the sign-in again from the CLI.':'Sign-in was refused. Complete the verification, then try again.');
+const result=await response.json();${ownerRequired}if(!response.ok)throw new Error(ready?${scriptValue(continuationRefusal)}:'Sign-in was refused. Complete the verification, then try again.');
 if(!ready){if(typeof result.url!=='string')throw new Error('Provider sign-in unavailable');location.assign(result.url);}
 else if(result.kind==='complete'){const resume=${scriptValue(props.resume)};if(resume)location.assign(resume);else{statusElement.dataset.tone='info';statusElement.textContent='Owner CLI initialized.';}}
 else throw new Error('Owner bootstrap is incomplete');
