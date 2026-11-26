@@ -221,7 +221,16 @@ export function createServedOwnerBrowser(props: {
 					close: (): void => undefined,
 				},
 				window: {
-					location: scriptLocation,
+					get location(): typeof scriptLocation {
+						return scriptLocation;
+					},
+					set location(url: string) {
+						requestNavigation(url);
+					},
+					open(url = 'about:blank'): null {
+						requestNavigation(url);
+						return null;
+					},
 					addEventListener: dom.window.addEventListener.bind(dom.window),
 					dispatchEvent: dom.window.dispatchEvent.bind(dom.window),
 					turnstile: {
@@ -249,7 +258,12 @@ export function createServedOwnerBrowser(props: {
 				FormData: dom.window.FormData,
 				HTMLFormElement: dom.window.HTMLFormElement,
 				Event: dom.window.Event,
-				location: scriptLocation,
+				get location(): typeof scriptLocation {
+					return scriptLocation;
+				},
+				set location(url: string) {
+					requestNavigation(url);
+				},
 				Uint8Array,
 				atob,
 				btoa,
