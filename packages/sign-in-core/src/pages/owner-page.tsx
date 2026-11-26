@@ -18,6 +18,7 @@ import {
 import * as React from 'react';
 
 import type { FactorPageState } from '#sign-in-core/better-auth/factor-enrollment-page';
+import type { OwnerAuthorizationProfile } from '#sign-in-core/better-auth/minimal-owner-pages';
 import type { SignInConfiguration } from '#sign-in-core/contracts/deployment-configuration';
 import type { OrganizationChoice } from '#sign-in-core/contracts/organization-membership';
 import type { OrganizationFleetState } from '#sign-in-core/organizations/organization-provisioning';
@@ -37,6 +38,7 @@ export interface OwnerPageProps {
 	readonly deviceUserCode?: string;
 	readonly configuration: SignInConfiguration;
 	readonly resume: string | null;
+	readonly resumeProfile?: OwnerAuthorizationProfile | undefined;
 	readonly createOrganization?: boolean;
 	readonly noOrganization?: boolean;
 	readonly showNavigationLink?: boolean;
@@ -228,11 +230,12 @@ function MembershipChoices(props: OwnerPageProps): React.ReactElement | null {
 	);
 }
 
-/** The signed-in page's continuation to the management CLI. It is the primary
+/** The signed-in page's continuation to the requested CLI. It is the primary
  * action only on the plain account page; elsewhere it is a quiet footer link. */
 function ContinueToCli(props: {
 	readonly prominence: 'primary' | 'link';
 	readonly disabled: boolean;
+	readonly profile: OwnerAuthorizationProfile | undefined;
 }): React.ReactElement {
 	return (
 		<form
@@ -245,7 +248,7 @@ function ContinueToCli(props: {
 				variant={props.prominence === 'primary' ? 'default' : 'link'}
 				className={props.prominence === 'primary' ? 'w-full' : 'text-muted-foreground'}
 			>
-				Continue to management CLI
+				{props.profile === 'fleet' ? 'Continue to codex-router CLI' : 'Continue to management CLI'}
 			</Button>
 		</form>
 	);
@@ -325,7 +328,7 @@ export function OwnerPage(props: OwnerPageProps): React.ReactElement {
 						</CardDescription>
 					</CardHeader>
 					<CardFooter>
-						<ContinueToCli prominence="primary" disabled={false} />
+						<ContinueToCli prominence="primary" disabled={false} profile={props.resumeProfile} />
 					</CardFooter>
 				</Card>
 				<PageStatus />
@@ -393,5 +396,11 @@ export function OwnerPageFooter(props: OwnerPageProps): React.ReactElement | und
 			</a>
 		);
 	if (!props.ready || continueIsThePageTask(props)) return undefined;
-	return <ContinueToCli prominence="link" disabled={props.selectionRequired} />;
+	return (
+		<ContinueToCli
+			prominence="link"
+			disabled={props.selectionRequired}
+			profile={props.resumeProfile}
+		/>
+	);
 }

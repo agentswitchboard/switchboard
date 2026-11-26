@@ -206,9 +206,10 @@ describe('C8 part B: the person-link route', () => {
 			token_profile: 'person-link',
 			organization_id: fixture.target.organizationId,
 		});
-		expect(checked.claims.permissions).toContain('approval:decide');
-		expect(checked.claims.permissions).toHaveLength(10);
-		expect(checked.claims.permissions).toEqual([...new Set(checked.claims.permissions)].toSorted());
+		const permissions = z.array(z.string()).parse(checked.claims.permissions);
+		expect(permissions).toContain('approval:decide');
+		expect(permissions).toHaveLength(10);
+		expect(permissions).toEqual([...new Set(permissions)].toSorted());
 		expect(Object.keys(checked.claims).toSorted()).toEqual(
 			[
 				'aud',

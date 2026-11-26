@@ -6,6 +6,7 @@ import { decodeJwt } from 'jose';
 import { expect, it } from 'vitest';
 
 import { useControlledSignInClock } from '#sign-in-test-support/test-fixtures/controlled-node-test-clock';
+import { ownerEmail, setupFleetCli } from '#sign-in-test-support/test-fixtures/fleet-cli-fixture';
 import { startLocalAuthHarness } from '#sign-in-test-support/test-fixtures/local-auth-harness';
 import { loginThroughNativeOwnerCli } from '#sign-in-test-support/test-fixtures/native-cli-proof';
 import {
@@ -15,6 +16,47 @@ import {
 
 useControlledSignInClock();
 const repositoryRoot = fileURLToPath(new URL('../../../', import.meta.url));
+const navigationHeaders = { 'sec-fetch-mode': 'navigate', accept: 'text/html' };
+
+it('people: the management link shows provider sign-in with a live cookie and owner-ready continues the same session', async () => {
+	const { harness, target } = await setupFleetCli();
+	const requests: string[] = [];
+	try {
+		const claims = organizationPersonTokenClaimsSchema.parse(
+			decodeJwt(
+				await loginThroughNativeOwnerCli({
+					target: harness.target,
+					repositoryRoot,
+					async browser(printedUrl): Promise<readonly string[]> {
+						const signIn = await harness.auth(printedUrl, { headers: navigationHeaders });
+						expect(signIn.status).toBe(200);
+						expect(await signIn.text()).toContain('Continue with Google');
+						const ready = new URL(printedUrl);
+						ready.pathname = '/owner-ready';
+						return createServedOwnerBrowser({
+							harness,
+							email: ownerEmail,
+							initialSession: 'confirmed',
+							observe: () => undefined,
+							observePage(_url, document): void {
+								expect(document.querySelector('#owner-sign-in button')?.textContent).toBe(
+									'Continue to management CLI',
+								);
+							},
+							observeRequest: (pathname): void => {
+								requests.push(pathname);
+							},
+						})(ready.toString());
+					},
+				}),
+			),
+		);
+		expect(requests).toEqual(['/api/auth/passkey/list-user-passkeys', '/api/auth/owner/bootstrap']);
+		expect(claims.organization_id).toBe(target.organizationId);
+	} finally {
+		await harness.close();
+	}
+});
 
 it('people: served first-login pages keep the original CLI authorization through app setup, rotated cookie and organization creation', async () => {
 	const harness = await startLocalAuthHarness();

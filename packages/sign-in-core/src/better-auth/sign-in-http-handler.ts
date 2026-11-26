@@ -17,7 +17,7 @@ import {
 import { releaseMachineTokenResponse } from '#sign-in-core/better-auth/machine-token-release';
 import {
 	minimalOwnerPage,
-	ownerAuthorizationResume,
+	ownerAuthorizationContinuation,
 } from '#sign-in-core/better-auth/minimal-owner-pages';
 import {
 	organizationAdminPage,
@@ -332,7 +332,7 @@ export function createSignInHttpHandler(
 			// Validate continuation before any native factor mutation, not after
 			// confirmation has already rotated the browser's session cookie.
 			const factorContinuation = factorRoute
-				? ownerAuthorizationResume(url.searchParams.get('authorize'), configuration.configuration)
+				? ownerAuthorizationContinuation(url, configuration.configuration, 'factor')
 				: null;
 			if (factorContinuation?.kind === 'refused') return invalidRequestResponse();
 			const factorResume =
@@ -351,16 +351,11 @@ export function createSignInHttpHandler(
 					return Response.json({ error: 'redirect-linking-required' }, { status: 400 });
 			}
 			if (ownerPage) {
-				const resumedAuthorization = new URL(
-					'/api/auth/oauth2/authorize',
-					configuration.configuration.issuer,
-				);
-				resumedAuthorization.search = url.search;
 				// Validated before any session read, so a refused continuation has no effect.
-				const pageContinuation = ownerAuthorizationResume(
-					url.searchParams.get('authorize') ??
-						(url.searchParams.has('client_id') ? resumedAuthorization.toString() : null),
+				const pageContinuation = ownerAuthorizationContinuation(
+					url,
 					configuration.configuration,
+					'page',
 				);
 				if (pageContinuation.kind === 'refused') return invalidRequestResponse();
 				let createOrganization = false;
@@ -419,6 +414,7 @@ export function createSignInHttpHandler(
 					configuration: configuration.configuration,
 					...(deviceUserCode === null ? {} : { deviceUserCode }),
 					resume: pageContinuation.kind === 'resume' ? pageContinuation.authorization : null,
+					resumeProfile: pageContinuation.kind === 'resume' ? pageContinuation.profile : undefined,
 				});
 			}
 			const body =
@@ -579,6 +575,8 @@ export function createSignInHttpHandler(
 				response,
 				crypto: configuration.platform.crypto,
 				resume: factorResume,
+				resumeProfile:
+					factorContinuation?.kind === 'resume' ? factorContinuation.profile : undefined,
 				deviceUserCode: factorRoute ? (deviceUserCode ?? undefined) : undefined,
 			});
 		} catch {
